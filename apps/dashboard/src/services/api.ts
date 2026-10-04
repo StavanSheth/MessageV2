@@ -23,16 +23,28 @@ export async function startAutomation(): Promise<{ status: string }> {
 
 export async function pauseAutomation(): Promise<{ status: string }> {
   const res = await fetch(`${BASE_URL}/api/automation/pause`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to pause automation');
+  }
   return res.json();
 }
 
 export async function resumeAutomation(): Promise<{ status: string }> {
   const res = await fetch(`${BASE_URL}/api/automation/resume`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to resume automation');
+  }
   return res.json();
 }
 
 export async function stopAutomation(): Promise<{ status: string }> {
   const res = await fetch(`${BASE_URL}/api/automation/stop`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to stop automation');
+  }
   return res.json();
 }
 

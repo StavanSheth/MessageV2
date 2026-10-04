@@ -71,12 +71,12 @@ class InstagramWorker:
     async def stop(self) -> None:
         self._stop_requested = True
         self._paused = False
-        if self._task:
-            try:
-                await asyncio.wait_for(asyncio.shield(self._task), timeout=10)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                self._task.cancel()
-        await self.browser_worker.stop()
+        if self._task and not self._task.done():
+            self._task.cancel()
+        try:
+            await self.browser_worker.stop()
+        except Exception:
+            pass
         self.status = WorkerStatus.STOPPED
         await self._update_worker_db(status="STOPPED", browser_status="DISCONNECTED", current_stage="IDLE")
         await event_bus.publish(EventCode.WORKER_STOPPED, worker_id=WORKER_ID)
@@ -163,6 +163,11 @@ class InstagramWorker:
                 if self._paused:
                     await asyncio.sleep(1)
                     continue
+
+                # Guard: Ensure browser is connected and page is alive
+                if not self.browser_worker.is_running or not self.browser_worker.page or self.browser_worker.page.is_closed():
+                    logger.warning("[Worker] Browser closed or disconnected. Halting task loop.")
+                    break
 
                 task = await self._claim_next_task()
                 if not task:
@@ -252,6 +257,10 @@ class InstagramWorker:
             await self.browser_worker.screenshot("profile_opened")
 
             if not success:
+                if "target page, context or browser has been closed" in str(reason).lower():
+                    logger.warning("[Worker] Browser closed/disconnected during open_profile. Halting worker loop.")
+                    self._stop_requested = True
+                    self.status = WorkerStatus.STOPPED
                 await self._fail_task(task_id, result_code, reason)
                 return
 

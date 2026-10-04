@@ -157,7 +157,10 @@ class BrowserWorker:
             return {"status": "DISCONNECTED", "url": None}
         try:
             url = self.page.url
-            title = await self.page.title()
+            try:
+                title = await asyncio.wait_for(self.page.title(), timeout=1.0)
+            except Exception:
+                title = None
             return {"status": "CONNECTED", "url": url, "title": title}
         except Exception as e:
             return {"status": "ERROR", "error": str(e)}

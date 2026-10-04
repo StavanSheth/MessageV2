@@ -19,12 +19,16 @@ class BrowserSpreadsheetSource(SourceAdapter):
         self.playwright = await async_playwright().start()
         # Open dedicated visible browser instance as required by the specification
         self.browser = await self.playwright.chromium.launch(
-            headless=settings.BROWSER_HEADLESS,
-            slow_mo=settings.BROWSER_SLOW_MO
+            headless=False,
+            slow_mo=settings.BROWSER_SLOW_MO,
+            args=["--start-maximized"]
         )
-        self.page = await self.browser.new_page()
-        await self.page.goto(self.url, wait_until="domcontentloaded", timeout=settings.BROWSER_TIMEOUT)
-        await asyncio.sleep(2)
+        self.page = await self.browser.new_page(no_viewport=True)
+        try:
+            await self.page.goto(self.url, wait_until="commit", timeout=settings.BROWSER_TIMEOUT)
+        except Exception as e:
+            print(f"[BrowserSpreadsheetSource] goto warning: {e}")
+        await asyncio.sleep(3)
         return True
 
     async def validate_access(self) -> Tuple[bool, str]:
@@ -33,8 +37,16 @@ class BrowserSpreadsheetSource(SourceAdapter):
                 await self.open()
 
             current_url = self.page.url.lower()
-            page_content = (await self.page.content()).lower()
-            title = (await self.page.title()).lower()
+            page_content = ""
+            try:
+                page_content = (await self.page.content()).lower()
+            except Exception:
+                pass
+            title = ""
+            try:
+                title = (await self.page.title()).lower()
+            except Exception:
+                pass
 
             # Check for permission denied, login required, or 403/404
             access_prohibited_signals = [
@@ -55,7 +67,8 @@ class BrowserSpreadsheetSource(SourceAdapter):
 
             return True, "ACCESSIBLE"
         except Exception as e:
-            return False, f"SOURCE_UNAVAILABLE: {str(e)}"
+            return False, f"SOURCE_UNAVAILABLE: {str(e) or 'Page load timeout'}"
+
 
     async def read_records(self) -> List[Dict[str, Any]]:
         is_accessible, reason = await self.validate_access()

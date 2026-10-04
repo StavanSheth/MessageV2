@@ -1,7 +1,7 @@
 import React from 'react';
 import { 
   Users, Send, CheckCircle2, AlertOctagon, 
-  Clock, ArrowUpRight, Play, Upload, MessageCircle 
+  Clock, ArrowUpRight, Play, Upload, MessageCircle, Download
 } from 'lucide-react';
 import { LiveAutomationState, Contact, Task } from '../types';
 
@@ -78,6 +78,15 @@ export const Overview: React.FC<OverviewProps> = ({
           </p>
         </div>
         <div className="flex items-center space-x-3">
+          <a
+            href="/api/contacts/export/excel"
+            download
+            className="flex items-center space-x-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg shadow-emerald-500/20 transition hover:scale-105 active:scale-95"
+            title="Download full outreach report with 1st message and follow-up tracking in Excel (.xlsx)"
+          >
+            <Download className="w-4 h-4" />
+            <span>Export Excel</span>
+          </a>
           <button
             onClick={() => onNavigate('sources')}
             className="flex items-center space-x-2 bg-gray-800 hover:bg-gray-700 text-gray-200 px-4 py-2.5 rounded-xl text-xs font-bold border border-gray-700 transition"

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, ExternalLink, Check, MessageSquare, ShieldCheck, Filter } from 'lucide-react';
+import { Search, ExternalLink, Check, MessageSquare, ShieldCheck, Filter, Download } from 'lucide-react';
 import { Contact } from '../types';
 import { toggleReplied } from '../services/api';
 
@@ -42,11 +42,11 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
         <div>
           <h2 className="text-2xl font-black text-white tracking-tight">Contacts Directory</h2>
           <p className="text-sm text-gray-400 mt-1">
-            All leads and recipients synchronized from spreadsheets.
+            All leads and recipients synchronized from spreadsheets with message and follow-up tracking.
           </p>
         </div>
 
-        {/* Search and Filters */}
+        {/* Search, Filters, and Export */}
         <div className="flex items-center space-x-3">
           <div className="relative">
             <Search className="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -74,6 +74,16 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
               </button>
             ))}
           </div>
+
+          <a
+            href="/api/contacts/export/excel"
+            download
+            className="flex items-center space-x-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 active:scale-95"
+            title="Download full outreach report with 1st message, follow-up 1, and follow-up 2 timestamps in Excel format"
+          >
+            <Download className="w-4 h-4" />
+            <span className="hidden sm:inline">Export Excel</span>
+          </a>
         </div>
       </div>
 

@@ -33,6 +33,24 @@ async def list_contacts(limit: int = 100, offset: int = 0, db: AsyncSession = De
         })
     return result
 
+@router.get("/export/excel")
+async def export_contacts_excel(db: AsyncSession = Depends(get_db)):
+    """Export all contacts with full 1st message, follow-up 1, and follow-up 2 tracking to Excel (.xlsx)."""
+    from fastapi.responses import StreamingResponse
+    from datetime import datetime
+    from backend.services.export_service import ExportService
+    
+    excel_stream = await ExportService.generate_outreach_excel(db)
+    filename = f"Instagram_Outreach_Tracking_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return StreamingResponse(
+        excel_stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
+    )
+
 @router.get("/{contact_id}")
 async def get_contact(contact_id: str, db: AsyncSession = Depends(get_db)):
     repo = ContactRepository(db)

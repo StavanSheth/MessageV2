@@ -355,6 +355,38 @@ class InstagramWorker:
                 async with AsyncSessionLocal() as session:
                     task_repo = TaskRepository(session)
                     await task_repo.update_status(task_id, TaskStatus.COMPLETED)
+
+                    # Automatically schedule Follow-Up 1 or 2 if contact has not replied
+                    if contact.replied_status != "YES":
+                        from datetime import timedelta
+                        now = datetime.now(timezone.utc)
+                        if task.type == "MESSAGE":
+                            delay = contact.followup_1_delay_days or 3
+                            fu1_task = Task(
+                                contact_id=contact.id,
+                                type="FOLLOW_UP_1",
+                                sequence=2,
+                                priority=task.priority,
+                                scheduled_at=now + timedelta(days=delay),
+                                status=TaskStatus.READY.value
+                            )
+                            session.add(fu1_task)
+                            await session.commit()
+                            logger.info(f"[Worker] Scheduled Follow-up 1 for {contact.name} in {delay} days")
+                        elif task.type == "FOLLOW_UP_1":
+                            delay = contact.followup_2_delay_days or 5
+                            fu2_task = Task(
+                                contact_id=contact.id,
+                                type="FOLLOW_UP_2",
+                                sequence=3,
+                                priority=task.priority,
+                                scheduled_at=now + timedelta(days=delay),
+                                status=TaskStatus.READY.value
+                            )
+                            session.add(fu2_task)
+                            await session.commit()
+                            logger.info(f"[Worker] Scheduled Follow-up 2 for {contact.name} in {delay} days")
+
                 await event_bus.publish(EventCode.MESSAGE_CONFIRMED, task_id=task_id, worker_id=WORKER_ID,
                                         contact_name=contact.name, payload={"result": "SUCCESS"})
                 await event_bus.publish(EventCode.TASK_COMPLETED, task_id=task_id, worker_id=WORKER_ID)

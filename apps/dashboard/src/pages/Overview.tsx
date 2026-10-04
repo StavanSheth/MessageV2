@@ -1,7 +1,7 @@
-import React from 'react';
 import { 
   Users, Send, CheckCircle2, AlertOctagon, 
-  Clock, ArrowUpRight, Play, Upload, MessageCircle, Download
+  Clock, ArrowUpRight, Play, Upload, MessageCircle, Download,
+  Pause, Square
 } from 'lucide-react';
 import { LiveAutomationState, Contact, Task } from '../types';
 
@@ -9,7 +9,11 @@ interface OverviewProps {
   state: LiveAutomationState;
   contacts: Contact[];
   tasks: Task[];
-  onStart: () => void;
+  batchLimit?: number | null;
+  onStart: (limit?: number | null) => void;
+  onPause?: () => void;
+  onResume?: () => void;
+  onStop?: () => void;
   onNavigate: (tab: string) => void;
 }
 
@@ -17,7 +21,11 @@ export const Overview: React.FC<OverviewProps> = ({
   state,
   contacts,
   tasks,
+  batchLimit,
   onStart,
+  onPause,
+  onResume,
+  onStop,
   onNavigate,
 }) => {
   const totalContacts = contacts.length;
@@ -77,7 +85,7 @@ export const Overview: React.FC<OverviewProps> = ({
             Local desktop Instagram outreach pipeline with visible browser automation.
           </p>
         </div>
-        <div className="flex items-center space-x-3">
+        <div className="flex flex-wrap items-center gap-3">
           <a
             href="/api/contacts/export/excel"
             download
@@ -89,18 +97,73 @@ export const Overview: React.FC<OverviewProps> = ({
           </a>
           <button
             onClick={() => onNavigate('sources')}
-            className="flex items-center space-x-2 bg-gray-800 hover:bg-gray-700 text-gray-200 px-4 py-2.5 rounded-xl text-xs font-bold border border-gray-700 transition"
+            className="flex items-center space-x-2 bg-gray-800 hover:bg-gray-700 text-gray-200 px-4 py-2.5 rounded-xl text-xs font-bold border border-gray-700 transition cursor-pointer"
           >
             <Upload className="w-4 h-4" />
             <span>Import Sheet</span>
           </button>
-          <button
-            onClick={onStart}
-            className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/30 transition hover:scale-105 active:scale-95"
-          >
-            <Play className="w-4 h-4 fill-white" />
-            <span>Start Processing</span>
-          </button>
+
+          {state.status === 'RUNNING' && (
+            <>
+              {onPause && (
+                <button
+                  onClick={onPause}
+                  className="flex items-center space-x-2 bg-amber-600 hover:bg-amber-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow transition hover:scale-105 active:scale-95 cursor-pointer"
+                >
+                  <Pause className="w-4 h-4 fill-white" />
+                  <span>Pause</span>
+                </button>
+              )}
+              {onStop && (
+                <button
+                  onClick={onStop}
+                  className="flex items-center space-x-2 bg-rose-600 hover:bg-rose-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow transition hover:scale-105 active:scale-95 cursor-pointer"
+                >
+                  <Square className="w-4 h-4 fill-white" />
+                  <span>Stop</span>
+                </button>
+              )}
+              <button
+                onClick={() => onNavigate('automation')}
+                className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/30 transition hover:scale-105 active:scale-95 cursor-pointer"
+              >
+                <span>Live Monitor</span>
+              </button>
+            </>
+          )}
+
+          {state.status === 'PAUSED' && (
+            <>
+              {onResume && (
+                <button
+                  onClick={onResume}
+                  className="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow transition hover:scale-105 active:scale-95 cursor-pointer"
+                >
+                  <Play className="w-4 h-4 fill-white" />
+                  <span>Resume</span>
+                </button>
+              )}
+              {onStop && (
+                <button
+                  onClick={onStop}
+                  className="flex items-center space-x-2 bg-rose-600 hover:bg-rose-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow transition hover:scale-105 active:scale-95 cursor-pointer"
+                >
+                  <Square className="w-4 h-4 fill-white" />
+                  <span>Stop</span>
+                </button>
+              )}
+            </>
+          )}
+
+          {state.status !== 'RUNNING' && state.status !== 'PAUSED' && (
+            <button
+              onClick={() => onStart(batchLimit)}
+              className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/30 transition hover:scale-105 active:scale-95 cursor-pointer"
+            >
+              <Play className="w-4 h-4 fill-white" />
+              <span>Start Processing ({batchLimit === null ? 'All' : batchLimit})</span>
+            </button>
+          )}
         </div>
       </div>
 

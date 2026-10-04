@@ -159,7 +159,11 @@ export function App() {
             state={automationState}
             contacts={contacts}
             tasks={tasks}
+            batchLimit={batchLimit}
             onStart={handleStart}
+            onPause={handlePause}
+            onResume={handleResume}
+            onStop={handleStop}
             onNavigate={setCurrentTab}
           />
         )}

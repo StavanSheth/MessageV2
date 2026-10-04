@@ -8,8 +8,19 @@ from backend.domain.enums import EventCode
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
+from datetime import datetime, timezone
+from typing import Optional
+
+def format_datetime_readable(dt: Optional[datetime]) -> Optional[str]:
+    """Format datetime into standard human readable string: Day, DD Mon YYYY, HH:MM:SS UTC."""
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.strftime("%a, %d %b %Y, %H:%M:%S UTC")
+
 @router.get("")
-async def list_tasks(status: str = None, limit: int = 100, offset: int = 0, db: AsyncSession = Depends(get_db)):
+async def list_tasks(status: str = None, limit: int = 200, offset: int = 0, db: AsyncSession = Depends(get_db)):
     repo = TaskRepository(db)
     tasks = await repo.list_tasks(status=status, limit=limit, offset=offset)
     return [{
@@ -17,17 +28,20 @@ async def list_tasks(status: str = None, limit: int = 100, offset: int = 0, db: 
         "contact_id": t.contact_id,
         "contact_name": t.contact.name if t.contact else None,
         "contact_instagram": t.contact.instagram_url if t.contact else None,
+        "username": t.contact.username if t.contact else None,
         "type": t.type,
         "status": t.status,
         "sequence": t.sequence,
         "priority": t.priority,
-        "scheduled_at": t.scheduled_at,
-        "started_at": t.started_at,
-        "completed_at": t.completed_at,
         "attempt_count": t.attempt_count,
+        "retry_count": t.attempt_count,
+        "max_retries": 3,
+        "scheduled_at": format_datetime_readable(t.scheduled_at),
+        "started_at": format_datetime_readable(t.started_at),
+        "completed_at": format_datetime_readable(t.completed_at),
         "worker_id": t.worker_id,
-        "created_at": t.created_at,
-        "updated_at": t.updated_at
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "updated_at": t.updated_at.isoformat() if t.updated_at else None
     } for t in tasks]
 
 @router.post("/{task_id}/retry")

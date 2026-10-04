@@ -83,15 +83,26 @@ export interface Contact {
 export interface Task {
   id: string;
   contact_id: string;
+  contact_name?: string;
+  contact_instagram?: string;
+  username?: string;
+  type?: string;
   status: TaskStatus;
+  sequence?: number;
   priority: number;
   retry_count: number;
+  attempt_count?: number;
   max_retries: number;
   last_error?: string;
   error_code?: string;
+  scheduled_at?: string;
+  started_at?: string;
+  completed_at?: string;
   next_retry_at?: string;
   claimed_by_worker_id?: string;
+  worker_id?: string;
   created_at: string;
+  updated_at?: string;
   contact?: Contact;
 }
 

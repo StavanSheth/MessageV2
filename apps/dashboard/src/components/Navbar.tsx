@@ -10,7 +10,10 @@ interface NavbarProps {
   setCurrentTab: (tab: string) => void;
   workerStatus: WorkerStatus;
   isWsConnected: boolean;
-  onStart: () => void;
+  batchLimit: number | null;
+  setBatchLimit: (limit: number | null) => void;
+  batchSentCount?: number;
+  onStart: (limit?: number | null) => void;
   onPause: () => void;
   onResume: () => void;
   onStop: () => void;
@@ -22,6 +25,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   setCurrentTab,
   workerStatus,
   isWsConnected,
+  batchLimit,
+  setBatchLimit,
+  batchSentCount = 0,
   onStart,
   onPause,
   onResume,
@@ -115,9 +121,37 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Action Buttons */}
           <div className="flex items-center space-x-2 pl-2">
             {!isRunning && !isPaused && (
+              <div className="flex items-center space-x-1.5 bg-gray-800/80 border border-gray-700/80 rounded-lg px-2.5 py-1.5">
+                <span className="text-[11px] text-gray-400 font-medium">Send:</span>
+                <select
+                  value={batchLimit === null ? 'all' : String(batchLimit)}
+                  onChange={(e) => setBatchLimit(e.target.value === 'all' ? null : Number(e.target.value))}
+                  className="bg-gray-900 border border-gray-700 text-gray-200 text-xs rounded px-1.5 py-0.5 focus:outline-none focus:border-indigo-500 font-semibold cursor-pointer"
+                >
+                  <option value="1">1 contact</option>
+                  <option value="5">5 contacts</option>
+                  <option value="10">10 contacts</option>
+                  <option value="25">25 contacts</option>
+                  <option value="50">50 contacts</option>
+                  <option value="100">100 contacts</option>
+                  <option value="all">Entire List (All)</option>
+                </select>
+              </div>
+            )}
+
+            {(isRunning || isPaused) && (
+              <div className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-indigo-950/60 border border-indigo-500/40 text-xs font-mono">
+                <span className="text-gray-400">Batch:</span>
+                <span className="text-emerald-400 font-bold">{batchSentCount}</span>
+                <span className="text-gray-500">/</span>
+                <span className="text-gray-200 font-semibold">{batchLimit === null ? 'All' : batchLimit}</span>
+              </div>
+            )}
+
+            {!isRunning && !isPaused && (
               <button
-                onClick={onStart}
-                className="flex items-center space-x-2 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-lg shadow-emerald-600/30 transition-all hover:scale-105 active:scale-95"
+                onClick={() => onStart(batchLimit)}
+                className="flex items-center space-x-2 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-lg shadow-emerald-600/30 transition-all hover:scale-105 active:scale-95 cursor-pointer"
               >
                 <Play className="w-4 h-4 fill-white" />
                 <span>START RUN</span>

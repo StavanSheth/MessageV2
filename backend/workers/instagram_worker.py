@@ -7,8 +7,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.database.models import Task, Contact, Message, Error
 from backend.automation.instagram.browser import BrowserWorker
 from backend.automation.instagram.instagram_adapter import InstagramAdapter
 from backend.automation.instagram.result_detector import ResultDetector
@@ -37,6 +39,9 @@ class InstagramWorker:
         self.current_task_id: Optional[str] = None
         self.current_contact_name: Optional[str] = None
         self.current_instagram: Optional[str] = None
+        self.batch_limit: Optional[int] = None
+        self.batch_sent_count: int = 0
+        self.delay_between_messages: int = 15
         self._paused = False
         self._stop_requested = False
         self._task: Optional[asyncio.Task] = None
@@ -46,13 +51,20 @@ class InstagramWorker:
     # Control methods
     # ───────────────────────────────────────────────
 
-    async def start(self) -> None:
+    async def start(self, batch_limit: Optional[int] = None, delay_seconds: Optional[int] = None) -> None:
         if self._task and not self._task.done():
+            # If already running but paused, unpause
+            if self._paused:
+                await self.resume()
             return
+        self.batch_limit = batch_limit if (batch_limit is not None and batch_limit > 0) else None
+        self.batch_sent_count = 0
+        if delay_seconds is not None and delay_seconds >= 5:
+            self.delay_between_messages = delay_seconds
         self._stop_requested = False
         self._paused = False
         self._task = asyncio.create_task(self._run_loop())
-        logger.info(f"[Worker] {WORKER_NAME} started")
+        logger.info(f"[Worker] {WORKER_NAME} started (batch_limit={self.batch_limit}, delay={self.delay_between_messages}s)")
 
     async def pause(self) -> None:
         self._paused = True
@@ -99,6 +111,9 @@ class InstagramWorker:
             "current_task_id": self.current_task_id,
             "current_contact_name": self.current_contact_name,
             "current_instagram": self.current_instagram,
+            "batch_limit": self.batch_limit,
+            "batch_sent_count": self.batch_sent_count,
+            "delay_seconds": self.delay_between_messages,
             "elapsed_seconds": (datetime.now(timezone.utc) - self._start_time).seconds if self._start_time else 0
         }
 
@@ -164,6 +179,24 @@ class InstagramWorker:
                     await asyncio.sleep(1)
                     continue
 
+                # Batch limit guard: auto-pause when batch target reached
+                if self.batch_limit is not None and self.batch_sent_count >= self.batch_limit:
+                    logger.info(f"[Worker] Batch limit of {self.batch_limit} reached ({self.batch_sent_count} sent). Automation safely paused.")
+                    self._paused = True
+                    self.status = WorkerStatus.PAUSED
+                    self.stage = AutomationStage.IDLE
+                    await self._update_worker_db(status="PAUSED", current_stage="IDLE")
+                    await event_bus.publish(
+                        EventCode.WORKER_PAUSED,
+                        worker_id=WORKER_ID,
+                        payload={"reason": f"Batch limit reached ({self.batch_sent_count}/{self.batch_limit} sent)"}
+                    )
+                    await event_bus.publish_state(await self.health())
+                    while self._paused and not self._stop_requested:
+                        await asyncio.sleep(1)
+                    if self._stop_requested:
+                        break
+
                 # Guard: Ensure browser is connected and page is alive
                 if not self.browser_worker.is_running or not self.browser_worker.page or self.browser_worker.page.is_closed():
                     logger.warning("[Worker] Browser closed or disconnected. Halting task loop.")
@@ -171,8 +204,21 @@ class InstagramWorker:
 
                 task = await self._claim_next_task()
                 if not task:
-                    await asyncio.sleep(3)
-                    continue
+                    # Check if there are any READY tasks left in the queue
+                    async with AsyncSessionLocal() as session:
+                        repo = TaskRepository(session)
+                        counts = await repo.count_by_status()
+                        ready_count = counts.get("READY", 0)
+                    if ready_count == 0:
+                        logger.info("[Worker] All ready tasks in the queue have been processed.")
+                        self.status = WorkerStatus.IDLE
+                        self.stage = AutomationStage.COMPLETED
+                        await self._update_worker_db(status="IDLE", current_stage="COMPLETED")
+                        await event_bus.publish_state(await self.health())
+                        break
+                    else:
+                        await asyncio.sleep(5)
+                        continue
 
                 contact = task.contact
                 self.current_task_id = task.id
@@ -180,6 +226,29 @@ class InstagramWorker:
                 self.current_instagram = contact.instagram_url if contact else ""
 
                 await self._process_task(task, adapter)
+
+                # Batch limit check immediately after task completes
+                if self.batch_limit is not None and self.batch_sent_count >= self.batch_limit:
+                    logger.info(f"[Worker] Batch limit reached: {self.batch_sent_count}/{self.batch_limit}. Auto-pausing.")
+                    self._paused = True
+                    self.status = WorkerStatus.PAUSED
+                    self.stage = AutomationStage.IDLE
+                    await self._update_worker_db(status="PAUSED", current_stage="IDLE")
+                    await event_bus.publish(
+                        EventCode.WORKER_PAUSED,
+                        worker_id=WORKER_ID,
+                        payload={"reason": f"Batch limit reached ({self.batch_sent_count}/{self.batch_limit} sent)"}
+                    )
+                    await event_bus.publish_state(await self.health())
+                    continue
+
+                # Pacing delay between contacts to protect Instagram account from rate-limiting
+                delay = self.delay_between_messages
+                logger.info(f"[Worker] Pacing delay: waiting {delay}s before next contact...")
+                for _ in range(delay):
+                    if self._stop_requested or self._paused:
+                        break
+                    await asyncio.sleep(1)
 
         except asyncio.CancelledError:
             logger.info("[Worker] Task loop cancelled")
@@ -349,6 +418,7 @@ class InstagramWorker:
             await self.browser_worker.screenshot("message_result")
 
             if result == ResultCode.SUCCESS:
+                self.batch_sent_count += 1
                 async with AsyncSessionLocal() as session:
                     msg_repo = MessageRepository(session)
                     await msg_repo.update_result(msg_id, "SENT", "SUCCESS")
@@ -362,35 +432,69 @@ class InstagramWorker:
                         now = datetime.now(timezone.utc)
                         if task.type == "MESSAGE":
                             delay = contact.followup_1_delay_days or 3
-                            fu1_task = Task(
-                                contact_id=contact.id,
-                                type="FOLLOW_UP_1",
-                                sequence=2,
-                                priority=task.priority,
-                                scheduled_at=now + timedelta(days=delay),
-                                status=TaskStatus.READY.value
+                            fu_stmt = select(Task).where(
+                                and_(Task.contact_id == contact.id, Task.type == "FOLLOW_UP_1")
                             )
-                            session.add(fu1_task)
-                            await session.commit()
-                            logger.info(f"[Worker] Scheduled Follow-up 1 for {contact.name} in {delay} days")
+                            existing_fu = (await session.execute(fu_stmt)).scalar_one_or_none()
+                            if not existing_fu:
+                                fu1_task = Task(
+                                    contact_id=contact.id,
+                                    type="FOLLOW_UP_1",
+                                    sequence=2,
+                                    priority=task.priority,
+                                    scheduled_at=now + timedelta(days=delay),
+                                    status=TaskStatus.READY.value
+                                )
+                                session.add(fu1_task)
+                                await session.commit()
+                                logger.info(f"[Worker] Scheduled Follow-up 1 for {contact.name} in {delay} days")
                         elif task.type == "FOLLOW_UP_1":
                             delay = contact.followup_2_delay_days or 5
-                            fu2_task = Task(
-                                contact_id=contact.id,
-                                type="FOLLOW_UP_2",
-                                sequence=3,
-                                priority=task.priority,
-                                scheduled_at=now + timedelta(days=delay),
-                                status=TaskStatus.READY.value
+                            fu_stmt = select(Task).where(
+                                and_(Task.contact_id == contact.id, Task.type == "FOLLOW_UP_2")
                             )
-                            session.add(fu2_task)
-                            await session.commit()
-                            logger.info(f"[Worker] Scheduled Follow-up 2 for {contact.name} in {delay} days")
+                            existing_fu = (await session.execute(fu_stmt)).scalar_one_or_none()
+                            if not existing_fu:
+                                fu2_task = Task(
+                                    contact_id=contact.id,
+                                    type="FOLLOW_UP_2",
+                                    sequence=3,
+                                    priority=task.priority,
+                                    scheduled_at=now + timedelta(days=delay),
+                                    status=TaskStatus.READY.value
+                                )
+                                session.add(fu2_task)
+                                await session.commit()
+                                logger.info(f"[Worker] Scheduled Follow-up 2 for {contact.name} in {delay} days")
 
-                await event_bus.publish(EventCode.MESSAGE_CONFIRMED, task_id=task_id, worker_id=WORKER_ID,
-                                        contact_name=contact.name, payload={"result": "SUCCESS"})
+                await event_bus.publish(
+                    EventCode.MESSAGE_CONFIRMED,
+                    task_id=task_id,
+                    worker_id=WORKER_ID,
+                    contact_name=contact.name,
+                    payload={"result": "SUCCESS", "batch_sent": self.batch_sent_count, "batch_limit": self.batch_limit}
+                )
                 await event_bus.publish(EventCode.TASK_COMPLETED, task_id=task_id, worker_id=WORKER_ID)
-                logger.info(f"[Worker] Task {task_id} COMPLETED — {contact.name}")
+                logger.info(f"[Worker] Task {task_id} COMPLETED — {contact.name} (Batch: {self.batch_sent_count}/{self.batch_limit or 'All'})")
+
+            elif result == ResultCode.RATE_LIMITED:
+                # INSTAGRAM RATE LIMIT / ACTION BLOCK DETECTED -> PAUSE IMMEDIATELY
+                async with AsyncSessionLocal() as session:
+                    msg_repo = MessageRepository(session)
+                    await msg_repo.update_result(msg_id, "FAILED", "RATE_LIMITED")
+                async with AsyncSessionLocal() as session:
+                    task_repo = TaskRepository(session)
+                    await task_repo.update_status(task_id, TaskStatus.MANUAL_REVIEW)
+                self._paused = True
+                self.status = WorkerStatus.PAUSED
+                await self._update_worker_db(status="PAUSED")
+                await event_bus.publish(
+                    EventCode.MANUAL_REVIEW_REQUIRED,
+                    task_id=task_id,
+                    worker_id=WORKER_ID,
+                    payload={"reason": "Instagram action block or rate limit detected. Automation paused for safety."}
+                )
+                logger.warning(f"[Worker] Instagram rate limit / action block detected on task {task_id}. Worker paused.")
 
             elif result == ResultCode.UNKNOWN:
                 # FAIL CLOSED: unknown = reconcile first
@@ -412,7 +516,9 @@ class InstagramWorker:
                 new_status = TaskStatus.RETRY_WAIT if is_retryable else TaskStatus.MANUAL_REVIEW
                 async with AsyncSessionLocal() as session:
                     task_repo = TaskRepository(session)
-                    await task_repo.update_status(task_id, new_status)
+                    current_task = await task_repo.get_by_id(task_id)
+                    if current_task and current_task.status == TaskStatus.RUNNING.value:
+                        await task_repo.update_status(task_id, new_status)
                 await event_bus.publish(EventCode.TASK_FAILED, task_id=task_id, worker_id=WORKER_ID,
                                         payload={"result": result.value, "retryable": is_retryable})
 
@@ -422,20 +528,24 @@ class InstagramWorker:
             try:
                 async with AsyncSessionLocal() as session:
                     task_repo = TaskRepository(session)
-                    await task_repo.update_status(task_id, TaskStatus.RETRY_WAIT)
-            except Exception:
-                pass
+                    current_task = await task_repo.get_by_id(task_id)
+                    if current_task and current_task.status == TaskStatus.RUNNING.value:
+                        await task_repo.update_status(task_id, TaskStatus.RETRY_WAIT)
+            except Exception as db_err:
+                logger.error(f"[Worker] Failed to update task status after error: {db_err}")
             await event_bus.publish(EventCode.TASK_FAILED, task_id=task_id, worker_id=WORKER_ID,
                                     payload={"error": str(e)})
 
         # Brief pause between tasks
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
 
     async def _fail_task(self, task_id: str, result_code: ResultCode, reason: str,
                          new_status: TaskStatus = TaskStatus.RETRY_WAIT, retryable: bool = True) -> None:
         async with AsyncSessionLocal() as session:
             task_repo = TaskRepository(session)
-            await task_repo.update_status(task_id, new_status)
+            current_task = await task_repo.get_by_id(task_id)
+            if current_task and current_task.status == TaskStatus.RUNNING.value:
+                await task_repo.update_status(task_id, new_status)
         await event_bus.publish(EventCode.TASK_FAILED, task_id=task_id, worker_id=WORKER_ID,
                                 payload={"code": result_code.value, "reason": reason, "retryable": retryable})
         logger.warning(f"[Worker] Task {task_id} failed: {result_code.value} — {reason}")

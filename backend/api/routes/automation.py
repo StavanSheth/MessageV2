@@ -1,3 +1,5 @@
+from typing import Optional
+from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.workers.instagram_worker import instagram_worker
@@ -6,12 +8,22 @@ from backend.database.session import get_db
 
 router = APIRouter(prefix="/api/automation", tags=["automation"])
 
+class StartAutomationRequest(BaseModel):
+    batch_limit: Optional[int] = None
+    delay_seconds: Optional[int] = 15
+
 @router.post("/start")
-async def start_automation():
-    """Start the Instagram worker."""
+async def start_automation(req: Optional[StartAutomationRequest] = None):
+    """Start the Instagram worker with optional batch limit and delay."""
     try:
-        await instagram_worker.start()
-        return {"status": "started"}
+        batch_limit = req.batch_limit if req else None
+        delay_seconds = req.delay_seconds if req else 15
+        await instagram_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds)
+        return {
+            "status": "started",
+            "batch_limit": batch_limit,
+            "delay_seconds": delay_seconds
+        }
     except Exception as e:
         raise HTTPException(500, f"Failed to start worker: {str(e)}")
 

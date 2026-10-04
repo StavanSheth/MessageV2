@@ -47,6 +47,7 @@ class ResultCode(str, Enum):
     SEND_FAILED = "SEND_FAILED"
     NETWORK_ERROR = "NETWORK_ERROR"
     TIMEOUT = "TIMEOUT"
+    RATE_LIMITED = "RATE_LIMITED"
     UNKNOWN = "UNKNOWN"
 
 class WorkerStatus(str, Enum):

@@ -2,13 +2,19 @@ import React, { useState, useEffect } from 'react';
 import { 
   Activity, CheckCircle2, ShieldCheck, Eye, Clock, 
   Send, AlertCircle, Sparkles, UserCheck, Terminal, Compass,
-  ExternalLink, Loader2, RefreshCw
+  ExternalLink, Loader2, RefreshCw, Play, Pause, Square
 } from 'lucide-react';
 import { LiveAutomationState } from '../types';
 import { openBrowserWindow } from '../services/api';
 
 interface LiveAutomationViewProps {
   state: LiveAutomationState;
+  batchLimit?: number | null;
+  setBatchLimit?: (limit: number | null) => void;
+  onStart?: (limit?: number | null) => void;
+  onPause?: () => void;
+  onResume?: () => void;
+  onStop?: () => void;
 }
 
 const STAGES = [
@@ -21,7 +27,15 @@ const STAGES = [
   { key: 'DETECTING_RESULT', label: 'Confirm Result', aliases: ['COMPLETED'] },
 ];
 
-export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({ state }) => {
+export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
+  state,
+  batchLimit = 5,
+  setBatchLimit,
+  onStart,
+  onPause,
+  onResume,
+  onStop
+}) => {
   const currentStageIndex = STAGES.findIndex(
     (s) => s.key === state.stage || s.aliases.includes(state.stage)
   );
@@ -142,6 +156,106 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({ state })
                 </div>
               );
             })}
+          </div>
+        </div>
+      </div>
+
+      {/* Batch Control & Sequential Queue Dispatcher */}
+      <div className="bg-gradient-to-r from-gray-900 via-gray-900/90 to-gray-900 border border-gray-800 rounded-2xl p-5 shadow-xl">
+        <div className="flex flex-col lg:flex-row items-center justify-between gap-5">
+          {/* Left: Batch Progress & Queue Status */}
+          <div className="flex items-center space-x-4 w-full lg:w-auto">
+            <div className="w-12 h-12 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex flex-col items-center justify-center text-indigo-400">
+              <span className="font-black text-lg leading-none">{state.batch_sent_count ?? 0}</span>
+              <span className="text-[9px] uppercase font-bold text-gray-400 mt-0.5">Sent</span>
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="text-sm font-bold text-white">Batch Target:</span>
+                <span className="text-xs font-mono font-bold text-indigo-400">
+                  {state.batch_sent_count ?? 0} / {(state.status === 'RUNNING' || state.status === 'PAUSED' ? state.batch_limit : batchLimit) === null ? 'Entire List (All)' : `${(state.status === 'RUNNING' || state.status === 'PAUSED' ? state.batch_limit : batchLimit)} contacts`}
+                </span>
+                {state.batch_limit && (state.batch_sent_count ?? 0) >= state.batch_limit && (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse">
+                    BATCH COMPLETE (PAUSED)
+                  </span>
+                )}
+                {state.status === 'RUNNING' && (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center space-x-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
+                    <span>SEQUENTIAL RUN ACTIVE</span>
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-gray-400 mt-1">
+                Safe anti-spam pacing: {state.delay_seconds || 15}s delay between sends. Exceptions for invalid profiles, private DMs, or timeouts are automatically handled and skipped without interrupting the queue.
+              </p>
+            </div>
+          </div>
+
+          {/* Right: Quick Batch Selector & Buttons */}
+          <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto justify-end">
+            <span className="text-xs text-gray-400 font-semibold mr-1">Batch Size:</span>
+            {[
+              { label: '5', val: 5 },
+              { label: '10', val: 10 },
+              { label: '25', val: 25 },
+              { label: '50', val: 50 },
+              { label: 'All', val: null },
+            ].map((opt) => (
+              <button
+                key={opt.label}
+                disabled={state.status === 'RUNNING'}
+                onClick={() => setBatchLimit?.(opt.val)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  batchLimit === opt.val
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30 ring-1 ring-indigo-400'
+                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                } disabled:opacity-50 cursor-pointer`}
+              >
+                {opt.label}
+              </button>
+            ))}
+
+            {state.status !== 'RUNNING' && state.status !== 'PAUSED' && (
+              <button
+                onClick={() => onStart?.(batchLimit)}
+                className="ml-2 flex items-center space-x-1.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white px-4 py-1.5 rounded-lg text-xs font-bold shadow-lg shadow-emerald-600/30 transition hover:scale-105 active:scale-95 cursor-pointer"
+              >
+                <Play className="w-3.5 h-3.5 fill-white" />
+                <span>Start Batch ({batchLimit === null ? 'All' : batchLimit})</span>
+              </button>
+            )}
+
+            {state.status === 'RUNNING' && onPause && (
+              <button
+                onClick={onPause}
+                className="ml-2 flex items-center space-x-1.5 bg-amber-600 hover:bg-amber-500 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold shadow transition active:scale-95 cursor-pointer"
+              >
+                <Pause className="w-3.5 h-3.5 fill-white" />
+                <span>Pause</span>
+              </button>
+            )}
+
+            {state.status === 'PAUSED' && onResume && (
+              <button
+                onClick={onResume}
+                className="ml-2 flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold shadow transition active:scale-95 cursor-pointer"
+              >
+                <Play className="w-3.5 h-3.5 fill-white" />
+                <span>Resume</span>
+              </button>
+            )}
+
+            {(state.status === 'RUNNING' || state.status === 'PAUSED') && onStop && (
+              <button
+                onClick={onStop}
+                className="flex items-center space-x-1 bg-rose-600 hover:bg-rose-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow transition active:scale-95 cursor-pointer"
+              >
+                <Square className="w-3 h-3 fill-white" />
+                <span>Stop</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

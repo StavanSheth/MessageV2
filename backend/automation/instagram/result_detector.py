@@ -5,8 +5,10 @@ class ResultDetector:
     @staticmethod
     def classify_navigation_result(status_code: Optional[int], page_text: str) -> ResultCode:
         lower_text = page_text.lower()
-        if "sorry, this page isn't available" in lower_text or "page not found" in lower_text:
+        if "sorry, this page isn't available" in lower_text or "page not found" in lower_text or "link you followed may be broken" in lower_text:
             return ResultCode.PROFILE_NOT_FOUND
+        if "try again later" in lower_text or "we limit how often" in lower_text or "action blocked" in lower_text:
+            return ResultCode.RATE_LIMITED
         if "challenge" in lower_text or "confirm your info" in lower_text or "suspicious login" in lower_text:
             return ResultCode.CHALLENGE_REQUIRED
         if "log in" in lower_text and ("password" in lower_text or "username" in lower_text):

@@ -246,8 +246,10 @@ class InstagramAdapter:
     async def detect_result(self, expected_text: str) -> ResultCode:
         """Verify whether message was sent, failed, or unknown."""
         try:
-            # Check for error banners or retry icons
+            # Check for error banners, rate limits, or retry icons
             content = (await self.page.content()).lower()
+            if "try again later" in content or "we restrict certain activity" in content or "action blocked" in content or "we limit how often" in content:
+                return ResultCode.RATE_LIMITED
             if "failed to send" in content or "couldn't send" in content:
                 return ResultCode.SEND_FAILED
 

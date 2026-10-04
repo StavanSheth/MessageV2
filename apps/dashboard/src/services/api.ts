@@ -12,8 +12,12 @@ export async function fetchAutomationStatus(): Promise<LiveAutomationState> {
   return res.json();
 }
 
-export async function startAutomation(): Promise<{ status: string }> {
-  const res = await fetch(`${BASE_URL}/api/automation/start`, { method: 'POST' });
+export async function startAutomation(options?: { batch_limit?: number | null; delay_seconds?: number }): Promise<{ status: string }> {
+  const res = await fetch(`${BASE_URL}/api/automation/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options || {})
+  });
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.detail || 'Failed to start automation');

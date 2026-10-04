@@ -38,6 +38,7 @@ export function App() {
     instagram_login_status: 'UNKNOWN',
     task_counts: {},
   });
+  const [batchLimit, setBatchLimit] = useState<number | null>(5);
 
   // Load backend state
   const loadData = useCallback(async () => {
@@ -76,9 +77,10 @@ export function App() {
   }, [loadData]);
 
   // Action handlers
-  const handleStart = async () => {
+  const handleStart = async (limit?: number | null) => {
     try {
-      await startAutomation();
+      const activeLimit = limit !== undefined ? limit : batchLimit;
+      await startAutomation({ batch_limit: activeLimit, delay_seconds: 15 });
       await loadData();
     } catch (e: any) {
       alert(`Could not start automation: ${e.message}`);
@@ -125,6 +127,9 @@ export function App() {
         setCurrentTab={setCurrentTab}
         workerStatus={automationState.status}
         isWsConnected={isWsConnected}
+        batchLimit={batchLimit}
+        setBatchLimit={setBatchLimit}
+        batchSentCount={automationState.batch_sent_count}
         onStart={handleStart}
         onPause={handlePause}
         onResume={handleResume}
@@ -138,7 +143,17 @@ export function App() {
         <AttentionCenter state={automationState} />
 
         {/* Tab Routing */}
-        {currentTab === 'automation' && <LiveAutomationView state={automationState} />}
+        {currentTab === 'automation' && (
+          <LiveAutomationView
+            state={automationState}
+            batchLimit={batchLimit}
+            setBatchLimit={setBatchLimit}
+            onStart={handleStart}
+            onPause={handlePause}
+            onResume={handleResume}
+            onStop={handleStop}
+          />
+        )}
         {currentTab === 'overview' && (
           <Overview
             state={automationState}

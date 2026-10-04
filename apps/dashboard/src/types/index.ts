@@ -128,6 +128,9 @@ export interface LiveAutomationState {
     skipped: number;
   };
   task_counts?: Record<string, number>;
+  batch_limit?: number | null;
+  batch_sent_count?: number;
+  delay_seconds?: number;
 }
 
 export interface EventLog {

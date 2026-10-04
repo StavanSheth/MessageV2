@@ -61,58 +61,70 @@ async def get_browser_live_feed():
         return FileResponse(str(screenshots[0]), media_type="image/png")
     return Response(status_code=204)
 
-@router.post("/api/browser/open")
-async def open_visible_browser():
-    """Forces open or foregrounds the native Chrome browser window on the user desktop."""
-    from backend.automation.instagram.browser import check_cdp_endpoint
-    from fastapi import HTTPException
-    import psutil
-    
-    cdp_url = check_cdp_endpoint()
-    
-    # If Chrome with CDP is already active, simply bring existing Instagram tab to front
-    if cdp_url:
-        try:
-            page = await instagram_worker.browser_worker.get_active_instagram_page()
-            if page and not page.is_closed():
-                await page.bring_to_front()
-                return {
-                    "status": "foregrounded",
-                    "browser_status": "CONNECTED",
-                    "cdp_url": cdp_url,
-                    "playwright_connected": True
-                }
-        except Exception:
-            pass
+from pydantic import BaseModel
+from typing import Optional
 
-    chrome_pid = None
-    if os.name == "nt":
-        import subprocess
-        from backend.automation.instagram.browser import get_chrome_executable
-        chrome_bin = get_chrome_executable()
-        proc = subprocess.Popen(
-            f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --profile-directory="Profile 4" --restore-last-session http://localhost:5173 https://www.instagram.com',
-            shell=True
-        )
-        chrome_pid = proc.pid
+class ProfileSelectRequest(BaseModel):
+    profile_id: Optional[str] = "Default"
+
+@router.get("/api/browser/profiles")
+async def list_browser_profiles():
+    """Lists all detected Chrome profiles on the host machine, prioritizing Stavan Sheth (Default)."""
+    from backend.automation.chrome_profile_manager import chrome_profile_manager
+    profiles = chrome_profile_manager.list_profiles()
+    active = chrome_profile_manager.get_active_profile()
+    return {
+        "profiles": profiles,
+        "active_profile": active
+    }
+
+@router.get("/api/browser/profile/active")
+async def get_active_browser_profile():
+    from backend.automation.chrome_profile_manager import chrome_profile_manager
+    return chrome_profile_manager.get_active_profile()
+
+@router.post("/api/browser/profile/select")
+async def select_browser_profile(req: ProfileSelectRequest):
+    from backend.automation.chrome_profile_manager import chrome_profile_manager
+    from fastapi import HTTPException
+    try:
+        updated = chrome_profile_manager.set_active_profile(req.profile_id or "Default")
+        return {
+            "status": "selected",
+            "active_profile": updated
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/api/browser/open")
+@router.post("/api/browser/launch")
+async def open_visible_browser(req: Optional[ProfileSelectRequest] = None):
+    """Forces open or foregrounds the native Chrome browser window on the user desktop live on screen."""
+    from backend.automation.chrome_profile_manager import chrome_profile_manager
+    from fastapi import HTTPException
+
+    target_profile = (req.profile_id if req and req.profile_id else None) or chrome_profile_manager.get_active_profile_id() or "Default"
+    chrome_profile_manager.set_active_profile(target_profile)
 
     try:
+        launch_info = await chrome_profile_manager.launch_chrome_live(target_profile)
         await instagram_worker.browser_worker.start()
+        chrome_profile_manager.bring_chrome_to_front()
         return {
             "status": "opened",
             "browser_status": "CONNECTED",
             "playwright_connected": True,
-            "chrome_pid": chrome_pid
+            "profile": chrome_profile_manager.get_active_profile(),
+            "live_on_screen": True
         }
     except Exception as e:
-        # Strict requirement: failure MUST return 500 with structured diagnostic error
         raise HTTPException(
             status_code=500,
             detail={
                 "error": "BROWSER_STARTUP_FAILED",
                 "browser_status": "DISCONNECTED",
                 "playwright_connected": False,
-                "chrome_pid": chrome_pid,
+                "profile": target_profile,
                 "failure_reason": str(e)
             }
         )

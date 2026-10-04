@@ -185,3 +185,13 @@ export interface Source {
   invalid_count: number;
   created_at: string;
 }
+
+export interface ChromeProfile {
+  id: string;
+  name: string;
+  gaia_name: string;
+  email: string;
+  is_default: boolean;
+  display_label: string;
+  is_active?: boolean;
+}

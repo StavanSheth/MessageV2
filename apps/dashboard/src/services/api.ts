@@ -1,4 +1,4 @@
-import { Contact, Task, LiveAutomationState, EventLog, Source } from '../types';
+import { Contact, Task, LiveAutomationState, EventLog, Source, ChromeProfile } from '../types';
 
 const BASE_URL = '';
 
@@ -52,8 +52,43 @@ export async function stopAutomation(): Promise<{ status: string }> {
   return res.json();
 }
 
-export async function openBrowserWindow(): Promise<{ status: string }> {
-  const res = await fetch(`${BASE_URL}/api/browser/open`, { method: 'POST' });
+export async function openBrowserWindow(profileId?: string): Promise<{ status: string; profile?: ChromeProfile; live_on_screen?: boolean }> {
+  const res = await fetch(`${BASE_URL}/api/browser/open`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile_id: profileId || 'Default' })
+  });
+  return res.json();
+}
+
+export async function fetchChromeProfiles(): Promise<{ profiles: ChromeProfile[]; active_profile: ChromeProfile }> {
+  const res = await fetch(`${BASE_URL}/api/browser/profiles`);
+  return res.json();
+}
+
+export async function selectChromeProfile(profileId: string): Promise<{ status: string; active_profile: ChromeProfile }> {
+  const res = await fetch(`${BASE_URL}/api/browser/profile/select`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile_id: profileId })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to select Chrome profile');
+  }
+  return res.json();
+}
+
+export async function launchChromeLive(profileId?: string): Promise<{ status: string; profile: ChromeProfile; live_on_screen: boolean }> {
+  const res = await fetch(`${BASE_URL}/api/browser/launch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile_id: profileId || 'Default' })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to launch Chrome');
+  }
   return res.json();
 }
 

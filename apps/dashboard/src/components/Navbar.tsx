@@ -4,6 +4,7 @@ import {
   FileSpreadsheet, History, ShieldAlert, Sparkles 
 } from 'lucide-react';
 import { WorkerStatus } from '../types';
+import { ChromeProfileSelector } from './ChromeProfileSelector';
 
 interface NavbarProps {
   currentTab: string;
@@ -132,6 +133,9 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span>ATTENTION NEEDED</span>
             </div>
           )}
+
+          {/* Chrome Profile Live Selector */}
+          <ChromeProfileSelector compact={true} />
 
           {/* Action Buttons */}
           <div className="flex items-center space-x-2 pl-2">

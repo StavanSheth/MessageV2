@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { LiveAutomationState } from '../types';
 import { openBrowserWindow } from '../services/api';
+import { ChromeProfileSelector } from '../components/ChromeProfileSelector';
 
 interface LiveAutomationViewProps {
   state: LiveAutomationState;
@@ -176,6 +177,9 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Chrome Profile Selection & Live Browser Control */}
+      <ChromeProfileSelector />
 
       {/* Batch Control & Sequential Queue Dispatcher */}
       <div className="bg-gradient-to-r from-gray-900 via-gray-900/90 to-gray-900 border border-gray-800 rounded-2xl p-5 shadow-xl">

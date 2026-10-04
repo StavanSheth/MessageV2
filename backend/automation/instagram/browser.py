@@ -95,8 +95,10 @@ class BrowserWorker:
                 cdp_url = check_cdp_endpoint()
 
                 if not cdp_url:
+                    from backend.automation.chrome_profile_manager import chrome_profile_manager
                     chrome_bin = get_chrome_executable()
-                    cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --profile-directory="Profile 4" --restore-last-session http://localhost:5173 https://www.instagram.com'
+                    active_profile = chrome_profile_manager.get_active_profile_id()
+                    cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --profile-directory="{active_profile}" --restore-last-session http://localhost:5173 https://www.instagram.com'
                     try:
                         subprocess.Popen(cmd, shell=True)
                     except Exception:
@@ -108,6 +110,8 @@ class BrowserWorker:
                             break
 
                 if cdp_url:
+                    from backend.automation.chrome_profile_manager import chrome_profile_manager
+                    chrome_profile_manager.bring_chrome_to_front()
                     try:
                         browser = await self.playwright.chromium.connect_over_cdp(cdp_url)
                         self.context = browser.contexts[0]
@@ -138,6 +142,7 @@ class BrowserWorker:
 
                         try:
                             await self.page.bring_to_front()
+                            chrome_profile_manager.bring_chrome_to_front()
                         except Exception:
                             pass
                         self.is_running = True

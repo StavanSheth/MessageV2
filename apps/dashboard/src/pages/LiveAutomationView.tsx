@@ -38,11 +38,12 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({ state })
   const handleOpenChrome = async () => {
     setIsOpeningBrowser(true);
     try {
+      window.open('https://www.instagram.com', '_blank');
       await openBrowserWindow();
     } catch (e) {
       console.error(e);
     } finally {
-      setTimeout(() => setIsOpeningBrowser(false), 2500);
+      setTimeout(() => setIsOpeningBrowser(false), 2000);
     }
   };
 

@@ -77,7 +77,8 @@ class TaskRepository:
         return None
 
     async def update_status(self, task_id: str, new_status: TaskStatus,
-                            last_error_id: Optional[str] = None) -> Optional[Task]:
+                            last_error_id: Optional[str] = None,
+                            scheduled_at: Optional[datetime] = None) -> Optional[Task]:
         task = await self.get_by_id(task_id)
         if not task:
             return None
@@ -90,7 +91,10 @@ class TaskRepository:
             "status": new_status.value,
             "updated_at": now
         }
-        if new_status == TaskStatus.COMPLETED:
+        if new_status == TaskStatus.READY:
+            values["scheduled_at"] = scheduled_at or now
+            values["worker_id"] = None
+        elif new_status == TaskStatus.COMPLETED:
             values["completed_at"] = now
         if last_error_id:
             values["last_error_id"] = last_error_id

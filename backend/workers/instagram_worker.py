@@ -318,7 +318,12 @@ class InstagramWorker:
             return
 
         correlation_id = task_id
-        message_body = contact.message or settings.DEFAULT_MESSAGE
+        if task.type == "FOLLOW_UP_1":
+            message_body = contact.followup_1_message or "Hey! Just following up on my previous message — would love to connect!"
+        elif task.type == "FOLLOW_UP_2":
+            message_body = contact.followup_2_message or "Hey! One final quick check-in — let me know if you'd like more details."
+        else:
+            message_body = contact.message or settings.DEFAULT_MESSAGE
 
         try:
             # Ensure active page is refreshed and synchronized

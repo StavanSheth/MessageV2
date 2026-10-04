@@ -59,12 +59,12 @@ async def list_tasks(status: str = None, limit: int = 200, offset: int = 0, db: 
 async def retry_all_tasks(db: AsyncSession = Depends(get_db)):
     repo = TaskRepository(db)
     retryable_statuses = (
-        TaskStatus.FAILED.value,
         TaskStatus.MANUAL_REVIEW.value,
         TaskStatus.RETRY_WAIT.value,
         TaskStatus.INTERRUPTED.value,
         TaskStatus.SKIPPED.value,
         TaskStatus.RECONCILING.value,
+        TaskStatus.CANCELLED.value,
     )
     all_tasks = await repo.list_tasks(limit=1000)
     retried_count = 0
@@ -85,9 +85,15 @@ async def retry_task(task_id: str, db: AsyncSession = Depends(get_db)):
     task = await repo.get_by_id(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if task.status not in (TaskStatus.FAILED.value, TaskStatus.MANUAL_REVIEW.value,
-                           TaskStatus.RETRY_WAIT.value, TaskStatus.INTERRUPTED.value,
-                           TaskStatus.SKIPPED.value, TaskStatus.RECONCILING.value):
+    retryable_statuses = (
+        TaskStatus.MANUAL_REVIEW.value,
+        TaskStatus.RETRY_WAIT.value,
+        TaskStatus.INTERRUPTED.value,
+        TaskStatus.SKIPPED.value,
+        TaskStatus.RECONCILING.value,
+        TaskStatus.CANCELLED.value,
+    )
+    if task.status not in retryable_statuses:
         raise HTTPException(400, f"Task in status '{task.status}' cannot be retried")
     await repo.update_status(task_id, TaskStatus.READY)
     await event_bus.publish(EventCode.TASK_RETRY_SCHEDULED, task_id=task_id, payload={"previous_status": task.status})

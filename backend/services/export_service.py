@@ -110,9 +110,9 @@ class ExportService:
             task_fu2 = next((t for t in contact.tasks if t.type == "FOLLOW_UP_2"), None)
 
             # Messages details
-            m1 = task_msg.messages[0] if (task_msg and task_msg.messages) else None
-            m_fu1 = task_fu1.messages[0] if (task_fu1 and task_fu1.messages) else None
-            m_fu2 = task_fu2.messages[0] if (task_fu2 and task_fu2.messages) else None
+            m1 = next((m for m in reversed(task_msg.messages) if m.status == "SENT"), task_msg.messages[-1] if task_msg.messages else None) if (task_msg and task_msg.messages) else None
+            m_fu1 = next((m for m in reversed(task_fu1.messages) if m.status == "SENT"), task_fu1.messages[-1] if task_fu1.messages else None) if (task_fu1 and task_fu1.messages) else None
+            m_fu2 = next((m for m in reversed(task_fu2.messages) if m.status == "SENT"), task_fu2.messages[-1] if task_fu2.messages else None) if (task_fu2 and task_fu2.messages) else None
 
             # 1st Message info
             m1_status = task_msg.status if task_msg else "NOT_QUEUED"
@@ -124,13 +124,13 @@ class ExportService:
             # Follow Up 1 info
             fu1_status = task_fu1.status if task_fu1 else ("SCHEDULED" if m1_status in ("SENT", "COMPLETED") else "NOT_SCHEDULED")
             fu1_sched = format_datetime(task_fu1.scheduled_at if task_fu1 else None)
-            fu1_sent = format_datetime(m_fu1.confirmed_at or task_fu1.completed_at if (task_fu1 and task_fu1.completed_at) else None)
+            fu1_sent = format_datetime((m_fu1.confirmed_at if m_fu1 else None) or (task_fu1.completed_at if task_fu1 else None))
             fu1_body = (m_fu1.body if m_fu1 else contact.followup_1_message) or "—"
 
             # Follow Up 2 info
             fu2_status = task_fu2.status if task_fu2 else ("SCHEDULED" if fu1_status in ("SENT", "COMPLETED") else "NOT_SCHEDULED")
             fu2_sched = format_datetime(task_fu2.scheduled_at if task_fu2 else None)
-            fu2_sent = format_datetime(m_fu2.confirmed_at or task_fu2.completed_at if (task_fu2 and task_fu2.completed_at) else None)
+            fu2_sent = format_datetime((m_fu2.confirmed_at if m_fu2 else None) or (task_fu2.completed_at if task_fu2 else None))
             fu2_body = (m_fu2.body if m_fu2 else contact.followup_2_message) or "—"
 
             row_data = [

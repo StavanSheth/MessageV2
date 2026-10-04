@@ -26,8 +26,8 @@ VALID_TASK_TRANSITIONS: Dict[TaskStatus, Set[TaskStatus]] = {
     TaskStatus.RECONCILING: {TaskStatus.COMPLETED, TaskStatus.READY, TaskStatus.MANUAL_REVIEW, TaskStatus.CANCELLED},
     TaskStatus.INTERRUPTED: {TaskStatus.RECONCILING, TaskStatus.READY, TaskStatus.MANUAL_REVIEW, TaskStatus.CANCELLED},
     TaskStatus.COMPLETED: set(),
-    TaskStatus.SKIPPED: set(),
-    TaskStatus.CANCELLED: set(),
+    TaskStatus.SKIPPED: {TaskStatus.READY, TaskStatus.CANCELLED},
+    TaskStatus.CANCELLED: {TaskStatus.READY},
 }
 
 VALID_MESSAGE_TRANSITIONS: Dict[MessageStatus, Set[MessageStatus]] = {

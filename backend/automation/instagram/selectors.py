@@ -26,6 +26,11 @@ class InstagramSelectors:
     
     # Message Action Buttons on Profile
     MESSAGE_BUTTON = [
+        "header div[role='button']:has-text('Message')",
+        "header button:has-text('Message')",
+        "header [role='button']:has-text('Message')",
+        "div[role='button']:text-is('Message')",
+        "button:text-is('Message')",
         "div[role='button']:has-text('Message')",
         "button:has-text('Message')",
         "div[role='button']:has-text('Send message')",
@@ -38,10 +43,8 @@ class InstagramSelectors:
     # Direct Message UI
     MESSAGE_COMPOSER = [
         "div[role='textbox'][contenteditable='true']",
+        "div[contenteditable='true'][aria-label*='Message']",
         "div[contenteditable='true']",
-        "p.xat24cr",
-        "div[aria-label*='Message'][contenteditable='true']",
-        "div[aria-label*='Message']",
         "textarea[placeholder*='Message']"
     ]
     SEND_BUTTON = [

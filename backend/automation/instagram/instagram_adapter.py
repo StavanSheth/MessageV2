@@ -169,7 +169,10 @@ class InstagramAdapter:
                 for sel in InstagramSelectors.MESSAGE_BUTTON:
                     btn = self.page.locator(sel).first
                     if await btn.count() > 0 and await btn.is_visible():
-                        await btn.click()
+                        try:
+                            await btn.click(timeout=4000)
+                        except Exception:
+                            await btn.click(force=True, timeout=3000)
                         clicked = True
                         break
 

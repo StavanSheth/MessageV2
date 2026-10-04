@@ -39,6 +39,28 @@ export function App() {
     task_counts: {},
   });
   const [batchLimit, setBatchLimit] = useState<number | null>(5);
+  const [customBatchInput, setCustomBatchInput] = useState<string>('8');
+  const [isCustomBatch, setIsCustomBatch] = useState<boolean>(false);
+
+  const handleSetBatchPreset = (val: number | null) => {
+    setIsCustomBatch(false);
+    setBatchLimit(val);
+  };
+
+  const handleSelectCustom = () => {
+    setIsCustomBatch(true);
+    const parsed = parseInt(customBatchInput, 10) || 5;
+    setBatchLimit(parsed);
+  };
+
+  const handleChangeCustom = (valStr: string) => {
+    setIsCustomBatch(true);
+    setCustomBatchInput(valStr);
+    const parsed = parseInt(valStr, 10);
+    if (parsed > 0) {
+      setBatchLimit(parsed);
+    }
+  };
 
   // Load backend state
   const loadData = useCallback(async () => {
@@ -129,6 +151,11 @@ export function App() {
         isWsConnected={isWsConnected}
         batchLimit={batchLimit}
         setBatchLimit={setBatchLimit}
+        customBatchInput={customBatchInput}
+        isCustomBatch={isCustomBatch}
+        onSetBatchPreset={handleSetBatchPreset}
+        onSelectCustom={handleSelectCustom}
+        onChangeCustom={handleChangeCustom}
         batchSentCount={automationState.batch_sent_count}
         onStart={handleStart}
         onPause={handlePause}
@@ -148,6 +175,11 @@ export function App() {
             state={automationState}
             batchLimit={batchLimit}
             setBatchLimit={setBatchLimit}
+            customBatchInput={customBatchInput}
+            isCustomBatch={isCustomBatch}
+            onSetBatchPreset={handleSetBatchPreset}
+            onSelectCustom={handleSelectCustom}
+            onChangeCustom={handleChangeCustom}
             onStart={handleStart}
             onPause={handlePause}
             onResume={handleResume}

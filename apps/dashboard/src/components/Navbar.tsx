@@ -12,6 +12,11 @@ interface NavbarProps {
   isWsConnected: boolean;
   batchLimit: number | null;
   setBatchLimit: (limit: number | null) => void;
+  customBatchInput?: string;
+  isCustomBatch?: boolean;
+  onSetBatchPreset?: (val: number | null) => void;
+  onSelectCustom?: () => void;
+  onChangeCustom?: (val: string) => void;
   batchSentCount?: number;
   onStart: (limit?: number | null) => void;
   onPause: () => void;
@@ -27,6 +32,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   isWsConnected,
   batchLimit,
   setBatchLimit,
+  customBatchInput = '8',
+  isCustomBatch,
+  onSetBatchPreset,
+  onSelectCustom,
+  onChangeCustom,
   batchSentCount = 0,
   onStart,
   onPause,
@@ -37,16 +47,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   const isRunning = workerStatus === 'RUNNING';
   const isPaused = workerStatus === 'PAUSED';
 
-  const isPreset = batchLimit === null || [1, 3, 5, 10, 25, 50, 100].includes(batchLimit);
-  const [isCustomMode, setIsCustomMode] = React.useState(!isPreset && batchLimit !== null);
-  const [customInput, setCustomInput] = React.useState(batchLimit ? String(batchLimit) : '7');
-
-  React.useEffect(() => {
-    if (batchLimit !== null && ![1, 3, 5, 10, 25, 50, 100].includes(batchLimit)) {
-      setIsCustomMode(true);
-      setCustomInput(String(batchLimit));
-    }
-  }, [batchLimit]);
+  const PRESET_BATCHES = [1, 3, 5, 10, 25, 50, 100];
+  const effectiveIsCustom = isCustomBatch !== undefined
+    ? isCustomBatch
+    : (batchLimit !== null && !PRESET_BATCHES.includes(batchLimit));
 
   return (
     <header className="border-b border-gray-800 bg-[#0f172a]/80 backdrop-blur-md sticky top-0 z-50 px-6 py-3">
@@ -135,19 +139,29 @@ export const Navbar: React.FC<NavbarProps> = ({
               <div className="flex items-center space-x-1.5 bg-gray-800/80 border border-gray-700/80 rounded-lg px-2.5 py-1.5">
                 <span className="text-[11px] text-gray-400 font-medium">Batch:</span>
                 <select
-                  value={isCustomMode ? 'custom' : batchLimit === null ? 'all' : String(batchLimit)}
+                  value={effectiveIsCustom ? 'custom' : batchLimit === null ? 'all' : String(batchLimit)}
                   onChange={(e) => {
                     const val = e.target.value;
                     if (val === 'custom') {
-                      setIsCustomMode(true);
-                      const parsed = parseInt(customInput, 10) || 5;
-                      setBatchLimit(parsed);
+                      if (onSelectCustom) {
+                        onSelectCustom();
+                      } else {
+                        const parsed = parseInt(customBatchInput, 10) || 5;
+                        setBatchLimit(parsed);
+                      }
                     } else if (val === 'all') {
-                      setIsCustomMode(false);
-                      setBatchLimit(null);
+                      if (onSetBatchPreset) {
+                        onSetBatchPreset(null);
+                      } else {
+                        setBatchLimit(null);
+                      }
                     } else {
-                      setIsCustomMode(false);
-                      setBatchLimit(Number(val));
+                      const num = Number(val);
+                      if (onSetBatchPreset) {
+                        onSetBatchPreset(num);
+                      } else {
+                        setBatchLimit(num);
+                      }
                     }
                   }}
                   className="bg-gray-900 border border-gray-700 text-gray-200 text-xs rounded px-1.5 py-0.5 focus:outline-none focus:border-indigo-500 font-semibold cursor-pointer"
@@ -163,18 +177,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <option value="custom">Custom No...</option>
                 </select>
 
-                {isCustomMode && (
+                {effectiveIsCustom && (
                   <div className="flex items-center space-x-1 pl-1 border-l border-gray-700">
                     <input
                       type="number"
                       min="1"
                       max="5000"
-                      value={customInput}
+                      value={customBatchInput}
                       onChange={(e) => {
-                        setCustomInput(e.target.value);
-                        const val = parseInt(e.target.value, 10);
-                        if (val > 0) {
-                          setBatchLimit(val);
+                        if (onChangeCustom) {
+                          onChangeCustom(e.target.value);
+                        } else {
+                          const val = parseInt(e.target.value, 10);
+                          if (val > 0) setBatchLimit(val);
                         }
                       }}
                       className="w-14 bg-gray-950 border border-indigo-500 text-indigo-200 text-xs font-bold rounded px-1.5 py-0.5 focus:outline-none text-center"

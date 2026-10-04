@@ -11,6 +11,11 @@ interface LiveAutomationViewProps {
   state: LiveAutomationState;
   batchLimit?: number | null;
   setBatchLimit?: (limit: number | null) => void;
+  customBatchInput?: string;
+  isCustomBatch?: boolean;
+  onSetBatchPreset?: (val: number | null) => void;
+  onSelectCustom?: () => void;
+  onChangeCustom?: (val: string) => void;
   onStart?: (limit?: number | null) => void;
   onPause?: () => void;
   onResume?: () => void;
@@ -31,11 +36,23 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   state,
   batchLimit = 5,
   setBatchLimit,
+  customBatchInput = '8',
+  isCustomBatch,
+  onSetBatchPreset,
+  onSelectCustom,
+  onChangeCustom,
   onStart,
   onPause,
   onResume,
   onStop
 }) => {
+  const PRESET_BATCHES = [1, 3, 5, 10, 25, 50, 100];
+  const effectiveIsCustom = isCustomBatch !== undefined
+    ? isCustomBatch
+    : (batchLimit !== null && !PRESET_BATCHES.includes(batchLimit));
+  const effectiveCustomInput = customBatchInput !== undefined
+    ? customBatchInput
+    : (batchLimit ? String(batchLimit) : '8');
   const currentStageIndex = STAGES.findIndex(
     (s) => s.key === state.stage || s.aliases.includes(state.stage)
   );
@@ -202,41 +219,91 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
               { label: '5', val: 5 },
               { label: '10', val: 10 },
               { label: '25', val: 25 },
+              { label: '50', val: 50 },
+              { label: '100', val: 100 },
               { label: 'All', val: null },
-            ].map((opt) => (
-              <button
-                key={opt.label}
-                disabled={state.status === 'RUNNING'}
-                onClick={() => setBatchLimit?.(opt.val)}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${
-                  batchLimit === opt.val
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30 ring-1 ring-indigo-400'
-                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                } disabled:opacity-50 cursor-pointer`}
-              >
-                {opt.label}
-              </button>
-            ))}
+            ].map((opt) => {
+              const isSelected = !effectiveIsCustom && batchLimit === opt.val;
+              return (
+                <button
+                  key={opt.label}
+                  disabled={state.status === 'RUNNING'}
+                  onClick={() => {
+                    if (onSetBatchPreset) {
+                      onSetBatchPreset(opt.val);
+                    } else {
+                      setBatchLimit?.(opt.val);
+                    }
+                  }}
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                    isSelected
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30 ring-1 ring-indigo-400'
+                      : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                  } disabled:opacity-50 cursor-pointer`}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
 
             {/* Custom Number Input */}
-            <div className="flex items-center space-x-1.5 bg-gray-950/80 border border-gray-700/80 rounded-lg px-2 py-1">
-              <span className="text-[11px] text-gray-400 font-medium">Custom:</span>
+            <div
+              className={`flex items-center space-x-1.5 rounded-lg px-2.5 py-1 transition border ${
+                effectiveIsCustom
+                  ? 'bg-indigo-950/80 border-indigo-500 ring-2 ring-indigo-400/50 shadow-md shadow-indigo-500/20'
+                  : 'bg-gray-950/80 border-gray-700/80 hover:border-gray-600'
+              }`}
+            >
+              <button
+                type="button"
+                disabled={state.status === 'RUNNING'}
+                onClick={() => {
+                  if (onSelectCustom) {
+                    onSelectCustom();
+                  } else {
+                    const parsed = parseInt(effectiveCustomInput, 10) || 5;
+                    setBatchLimit?.(parsed);
+                  }
+                }}
+                className={`text-[11px] font-semibold transition cursor-pointer ${
+                  effectiveIsCustom ? 'text-indigo-300 font-bold' : 'text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                Custom:
+              </button>
               <input
                 type="number"
                 min="1"
                 max="5000"
                 disabled={state.status === 'RUNNING'}
                 placeholder="Qty"
-                value={batchLimit !== null && ![1, 3, 5, 10, 25].includes(batchLimit) ? batchLimit : ''}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  if (val > 0) {
-                    setBatchLimit?.(val);
+                value={effectiveCustomInput}
+                onFocus={() => {
+                  if (onSelectCustom) {
+                    onSelectCustom();
+                  } else {
+                    const parsed = parseInt(effectiveCustomInput, 10) || 5;
+                    setBatchLimit?.(parsed);
                   }
                 }}
-                className="w-14 bg-gray-900 border border-gray-700 text-indigo-300 text-xs font-bold rounded px-1.5 py-0.5 focus:outline-none focus:border-indigo-500 text-center"
+                onChange={(e) => {
+                  if (onChangeCustom) {
+                    onChangeCustom(e.target.value);
+                  } else {
+                    const val = parseInt(e.target.value, 10);
+                    if (val > 0) {
+                      setBatchLimit?.(val);
+                    }
+                  }
+                }}
+                className={`w-14 bg-gray-900 border text-xs font-bold rounded px-1.5 py-0.5 focus:outline-none text-center ${
+                  effectiveIsCustom
+                    ? 'border-indigo-400 text-indigo-200 bg-gray-950'
+                    : 'border-gray-700 text-gray-300'
+                }`}
                 title="Type any custom number of recipients to send in this batch"
               />
+              <span className="text-[10px] text-gray-400">qty</span>
             </div>
 
             {state.status !== 'RUNNING' && state.status !== 'PAUSED' && (

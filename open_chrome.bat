@@ -1,12 +1,11 @@
 @echo off
-title MessageV2 - Visible Chrome Launcher
+title MessageV2 - Visible Chrome Launcher (Profile 4)
 echo ========================================================
-echo   Launching Visible Chrome for MessageV2 Automation
+echo   Launching Your Existing Logged-in Chrome (Profile 4)
 echo ========================================================
 echo.
-echo Launching Google Chrome with remote debugging on port 9222...
-start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="%~dp0data\browser_profiles\instagram" https://www.instagram.com
+echo Launching Google Chrome with your Profile 4 and port 9222...
+start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --profile-directory="Profile 4" --restore-last-session https://www.instagram.com
 echo.
-echo Chrome has been launched. Please complete any Instagram login if needed.
+echo Chrome has been launched with your existing profile and tabs!
 echo.
-pause

@@ -12,7 +12,14 @@ class InstagramAdapter:
     async def dismiss_popups(self) -> None:
         """Dismiss common Instagram popups like 'Turn on Notifications' or 'Save your login info'."""
         try:
-            for selector in [InstagramSelectors.SAVE_INFO_NOT_NOW, InstagramSelectors.TURN_ON_NOTIFICATIONS_NOT_NOW]:
+            for selector in [
+                "button:has-text('Save info')",
+                "button:has-text('Save Info')",
+                "button:has-text('Not now')",
+                "button:has-text('Not Now')",
+                InstagramSelectors.SAVE_INFO_NOT_NOW,
+                InstagramSelectors.TURN_ON_NOTIFICATIONS_NOT_NOW
+            ]:
                 locator = self.page.locator(selector).first
                 if await locator.count() > 0 and await locator.is_visible():
                     await locator.click()
@@ -32,25 +39,39 @@ class InstagramAdapter:
 
             await self.dismiss_popups()
 
-            # Check for challenge or captcha
-            content = await self.page.content()
-            for challenge_str in ["challenge", "help us confirm you own this account", "suspicious login"]:
-                if challenge_str in content.lower():
-                    return False, False, True, "Instagram challenge/verification required"
+            # 1. Check for logged-in indicators (Direct, Search, Home navigation) FIRST
+            for nav_selector in [
+                "svg[aria-label='Home']",
+                "svg[aria-label='Messages']",
+                "svg[aria-label='Direct']",
+                "a[href*='/direct/inbox/']",
+                InstagramSelectors.NAV_DIRECT,
+                InstagramSelectors.NAV_HOME,
+                InstagramSelectors.LOGGED_IN_PROFILE_ICON
+            ]:
+                nav = self.page.locator(nav_selector).first
+                if await nav.count() > 0:
+                    return True, False, False, "User is logged in"
 
-            # Check for login inputs
+            # 2. Check for real challenge URL or visible challenge prompt
+            if "/challenge/" in current_url.lower() or "/two_factor/" in current_url.lower():
+                return False, False, True, "Instagram challenge/verification required"
+
+            try:
+                body_text = (await self.page.locator("body").inner_text()).lower()
+                for challenge_str in ["help us confirm you own this account", "suspicious login attempt", "security check"]:
+                    if challenge_str in body_text:
+                        return False, False, True, "Instagram challenge/verification required"
+            except Exception:
+                pass
+
+            # 3. Check for login inputs
             username_input = self.page.locator(InstagramSelectors.LOGIN_INPUT_USERNAME).first
             password_input = self.page.locator(InstagramSelectors.LOGIN_INPUT_PASSWORD).first
             if await username_input.count() > 0 and await username_input.is_visible():
                 return False, True, False, "Instagram login required"
 
-            # Check for logged-in indicators (Direct, Search, Home navigation)
-            for nav_selector in [InstagramSelectors.NAV_DIRECT, InstagramSelectors.NAV_HOME, InstagramSelectors.LOGGED_IN_PROFILE_ICON]:
-                nav = self.page.locator(nav_selector).first
-                if await nav.count() > 0:
-                    return True, False, False, "User is logged in"
-
-            # If on instagram.com and no login form, check if session is active
+            # 4. Check login URL
             if "instagram.com/accounts/login" in self.page.url:
                 return False, True, False, "On login page"
 

@@ -62,9 +62,8 @@ class BrowserWorker:
                 cdp_url = check_cdp_endpoint()
 
                 if not cdp_url:
-                    profile_escaped = str(self.user_data_dir).replace('/', '\\')
                     chrome_bin = get_chrome_executable()
-                    cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --user-data-dir="{profile_escaped}" https://www.instagram.com'
+                    cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --profile-directory="Profile 4" --restore-last-session https://www.instagram.com'
                     subprocess.Popen(cmd, shell=True)
                     for _ in range(15):
                         await asyncio.sleep(0.4)

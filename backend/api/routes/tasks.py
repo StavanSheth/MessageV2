@@ -23,12 +23,23 @@ def format_datetime_readable(dt: Optional[datetime]) -> Optional[str]:
 async def list_tasks(status: str = None, limit: int = 200, offset: int = 0, db: AsyncSession = Depends(get_db)):
     repo = TaskRepository(db)
     tasks = await repo.list_tasks(status=status, limit=limit, offset=offset)
+
+    def resolve_task_message(t):
+        if not t.contact:
+            return None
+        if t.type == "FOLLOW_UP_1":
+            return t.contact.followup_1_message or "Hey! Just following up on my previous message."
+        elif t.type == "FOLLOW_UP_2":
+            return t.contact.followup_2_message or "Hey! One final quick check-in before I close this thread."
+        return t.contact.message or "Hey"
+
     return [{
         "id": t.id,
         "contact_id": t.contact_id,
         "contact_name": t.contact.name if t.contact else None,
         "contact_instagram": t.contact.instagram_url if t.contact else None,
         "username": t.contact.username if t.contact else None,
+        "message": resolve_task_message(t),
         "type": t.type,
         "status": t.status,
         "sequence": t.sequence,
@@ -43,6 +54,30 @@ async def list_tasks(status: str = None, limit: int = 200, offset: int = 0, db: 
         "created_at": t.created_at.isoformat() if t.created_at else None,
         "updated_at": t.updated_at.isoformat() if t.updated_at else None
     } for t in tasks]
+
+@router.post("/retry-all")
+async def retry_all_tasks(db: AsyncSession = Depends(get_db)):
+    repo = TaskRepository(db)
+    retryable_statuses = (
+        TaskStatus.FAILED.value,
+        TaskStatus.MANUAL_REVIEW.value,
+        TaskStatus.RETRY_WAIT.value,
+        TaskStatus.INTERRUPTED.value,
+        TaskStatus.SKIPPED.value,
+        TaskStatus.RECONCILING.value,
+    )
+    all_tasks = await repo.list_tasks(limit=1000)
+    retried_count = 0
+    for t in all_tasks:
+        if t.status in retryable_statuses:
+            await repo.update_status(t.id, TaskStatus.READY)
+            retried_count += 1
+            await event_bus.publish(
+                EventCode.TASK_RETRY_SCHEDULED,
+                task_id=t.id,
+                payload={"previous_status": t.status}
+            )
+    return {"retried_count": retried_count}
 
 @router.post("/{task_id}/retry")
 async def retry_task(task_id: str, db: AsyncSession = Depends(get_db)):

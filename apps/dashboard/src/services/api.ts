@@ -127,6 +127,15 @@ export async function retryTask(taskId: string): Promise<Task> {
   return res.json();
 }
 
+export async function retryAllTasks(): Promise<{ retried_count: number }> {
+  const res = await fetch(`${BASE_URL}/api/tasks/retry-all`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to retry tasks');
+  }
+  return res.json();
+}
+
 export async function cancelTask(taskId: string): Promise<Task> {
   const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/cancel`, { method: 'POST' });
   return res.json();

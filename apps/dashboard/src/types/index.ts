@@ -86,6 +86,7 @@ export interface Task {
   contact_name?: string;
   contact_instagram?: string;
   username?: string;
+  message?: string;
   type?: string;
   status: TaskStatus;
   sequence?: number;

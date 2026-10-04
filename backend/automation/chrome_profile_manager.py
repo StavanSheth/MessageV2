@@ -168,7 +168,7 @@ class ChromeProfileManager:
 
         # If Chrome with port 9222 is not already running, launch it
         if not cdp_url and os.name == "nt":
-            cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --profile-directory="{target_profile}" --restore-last-session http://localhost:5173 https://www.instagram.com'
+            cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --profile-directory="{target_profile}" --restore-last-session http://localhost:5173 https://www.instagram.com'
             logger.info(f"Launching visible Chrome: {cmd}")
             subprocess.Popen(cmd, shell=True)
 
@@ -192,15 +192,24 @@ class ChromeProfileManager:
         }
 
     def bring_chrome_to_front(self) -> bool:
-        """Utility to ensure Chrome window is foregrounded on the Windows desktop."""
+        """Utility to ensure Chrome window is un-minimized, maximized, and foregrounded on the Windows desktop."""
         if os.name != "nt":
             return False
         try:
             ps_script = (
                 "$procs = Get-Process -Name chrome -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }; "
                 "if ($procs) { "
-                "  $w = Add-Type -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);' -Name 'Win32Fore' -Namespace 'Win32' -PassThru; "
-                "  foreach ($p in $procs) { [Win32.Win32Fore]::ShowWindow($p.MainWindowHandle, 9); [Win32.Win32Fore]::SetForegroundWindow($p.MainWindowHandle); } "
+                "  $sig = @'\n"
+                "  [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);\n"
+                "  [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);\n"
+                "  [DllImport(\"user32.dll\")] public static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);\n"
+                "'@;\n"
+                "  $w = Add-Type -MemberDefinition $sig -Name ('Win32Fore_' + (Get-Random)) -Namespace 'Win32' -PassThru; "
+                "  foreach ($p in $procs) { "
+                "    $w::ShowWindow($p.MainWindowHandle, 3); " # SW_MAXIMIZE = 3, SW_RESTORE = 9
+                "    $w::SetForegroundWindow($p.MainWindowHandle); "
+                "    $w::SwitchToThisWindow($p.MainWindowHandle, $true); "
+                "  } "
                 "}"
             )
             subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=3)

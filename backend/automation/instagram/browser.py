@@ -98,7 +98,7 @@ class BrowserWorker:
                     from backend.automation.chrome_profile_manager import chrome_profile_manager
                     chrome_bin = get_chrome_executable()
                     active_profile = chrome_profile_manager.get_active_profile_id()
-                    cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --profile-directory="{active_profile}" --restore-last-session http://localhost:5173 https://www.instagram.com'
+                    cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --profile-directory="{active_profile}" --restore-last-session http://localhost:5173 https://www.instagram.com'
                     try:
                         subprocess.Popen(cmd, shell=True)
                     except Exception:
@@ -198,9 +198,16 @@ class BrowserWorker:
             else:
                 self.page = await self.context.new_page()
 
+            if "instagram.com" not in (self.page.url or ""):
+                try:
+                    await self.page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=settings.BROWSER_TIMEOUT)
+                except Exception:
+                    pass
 
             try:
                 await self.page.bring_to_front()
+                from backend.automation.chrome_profile_manager import chrome_profile_manager
+                chrome_profile_manager.bring_chrome_to_front()
             except Exception:
                 pass
 

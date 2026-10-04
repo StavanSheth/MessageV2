@@ -65,19 +65,26 @@ class InstagramAdapter:
             except Exception:
                 pass
 
-            # 3. Check for login inputs
+            # 3. Check for login inputs, login buttons, or login URL
+            if "instagram.com/accounts/login" in current_url.lower():
+                return False, True, False, "On login page (Instagram login required)"
+
             username_input = self.page.locator(InstagramSelectors.LOGIN_INPUT_USERNAME).first
             password_input = self.page.locator(InstagramSelectors.LOGIN_INPUT_PASSWORD).first
             if await username_input.count() > 0 and await username_input.is_visible():
                 return False, True, False, "Instagram login required"
 
-            # 4. Check login URL
-            if "instagram.com/accounts/login" in self.page.url:
-                return False, True, False, "On login page"
+            try:
+                body_text = (await self.page.locator("body").inner_text()).lower()
+                if "don't have an account" in body_text or "log in with facebook" in body_text:
+                    return False, True, False, "Instagram login required"
+            except Exception:
+                pass
 
-            return True, False, False, "Session appears active"
+            # Fail-closed: Never assume logged in without positive confirmation
+            return False, True, False, "Instagram login required — session not active"
         except Exception as e:
-            return False, False, False, f"Login check error: {str(e)}"
+            return False, True, False, f"Login check error: {str(e)}"
 
     async def open_profile(self, profile_url: str, expected_username: Optional[str] = None) -> Tuple[bool, ResultCode, str]:
         """

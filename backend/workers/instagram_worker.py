@@ -326,39 +326,61 @@ class InstagramWorker:
             await event_bus.publish_state(await self.health())
 
     async def _check_login_loop(self, adapter: InstagramAdapter) -> None:
+        """
+        Blocking Gate: Automation CANNOT move or claim tasks until Instagram login is fully verified.
+        Brings the live Chrome browser to the front on screen so the user can log in.
+        """
+        from backend.automation.chrome_profile_manager import chrome_profile_manager
+
         while True:
             if self._stop_requested:
                 return
 
+            # Ensure Chrome is visible and in front on screen
+            try:
+                chrome_profile_manager.bring_chrome_to_front()
+                if adapter.page and not adapter.page.is_closed():
+                    await adapter.page.bring_to_front()
+            except Exception:
+                pass
+
             is_logged_in, requires_login, has_challenge, reason = await adapter.check_login()
 
-            if has_challenge:
-                logger.warning("[Worker] Instagram challenge detected — manual intervention needed")
-                self.instagram_login_status = "CHALLENGE"
-                await self._update_worker_db(instagram_login_status="CHALLENGE")
-                await event_bus.publish(EventCode.MANUAL_REVIEW_REQUIRED, payload={"reason": reason}, worker_id=WORKER_ID)
-                await event_bus.publish_state(await self.health())
-                await asyncio.sleep(6)
-                continue
-
             if is_logged_in:
-                logger.info("[Worker] Instagram session active")
+                logger.info("[Worker] Instagram session verified active! Unblocking automation queue.")
                 self.instagram_login_status = "LOGGED_IN"
-                await self._update_worker_db(instagram_login_status="LOGGED_IN")
+                self.stage = AutomationStage.IDLE
+                await self._update_worker_db(instagram_login_status="LOGGED_IN", current_stage="IDLE")
                 await event_bus.publish(EventCode.LOGIN_DETECTED, worker_id=WORKER_ID)
                 await event_bus.publish_state(await self.health())
                 return
 
-            if requires_login:
-                logger.warning("[Worker] LOGIN_REQUIRED — waiting for user to log in manually")
-                self.instagram_login_status = "LOGIN_REQUIRED"
-                await self._update_worker_db(instagram_login_status="LOGIN_REQUIRED")
-                await event_bus.publish(EventCode.LOGIN_REQUIRED, payload={"reason": reason}, worker_id=WORKER_ID)
+            if has_challenge:
+                logger.warning("[Worker] Instagram challenge/2FA detected — waiting for user completion in Chrome window on screen")
+                self.instagram_login_status = "CHALLENGE"
+                self.stage = AutomationStage.CHECKING_LOGIN
+                await self._update_worker_db(instagram_login_status="CHALLENGE", current_stage="CHECKING_LOGIN")
+                await event_bus.publish(
+                    EventCode.MANUAL_REVIEW_REQUIRED,
+                    payload={"reason": "Instagram challenge/2FA required. Please complete verification in the Chrome browser on your screen."},
+                    worker_id=WORKER_ID
+                )
                 await event_bus.publish_state(await self.health())
-                await asyncio.sleep(6)
+                await asyncio.sleep(3)
                 continue
 
-            await asyncio.sleep(4)
+            # Default: requires_login is True or session is not active
+            logger.warning("[Worker] Instagram NOT logged in — BLOCKED. Waiting for user to log in via the Chrome browser window on screen.")
+            self.instagram_login_status = "LOGIN_REQUIRED"
+            self.stage = AutomationStage.CHECKING_LOGIN
+            await self._update_worker_db(instagram_login_status="LOGIN_REQUIRED", current_stage="CHECKING_LOGIN")
+            await event_bus.publish(
+                EventCode.LOGIN_REQUIRED,
+                payload={"reason": "Instagram login required. Automation is blocked and will automatically proceed once you log in via the open Chrome window."},
+                worker_id=WORKER_ID
+            )
+            await event_bus.publish_state(await self.health())
+            await asyncio.sleep(3)
 
     async def _claim_next_task(self):
         async with AsyncSessionLocal() as session:
@@ -420,6 +442,15 @@ class InstagramWorker:
             await self.browser_worker.screenshot("profile_opened")
 
             if not success:
+                if result_code in {ResultCode.LOGIN_REQUIRED, ResultCode.CHALLENGE_REQUIRED}:
+                    logger.warning(f"[Worker] Task {task_id} paused: Instagram login required. Resetting task to READY and entering login wait gate.")
+                    async with AsyncSessionLocal() as session:
+                        repo = TaskRepository(session)
+                        await repo.update_status(task_id, TaskStatus.READY, worker_id=None)
+                    await self._set_stage(AutomationStage.CHECKING_LOGIN, contact.name, task_id=task_id)
+                    await self._check_login_loop(adapter)
+                    return
+
                 if "target page, context or browser has been closed" in str(reason).lower():
                     logger.warning("[Worker] Browser closed/disconnected during open_profile.")
                     self.browser_worker.is_running = False

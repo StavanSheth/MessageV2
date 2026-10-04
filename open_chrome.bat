@@ -9,7 +9,7 @@ echo   User: Stavan Sheth (stavanasheth@gmail.com)
 echo ========================================================
 echo.
 echo Launching Google Chrome with profile "%CHROME_PROFILE%", port 9222, and both Dashboard + Instagram...
-start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --profile-directory="%CHROME_PROFILE%" --restore-last-session http://localhost:5173 https://www.instagram.com
+start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --profile-directory="%CHROME_PROFILE%" --restore-last-session http://localhost:5173 https://www.instagram.com
 echo.
 echo Chrome has been launched live on screen with profile "%CHROME_PROFILE%"!
 echo.

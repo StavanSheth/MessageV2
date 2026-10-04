@@ -9,7 +9,9 @@ from backend.sources.xlsx.adapter import LocalXlsxSource
 from backend.repositories.contact_repository import ContactRepository
 from backend.repositories.task_repository import TaskRepository
 from backend.repositories.source_repository import SourceRepository
-from backend.database.models import Contact, Task
+from backend.database.models import Contact, Task, Message, Source, SourceRecord
+from backend.services.source_sync_service import SourceSyncService
+from backend.sources.browser_sheet.adapter import BrowserSpreadsheetSource
 
 @pytest.fixture
 def sample_xlsx():
@@ -111,3 +113,101 @@ async def test_transactional_rollback_on_failure(test_session: AsyncSession):
     # Verify no orphan contacts committed
     contacts = (await test_session.execute(select(Contact))).scalars().all()
     assert len(contacts) == 0
+
+@pytest.mark.asyncio
+async def test_source_write_failure_decoupled_from_message_status(test_session: AsyncSession):
+    """
+    Scenario P4.3:
+    Message is successfully SENT.
+    Source write-back fails (e.g. invalid path, corrupted sheet, locked).
+    Expected:
+    - Message status remains SENT (never invalidated or marked for retry)
+    - Task status remains COMPLETED
+    - Task source_sync_status is marked SYNC_FAILED
+    - Instagram message is NOT resent
+    """
+    source = Source(
+        type="XLSX",
+        name="Test Failing Source",
+        file_path_or_url="c:/nonexistent_or_locked_directory/file.xlsx"
+    )
+    test_session.add(source)
+    await test_session.flush()
+
+    record = SourceRecord(
+        source_id=source.id,
+        raw_data='{"name": "Fail Contact", "row_number": 2}',
+        status="VALID"
+    )
+    test_session.add(record)
+    await test_session.flush()
+
+    contact = Contact(
+        source_record_id=record.id,
+        name="Fail Contact",
+        instagram_url="https://instagram.com/failcontact/",
+        username="failcontact",
+        message="Hello Fail"
+    )
+    test_session.add(contact)
+    await test_session.flush()
+
+    task = Task(
+        contact_id=contact.id,
+        type="MESSAGE",
+        status="COMPLETED"
+    )
+    test_session.add(task)
+    await test_session.flush()
+
+    msg = Message(
+        contact_id=contact.id,
+        task_id=task.id,
+        body="Hello Fail",
+        status="SENT"
+    )
+    test_session.add(msg)
+    await test_session.commit()
+
+    # Attempt source synchronization
+    sync_ok = await SourceSyncService.sync_task_outcome(test_session, task.id, status="SENT")
+    assert sync_ok is False
+
+    # Invariants verification:
+    # 1. Message MUST remain SENT
+    msg_refreshed = (await test_session.execute(select(Message).where(Message.id == msg.id))).scalar_one()
+    assert msg_refreshed.status == "SENT"
+
+    # 2. Task MUST remain COMPLETED (not reset to READY)
+    task_refreshed = (await test_session.execute(select(Task).where(Task.id == task.id))).scalar_one()
+    assert task_refreshed.status == "COMPLETED"
+    assert task_refreshed.source_sync_status == "SYNC_FAILED"
+    assert task_refreshed.source_sync_error is not None
+
+@pytest.mark.asyncio
+async def test_browser_spreadsheet_verified_write_back(sample_xlsx):
+    """
+    Scenario P4.2:
+    BrowserSpreadsheetSource.update_record:
+    - Writes status and verifies cell value in the target sheet
+    - Returns True only when write is positively verified
+    - Returns False when record is missing or verification fails
+    """
+    adapter = BrowserSpreadsheetSource(url="https://docs.google.com/spreadsheets/d/test123/edit")
+    adapter.local_source = LocalXlsxSource(sample_xlsx)
+
+    # Valid write-back to existing row "Alice" (row 2)
+    success = await adapter.update_record("alice", {"status": "SENT"})
+    assert success is True
+
+    # Verification: check value in workbook
+    wb = openpyxl.load_workbook(sample_xlsx, data_only=True)
+    ws = wb.active
+    # Row 2 should now have Outreach Status = "SENT"
+    assert ws.cell(row=2, column=5).value == "SENT"
+    wb.close()
+
+    # Invalid write-back for nonexistent row
+    fail_res = await adapter.update_record("nonexistent_user", {"status": "SENT"})
+    assert fail_res is False
+

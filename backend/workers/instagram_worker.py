@@ -29,6 +29,8 @@ from backend.domain.enums import (
 )
 from backend.config.settings import settings
 from backend.events.event_bus import event_bus
+from backend.network.network_monitor import network_monitor
+from backend.services.source_sync_service import SourceSyncService
 
 logger = logging.getLogger(__name__)
 
@@ -211,13 +213,57 @@ class InstagramWorker:
                     if self._stop_requested:
                         break
 
-                # Guard: Ensure browser is connected and page is alive
+                # Guard 1: Network state check before taking next action
+                if not network_monitor.is_online():
+                    logger.warning(f"[Worker] Network is {network_monitor.state.value}. Pausing actions until connectivity restored...")
+                    await self._update_worker_db(browser_status=network_monitor.state.value)
+                    await event_bus.publish(EventCode.NETWORK_OFFLINE, worker_id=WORKER_ID, payload={"state": network_monitor.state.value})
+                    restored = await network_monitor.wait_for_connectivity(max_wait_seconds=20.0)
+                    if not restored:
+                        await asyncio.sleep(5)
+                        continue
+                    await event_bus.publish(EventCode.NETWORK_RECOVERED, worker_id=WORKER_ID)
+
+                # Guard 2: Autonomous browser recovery if closed or disconnected
                 if not self.browser_worker.is_running or not self.browser_worker.page or self.browser_worker.page.is_closed():
-                    logger.warning("[Worker] Browser closed or disconnected. Triggering recovery...")
-                    async with AsyncSessionLocal() as session:
-                        rec = RecoveryService(session)
-                        await rec.handle_browser_crash(self.current_task_id)
-                    break
+                    logger.warning("[Worker] Browser closed or disconnected. Triggering autonomous recovery...")
+                    await self._update_worker_db(browser_status="RECOVERING")
+                    await event_bus.publish(EventCode.BROWSER_CRASH, task_id=self.current_task_id, worker_id=WORKER_ID)
+
+                    # Reconcile active task if any was running
+                    if self.current_task_id:
+                        async with AsyncSessionLocal() as session:
+                            rec = RecoveryService(session)
+                            await rec.handle_browser_crash(self.current_task_id)
+                        self.current_task_id = None
+                        self.current_contact_name = None
+                        self.current_instagram = None
+
+                    # Autonomous recovery: restart Chrome and reconnect Playwright
+                    recovery_attempts = 0
+                    max_recovery_attempts = 3
+                    recovered = False
+                    while recovery_attempts < max_recovery_attempts and not self._stop_requested:
+                        recovery_attempts += 1
+                        try:
+                            logger.info(f"[Worker] Autonomous browser recovery attempt {recovery_attempts}/{max_recovery_attempts}...")
+                            new_page = await self.browser_worker.restart()
+                            if new_page and not new_page.is_closed():
+                                adapter.page = new_page
+                                await self._update_worker_db(browser_status="CONNECTED")
+                                await event_bus.publish(EventCode.BROWSER_RECOVERED, worker_id=WORKER_ID)
+                                # Verify Instagram login session after restart
+                                await self._check_login_loop(adapter)
+                                recovered = True
+                                break
+                        except Exception as rec_err:
+                            logger.error(f"[Worker] Browser recovery attempt {recovery_attempts} failed: {rec_err}")
+                            await asyncio.sleep(2)
+
+                    if not recovered:
+                        logger.error("[Worker] Autonomous browser recovery failed after max attempts.")
+                        break
+                    continue
 
                 task = await self._claim_next_task()
                 if not task:
@@ -362,6 +408,10 @@ class InstagramWorker:
                     pass
 
             # ── 1. Open Profile ──────────────────────────────────
+            if not network_monitor.is_online():
+                await self._fail_task(task_id, ResultCode.NETWORK_ERROR, "Network offline before opening profile", new_status=TaskStatus.RETRY_WAIT, retryable=True)
+                return
+
             await self._set_stage(AutomationStage.OPENING_PROFILE, contact.name, contact.instagram_url, task_id)
             await event_bus.publish(EventCode.TASK_STARTED, task_id=task_id, contact_name=contact.name,
                                     worker_id=WORKER_ID, payload={"instagram_url": contact.instagram_url})
@@ -372,8 +422,7 @@ class InstagramWorker:
             if not success:
                 if "target page, context or browser has been closed" in str(reason).lower():
                     logger.warning("[Worker] Browser closed/disconnected during open_profile.")
-                    self._stop_requested = True
-                    self.status = WorkerStatus.STOPPED
+                    self.browser_worker.is_running = False
                 await self._fail_task(task_id, result_code, reason)
                 return
 
@@ -465,14 +514,30 @@ class InstagramWorker:
 
             # ── 7. Transition to SENDING ──────────────────────────
             attempt_id = str(uuid.uuid4())
+            browser_sid = str(id(self.browser_worker))
+            now = datetime.now(timezone.utc)
+
             async with AsyncSessionLocal() as session:
                 msg_repo = MessageRepository(session)
                 msg = await msg_repo.create(contact.id, task_id, message_body)
                 msg_id = msg.id
 
+                # P0.1: Persist durable SendAttempt record BEFORE the irreversible Send action
+                await msg_repo.record_send_attempt(
+                    task_id=task_id,
+                    message_id=msg_id,
+                    attempt_id=attempt_id,
+                    contact_id=contact.id,
+                    message_body=message_body,
+                    worker_id=WORKER_ID,
+                    browser_session_id=browser_sid
+                )
+
                 task_repo = TaskRepository(session)
                 current_t = await task_repo.get_by_id(task_id)
                 current_t.send_attempt_id = attempt_id
+                current_t.send_requested_at = now
+                current_t.browser_session_id = browser_sid
                 await task_repo.update_status(task_id, TaskStatus.SENDING, worker_id=WORKER_ID)
 
             await self._set_stage(AutomationStage.SENDING_MESSAGE, contact.name, task_id=task_id)
@@ -484,12 +549,32 @@ class InstagramWorker:
             )
 
             # ── 8. Send Action ────────────────────────────────────
-            sent, send_code, send_reason = await adapter.send_message()
+            send_code = ResultCode.UNKNOWN
+            send_reason = ""
+            try:
+                sent, send_code, send_reason = await adapter.send_message()
+            except Exception as send_exc:
+                if not network_monitor.is_online():
+                    send_code = ResultCode.SEND_UNKNOWN
+                    send_reason = f"Network disconnected during send: {send_exc}"
+                else:
+                    send_code = ResultCode.SEND_UNKNOWN
+                    send_reason = f"Exception during send action: {send_exc}"
+                sent = False
+
             await self.browser_worker.screenshot("message_attempted")
 
             # ── 9. Result Verification & Reconciliation ────────────
             await self._set_stage(AutomationStage.DETECTING_RESULT, contact.name, task_id=task_id)
-            result = await adapter.detect_result(message_body)
+            if send_code == ResultCode.SEND_UNKNOWN:
+                result = ResultCode.SEND_UNKNOWN
+            else:
+                try:
+                    result = await adapter.detect_result(message_body)
+                except Exception as det_exc:
+                    logger.warning(f"[Worker] Result detection exception: {det_exc}")
+                    result = ResultCode.SEND_UNKNOWN
+
             await self.browser_worker.screenshot("message_result")
 
             now = datetime.now(timezone.utc)
@@ -499,8 +584,11 @@ class InstagramWorker:
                 async with AsyncSessionLocal() as session:
                     msg_repo = MessageRepository(session)
                     await msg_repo.update_result(msg_id, "SENT", "SUCCESS")
+                    await msg_repo.update_send_attempt(attempt_id, "CONFIRMED", "SUCCESS")
 
                     task_repo = TaskRepository(session)
+                    current_t = await task_repo.get_by_id(task_id)
+                    current_t.send_confirmed_at = now
                     await task_repo.update_status(task_id, TaskStatus.COMPLETED, worker_id=WORKER_ID)
 
                     # Follow-up scheduling using FollowUpService
@@ -519,12 +607,22 @@ class InstagramWorker:
                 await event_bus.publish(EventCode.TASK_COMPLETED, task_id=task_id, worker_id=WORKER_ID)
                 logger.info(f"[Worker] Task {task_id} COMPLETED — {contact.name}")
 
+                # P4.3: Decoupled Source Write-back (failure does NOT resend Instagram message)
+                try:
+                    async with AsyncSessionLocal() as session:
+                        sync_ok = await SourceSyncService.sync_task_outcome(session, task_id, status="SENT")
+                        if not sync_ok:
+                            logger.warning(f"[Worker] Source write-back failed for task {task_id}. Message remains SENT.")
+                except Exception as sync_err:
+                    logger.error(f"[Worker] Source sync error for task {task_id}: {sync_err}")
+
             elif result in {ResultCode.SEND_UNKNOWN, ResultCode.UNKNOWN}:
                 # Invariant: NO UNCERTAIN SEND -> AUTOMATIC RETRY
                 logger.warning(f"[Worker] Task {task_id} send result is ambiguous. Transitioning to RECONCILING...")
                 async with AsyncSessionLocal() as session:
                     msg_repo = MessageRepository(session)
                     await msg_repo.update_result(msg_id, "UNKNOWN", "SEND_UNKNOWN")
+                    await msg_repo.update_send_attempt(attempt_id, "UNKNOWN", "SEND_UNKNOWN")
 
                     task_repo = TaskRepository(session)
                     await task_repo.update_status(task_id, TaskStatus.RECONCILING, worker_id=WORKER_ID)
@@ -545,6 +643,7 @@ class InstagramWorker:
                 async with AsyncSessionLocal() as session:
                     msg_repo = MessageRepository(session)
                     await msg_repo.update_result(msg_id, "FAILED", result.value)
+                    await msg_repo.update_send_attempt(attempt_id, "FAILED", result.value)
 
                     task_repo = TaskRepository(session)
                     await task_repo.update_status(task_id, TaskStatus.MANUAL_REVIEW, worker_id=WORKER_ID)
@@ -564,6 +663,7 @@ class InstagramWorker:
                 async with AsyncSessionLocal() as session:
                     msg_repo = MessageRepository(session)
                     await msg_repo.update_result(msg_id, "FAILED", result.value)
+                    await msg_repo.update_send_attempt(attempt_id, "FAILED", result.value)
 
                 retry_decision = RetryPolicy.classify(result, attempt=1, error_message=send_reason)
                 new_status = TaskStatus.RETRY_WAIT if retry_decision.should_retry else TaskStatus.MANUAL_REVIEW

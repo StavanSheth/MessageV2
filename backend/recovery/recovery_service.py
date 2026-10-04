@@ -8,7 +8,7 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy import select, and_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.database.models import Task, Message, Contact
+from backend.database.models import Task, Message, Contact, SendAttempt
 from backend.repositories.task_repository import TaskRepository
 from backend.domain.enums import TaskStatus, EventCode, ResultCode
 from backend.events.event_bus import event_bus
@@ -48,10 +48,17 @@ class RecoveryService:
         tasks = (await self.session.execute(stmt)).scalars().all()
 
         for task in tasks:
-            # Check if there is an associated Message record indicating a send attempt
+            # Check if there is an associated Message or SendAttempt record indicating a send attempt
             msg_stmt = select(Message).where(Message.task_id == task.id)
             messages = (await self.session.execute(msg_stmt)).scalars().all()
-            has_send_attempt = len(messages) > 0 or task.send_attempt_id is not None or task.status == TaskStatus.SENDING.value
+            att_stmt = select(SendAttempt).where(SendAttempt.task_id == task.id)
+            attempts = (await self.session.execute(att_stmt)).scalars().all()
+            has_send_attempt = (
+                len(messages) > 0 or
+                len(attempts) > 0 or
+                task.send_attempt_id is not None or
+                task.status == TaskStatus.SENDING.value
+            )
 
             if has_send_attempt:
                 # Invariant: Never convert a task that might have been sent directly to READY!

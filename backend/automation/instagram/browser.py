@@ -218,6 +218,18 @@ class BrowserWorker:
                 self.page = None
                 self.is_running = False
 
+    async def restart(self) -> Page:
+        """
+        Controlled autonomous browser recovery:
+        1. Stop existing browser connection / context cleanly
+        2. Wait brief cooldown
+        3. Reconnect / relaunch Chrome & Playwright
+        4. Return healthy page
+        """
+        await self.stop()
+        await asyncio.sleep(1.0)
+        return await self.start()
+
     async def health(self) -> Dict[str, Any]:
         if not self.is_running or not self.page or self.page.is_closed():
             return {"status": "DISCONNECTED", "url": None}

@@ -1,9 +1,10 @@
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.database.models import Contact, Task, Message
+from backend.database.models import Contact, Task, Message, SendAttempt
 from backend.repositories.task_repository import TaskRepository
 from backend.repositories.contact_repository import ContactRepository
 from backend.recovery.recovery_service import RecoveryService
@@ -167,3 +168,87 @@ async def test_worker_lease_expiration_and_safe_takeover(test_session: AsyncSess
     assert claimed_b is not None
     assert claimed_b.id == task.id
     assert claimed_b.lease_owner == "WORKER-B"
+
+@pytest.mark.asyncio
+async def test_db_failure_after_send_click_reconciles_on_restart(test_session: AsyncSession):
+    """
+    Scenario P0.2:
+    1. Prepare message
+    2. Persist send attempt
+    3. Click Send / Instagram accepts message
+    4. DB commit fails / crash before status updated to COMPLETED
+    5. Application restarts
+    6. System MUST NOT auto-retry; task transitions to RECONCILING
+    7. Conversation inspection finds message -> reconciles to CONFIRMED / SENT
+    """
+    task_repo = TaskRepository(test_session)
+    contact_repo = ContactRepository(test_session)
+
+    contact = await contact_repo.create(
+        name="DB Crash Target",
+        instagram_url="https://instagram.com/dbcrash/",
+        username="dbcrash",
+        message="Important outreach payload"
+    )
+    task = await task_repo.create(contact_id=contact.id, task_type="MESSAGE")
+
+    # 1. Prepare message & 2. Persist send attempt
+    msg = Message(
+        contact_id=contact.id,
+        task_id=task.id,
+        sequence=1,
+        body="Important outreach payload",
+        status="PENDING"
+    )
+    test_session.add(msg)
+    await test_session.flush()
+
+    attempt = SendAttempt(
+        task_id=task.id,
+        message_id=msg.id,
+        attempt_id="att-test-p02",
+        contact_id=contact.id,
+        message_body="Important outreach payload",
+        worker_id="WORKER-01",
+        browser_session_id="browser-session-999",
+        status="REQUESTED"
+    )
+    test_session.add(attempt)
+
+    task.status = TaskStatus.SENDING.value
+    task.send_attempt_id = "att-test-p02"
+    task.send_requested_at = datetime.now(timezone.utc)
+    await test_session.commit()
+
+    # 3. Instagram accepts message, but app crashes before task completion commit
+    # 4. App restarts: RecoveryService.reconcile_on_startup
+    recovery = RecoveryService(test_session)
+    startup_res = await recovery.reconcile_on_startup()
+
+    # Invariant: Must NOT be reset to READY! Must enter RECONCILING!
+    assert task.id in startup_res["reconciling"]
+    assert task.id not in startup_res["reset_to_ready"]
+
+    refreshed_task = await task_repo.get_by_id(task.id)
+    assert refreshed_task.status == TaskStatus.RECONCILING.value
+    assert refreshed_task.reconciliation_status == "PENDING_CONVERSATION_INSPECTION"
+
+    # 5. Worker reconciles task via conversation inspection
+    mock_adapter = AsyncMock()
+    mock_adapter.inspect_conversation = AsyncMock(return_value=ResultCode.SUCCESS)
+
+    reconciliation_outcome = await recovery.reconcile_task_with_conversation(
+        task_id=task.id,
+        adapter=mock_adapter,
+        expected_text="Important outreach payload"
+    )
+
+    assert reconciliation_outcome == "CONFIRMED"
+    final_task = await task_repo.get_by_id(task.id)
+    assert final_task.status == TaskStatus.COMPLETED.value
+    assert final_task.reconciliation_status == "CONFIRMED_SENT"
+
+    # Message must be marked SENT
+    msg_stmt = select(Message).where(Message.id == msg.id)
+    final_msg = (await test_session.execute(msg_stmt)).scalar_one()
+    assert final_msg.status == "SENT"

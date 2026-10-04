@@ -8,7 +8,9 @@ from backend.domain.enums import ResultCode, TaskStatus
 from backend.recovery.recovery_service import RecoveryService
 from backend.repositories.task_repository import TaskRepository
 from backend.repositories.contact_repository import ContactRepository
-from backend.database.models import Message
+from backend.database.models import Message, Contact
+from backend.automation.instagram.browser import BrowserWorker
+from backend.automation.retry.policy import RetryPolicy
 
 @pytest.mark.asyncio
 async def test_network_state_and_offline_detection():
@@ -88,3 +90,49 @@ async def test_browser_crash_before_send_safely_resets_to_ready(test_session: As
     refreshed_task = await task_repo.get_by_id(task.id)
     assert refreshed_task.status == TaskStatus.READY.value
     assert refreshed_task.lease_owner is None
+
+@pytest.mark.asyncio
+async def test_autonomous_browser_restart_lifecycle():
+    """
+    Scenario P1.1:
+    Worker running -> Chrome manually closed / Playwright disconnects
+    BrowserWorker.restart() must cleanly stop existing context and re-initialize page.
+    """
+    worker = BrowserWorker()
+    worker.is_running = True
+    worker.page = AsyncMock()
+    worker.page.is_closed = MagicMock(return_value=False)
+    worker.context = AsyncMock()
+    worker.playwright = AsyncMock()
+
+    # Mock start to simulate successful re-launch
+    mock_new_page = AsyncMock()
+    mock_new_page.is_closed = MagicMock(return_value=False)
+
+    with patch.object(worker, "start", new=AsyncMock(return_value=mock_new_page)):
+        page = await worker.restart()
+        assert page is mock_new_page
+        assert worker.context is None # Was closed during restart
+
+@pytest.mark.asyncio
+async def test_network_flapping_and_exponential_backoff():
+    """
+    Scenario P2.4 / P2.5:
+    Network flapping does not trigger rapid infinite retries.
+    Exponential backoff increases wait times deterministically up to ceiling.
+    """
+    # Attempt 1: base backoff (2^1 = 2s)
+    d1 = RetryPolicy.classify(ResultCode.NETWORK_ERROR, attempt=1)
+    assert d1.should_retry is True
+    assert d1.delay_seconds >= 2.0
+
+    # Attempt 2: increased backoff (2^2 = 4s)
+    d2 = RetryPolicy.classify(ResultCode.NETWORK_ERROR, attempt=2)
+    assert d2.should_retry is True
+    assert d2.delay_seconds > d1.delay_seconds
+
+    # Attempt >= max_attempts: non-retryable ceiling enforced
+    d_max = RetryPolicy.classify(ResultCode.NETWORK_ERROR, attempt=5)
+    assert d_max.should_retry is False
+    assert d_max.category.value == "NON_RETRYABLE"
+

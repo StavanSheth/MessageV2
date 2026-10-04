@@ -199,29 +199,75 @@ class LocalXlsxSource(SourceAdapter):
             ws = wb.active
 
             # Append or update Status / Sent At columns
-            # Check header
             headers = [cell.value for cell in ws[1]]
             status_col = None
+            sent_at_col = None
             for idx, h in enumerate(headers, 1):
                 if h and "status" in str(h).lower():
                     status_col = idx
-                    break
+                elif h and ("sent at" in str(h).lower() or "timestamp" in str(h).lower()):
+                    sent_at_col = idx
 
             if not status_col:
                 status_col = len(headers) + 1
                 ws.cell(row=1, column=status_col, value="Outreach Status")
+            if not sent_at_col:
+                sent_at_col = len(headers) + 2
+                ws.cell(row=1, column=sent_at_col, value="Sent At")
+
+            def _find_row(worksheet, rec_id_val) -> Optional[int]:
+                if str(rec_id_val).isdigit():
+                    r = int(rec_id_val)
+                    return r if (1 <= r <= worksheet.max_row) else None
+                if str(rec_id_val).lower().startswith("row_"):
+                    r = int(re.sub(r"\D", "", str(rec_id_val)))
+                    return r if (1 <= r <= worksheet.max_row) else None
+                target_str = str(rec_id_val).strip().lower()
+                for r in range(2, worksheet.max_row + 1):
+                    for c in range(1, min(worksheet.max_column + 1, 6)):
+                        val = str(worksheet.cell(row=r, column=c).value or "").strip().lower()
+                        if val and (val == target_str or target_str in val):
+                            return r
+                return None
+
+            # Apply updates to target rows
+            for rec_id, row_data in updates.items():
+                target_row = _find_row(ws, rec_id)
+                if not target_row:
+                    wb.close()
+                    return False, f"Target row not found for record '{rec_id}'"
+
+                status_val = row_data.get("status", "SENT")
+                ws.cell(row=target_row, column=status_col, value=status_val)
+                if "sent_at" in row_data:
+                    ws.cell(row=target_row, column=sent_at_col, value=str(row_data["sent_at"]))
 
             # Save to temporary path
             wb.save(temp_path)
             wb.close()
 
             # Validate that temporary file is readable and non-corrupt
-            test_wb = openpyxl.load_workbook(temp_path, read_only=True)
+            test_wb = openpyxl.load_workbook(temp_path, data_only=True)
+            test_ws = test_wb.active
+            for rec_id, row_data in updates.items():
+                expected_status = row_data.get("status", "SENT")
+                target_row = _find_row(test_ws, rec_id)
+                if not target_row:
+                    test_wb.close()
+                    return False, f"Target row verification failed for record '{rec_id}'"
+                persisted_val = test_ws.cell(row=target_row, column=status_col).value
+                if str(persisted_val).strip() != str(expected_status).strip():
+                    test_wb.close()
+                    return False, "Verification mismatch on written cell value"
             test_wb.close()
 
             # Atomically replace original
             os.replace(temp_path, self.file_path)
-            return True, "Atomic write-back succeeded"
+
+            # Final verification of replaced original file
+            verify_wb = openpyxl.load_workbook(self.file_path, data_only=True)
+            verify_wb.close()
+            return True, "Atomic write-back succeeded and verified"
 
         except Exception as e:
             if os.path.exists(temp_path):

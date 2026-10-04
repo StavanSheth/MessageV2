@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import json
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from backend.database.models import Worker, Message, VerificationResult, Error
+from backend.database.models import Worker, Message, VerificationResult, Error, SendAttempt
 
 class WorkerRepository:
     def __init__(self, session: AsyncSession):
@@ -65,6 +65,48 @@ class MessageRepository:
         if status == "SENT":
             values["confirmed_at"] = now
         stmt = update(Message).where(Message.id == message_id).values(**values)
+        await self.session.execute(stmt)
+        await self.session.commit()
+
+    async def record_send_attempt(
+        self,
+        task_id: str,
+        message_id: str,
+        attempt_id: str,
+        contact_id: str,
+        message_body: str,
+        worker_id: str,
+        browser_session_id: Optional[str] = None
+    ) -> SendAttempt:
+        attempt = SendAttempt(
+            task_id=task_id,
+            message_id=message_id,
+            attempt_id=attempt_id,
+            contact_id=contact_id,
+            message_body=message_body,
+            worker_id=worker_id,
+            browser_session_id=browser_session_id,
+            status="REQUESTED",
+            send_requested_at=datetime.now(timezone.utc)
+        )
+        self.session.add(attempt)
+        await self.session.commit()
+        return attempt
+
+    async def update_send_attempt(
+        self,
+        attempt_id: str,
+        status: str,
+        result_code: Optional[str] = None
+    ):
+        now = datetime.now(timezone.utc)
+        values = {
+            "status": status,
+            "result_code": result_code,
+        }
+        if status == "CONFIRMED":
+            values["send_confirmed_at"] = now
+        stmt = update(SendAttempt).where(SendAttempt.attempt_id == attempt_id).values(**values)
         await self.session.execute(stmt)
         await self.session.commit()
 

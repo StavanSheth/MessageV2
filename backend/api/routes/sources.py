@@ -3,8 +3,10 @@ import shutil
 import uuid
 import json
 from typing import Optional, List
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
+
 
 from backend.database.session import get_db
 from backend.repositories.source_repository import SourceRepository
@@ -97,9 +99,16 @@ async def upload_xlsx(file: UploadFile = File(...), db: AsyncSession = Depends(g
         await adapter.close()
 
 
+class UrlSourcePayload(BaseModel):
+    url: str
+    name: Optional[str] = None
+
 @router.post("/url")
-async def import_spreadsheet_url(url: str = Form(...), name: Optional[str] = Form(None), db: AsyncSession = Depends(get_db)):
+async def import_spreadsheet_url(payload: UrlSourcePayload, db: AsyncSession = Depends(get_db)):
+    url = payload.url
+    name = payload.name
     source_repo = SourceRepository(db)
+
     contact_repo = ContactRepository(db)
     task_repo = TaskRepository(db)
     event_repo = EventRepository(db)
@@ -141,12 +150,20 @@ async def import_spreadsheet_url(url: str = Form(...), name: Optional[str] = For
                 imported += 1
 
         await source_repo.update_counts(source.id, len(records), valid_count, invalid_count, imported)
-        payload = {"source_id": source.id, "total": len(records), "valid": valid_count, "invalid": invalid_count, "imported": imported}
-        await event_repo.log_event(EventCode.SOURCE_IMPORTED, payload)
-        await event_bus.publish(EventCode.SOURCE_IMPORTED, payload)
-        return {"source_id": source.id, **payload, "status": "ok"}
+        return {
+            "source_id": source.id,
+            "total": len(records),
+            "total_records": len(records),
+            "valid": valid_count,
+            "valid_records": valid_count,
+            "invalid": invalid_count,
+            "imported": imported,
+            "tasks_created": imported,
+            "status": "ok"
+        }
     finally:
         await adapter.close()
+
 
 
 @router.get("")

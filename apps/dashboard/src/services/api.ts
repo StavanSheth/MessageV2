@@ -91,11 +91,24 @@ export async function addUrlSource(url: string, name?: string): Promise<{ source
     body: JSON.stringify({ url, name }),
   });
   if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.detail || 'URL ingestion failed');
+    let msg = 'URL ingestion failed';
+    try {
+      const err = await res.json();
+      if (typeof err.detail === 'string') {
+        msg = err.detail;
+      } else if (Array.isArray(err.detail) && err.detail.length > 0) {
+        msg = err.detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ');
+      } else if (err.error) {
+        msg = String(err.error);
+      }
+    } catch {
+      msg = `Server returned status ${res.status}`;
+    }
+    throw new Error(msg);
   }
   return res.json();
 }
+
 
 export async function fetchEvents(limit = 100): Promise<EventLog[]> {
   const res = await fetch(`${BASE_URL}/api/events?limit=${limit}`);

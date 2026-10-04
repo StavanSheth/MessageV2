@@ -62,6 +62,42 @@ class BrowserSpreadsheetSource(SourceAdapter):
         if not is_accessible:
             raise PermissionError(reason)
 
+        import httpx
+        import uuid
+        from backend.config.settings import DATA_DIR
+
+        # Check for high-fidelity direct export/download for OneDrive & Google Sheets
+        is_onedrive = any(x in self.url for x in ["1drv.ms", "onedrive.live.com", "sharepoint.com"])
+        is_gsheet = "docs.google.com/spreadsheets" in self.url
+
+        if is_onedrive or is_gsheet:
+            try:
+                download_url = self.url
+                if is_onedrive:
+                    download_url = self.url + ("&download=1" if "?" in self.url else "?download=1")
+                elif is_gsheet:
+                    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_\-]+)", self.url)
+                    if match:
+                        sheet_id = match.group(1)
+                        download_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
+
+                async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+                    resp = await client.get(download_url)
+                    if resp.status_code == 200 and len(resp.content) > 1000:
+                        upload_dir = DATA_DIR / "uploads"
+                        upload_dir.mkdir(parents=True, exist_ok=True)
+                        dest_file = upload_dir / f"cloud_{uuid.uuid4().hex[:8]}.xlsx"
+                        dest_file.write_bytes(resp.content)
+
+                        # Delegate to LocalXlsxSource
+                        local_source = LocalXlsxSource(str(dest_file))
+                        records = await local_source.read_records()
+                        if records:
+                            return records
+            except Exception as e:
+                # Log and fallback to DOM extraction
+                print(f"[BrowserSpreadsheetSource] Direct export fallback to DOM: {e}")
+
         # Detect table data from HTML table or Google Sheet DOM
         table_rows = await self.page.locator("table tr").all()
         extracted_grid: List[List[str]] = []
@@ -78,6 +114,7 @@ class BrowserSpreadsheetSource(SourceAdapter):
 
         if not extracted_grid:
             return []
+
 
         # Parse identical to LocalXlsxSource
         header_row = extracted_grid[0]

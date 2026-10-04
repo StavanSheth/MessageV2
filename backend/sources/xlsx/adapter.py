@@ -63,13 +63,28 @@ class LocalXlsxSource(SourceAdapter):
         if not rows:
             return []
 
-        # Find header row
-        header_row = rows[0]
+        # Find header row by scanning first 10 rows
+        header_row_idx = 0
         col_map = {}
-        for idx, col in enumerate(header_row):
-            norm = self._normalize_header(col)
-            if norm:
-                col_map[norm] = idx
+        for r_i, r in enumerate(rows[:10]):
+            test_map = {}
+            for idx, col in enumerate(r):
+                norm = self._normalize_header(col)
+                if norm:
+                    test_map[norm] = idx
+            # Check if this row looks like header: has instagram/ig or (name/client and multiple cols)
+            has_ig = any("instagram" in k or "ig" in k or "profile" in k or "social" in k for k in test_map)
+            has_name = any("name" in k or "client" in k or "contact" in k or "handle" in k for k in test_map)
+            if has_ig or (has_name and len(test_map) >= 3):
+                header_row_idx = r_i
+                col_map = test_map
+                break
+
+        if not col_map and rows:
+            for idx, col in enumerate(rows[0]):
+                norm = self._normalize_header(col)
+                if norm:
+                    col_map[norm] = idx
 
         # Determine column indexes
         def find_col(*aliases):
@@ -79,14 +94,15 @@ class LocalXlsxSource(SourceAdapter):
                         return idx
             return None
 
-        name_idx = find_col("name", "full name", "contact", "user", "lead")
-        ig_idx = find_col("instagram url", "instagram link", "instagram id", "instagram", "username", "profile url", "ig")
-        msg_idx = find_col("message", "dm", "text", "body", "initial message")
+        name_idx = find_col("client name", "client", "full name", "name", "contact", "user", "lead")
+        ig_idx = find_col("instagram id/ link", "instagram id", "instagram link", "instagram url", "instagram", "username", "profile url", "ig", "social")
+        msg_idx = find_col("message", "dm", "text", "body", "initial message", "reason")
         followers_idx = find_col("expected followers", "followers", "follower count")
-        notes_idx = find_col("notes", "note", "comment")
+        notes_idx = find_col("notes", "note", "comment", "remarks")
 
         records = []
-        for row_idx, row in enumerate(rows[1:], start=2):
+        for row_idx, row in enumerate(rows[header_row_idx + 1:], start=header_row_idx + 2):
+
             # Skip empty rows
             if not any(cell is not None and str(cell).strip() != "" for cell in row):
                 continue

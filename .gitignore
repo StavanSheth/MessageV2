@@ -18,12 +18,16 @@ dist/
 .DS_Store
 
 # MessageV2 Runtime Data
+data/**/*.db
 data/*.db
+*.db
+*.sqlite3
 data/*.db-journal
 data/browser_profiles/
 data/screenshots/*.png
 data/uploads/
 !data/samples/sample_contacts.xlsx
+
 
 # Secrets & Environment
 .env

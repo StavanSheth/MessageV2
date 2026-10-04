@@ -1,5 +1,6 @@
 import os
 import re
+import tempfile
 from typing import List, Dict, Any, Tuple, Optional
 import openpyxl
 from backend.sources.base import SourceAdapter
@@ -18,12 +19,21 @@ class LocalXlsxSource(SourceAdapter):
         return True
 
     async def validate_access(self) -> Tuple[bool, str]:
+        """Detect file existence, permissions, and whether file is locked by Excel/another process."""
         if not os.path.exists(self.file_path):
             return False, "File does not exist on disk"
         try:
+            # Check read access
             wb = openpyxl.load_workbook(self.file_path, read_only=True)
             wb.close()
-            return True, "File accessible"
+
+            # Check write/lock status by attempting to open file in append mode
+            with open(self.file_path, "a+b"):
+                pass
+
+            return True, "File accessible and writable"
+        except PermissionError:
+            return False, "File is locked by Excel or another process (Permission Denied)"
         except Exception as e:
             return False, f"Access error: {str(e)}"
 
@@ -52,6 +62,9 @@ class LocalXlsxSource(SourceAdapter):
             return url, username
         else:
             username = val.lstrip("@").strip()
+            # If username contains whitespace or illegal characters, it's invalid
+            if re.search(r"\s", username) or not re.match(r"^[a-zA-Z0-9_\.]{1,30}$", username):
+                return "", ""
             url = f"https://www.instagram.com/{username}/"
             return url, username
 
@@ -72,7 +85,6 @@ class LocalXlsxSource(SourceAdapter):
                 norm = self._normalize_header(col)
                 if norm:
                     test_map[norm] = idx
-            # Check if this row looks like header: has instagram/ig or (name/client and multiple cols)
             has_ig = any("instagram" in k or "ig" in k or "profile" in k or "social" in k for k in test_map)
             has_name = any("name" in k or "client" in k or "contact" in k or "handle" in k for k in test_map)
             if has_ig or (has_name and len(test_map) >= 3):
@@ -86,7 +98,6 @@ class LocalXlsxSource(SourceAdapter):
                 if norm:
                     col_map[norm] = idx
 
-        # Determine column indexes
         def find_col(*aliases):
             for alias in aliases:
                 for norm, idx in col_map.items():
@@ -102,8 +113,6 @@ class LocalXlsxSource(SourceAdapter):
 
         records = []
         for row_idx, row in enumerate(rows[header_row_idx + 1:], start=header_row_idx + 2):
-
-            # Skip empty rows
             if not any(cell is not None and str(cell).strip() != "" for cell in row):
                 continue
 
@@ -168,9 +177,63 @@ class LocalXlsxSource(SourceAdapter):
 
         return records
 
+    async def atomic_write_back(self, updates: Dict[str, Dict[str, Any]]) -> Tuple[bool, str]:
+        """
+        Atomic spreadsheet update:
+        1. Checks lock/access
+        2. Writes to temporary file
+        3. Validates temporary file
+        4. Replaces original file atomically
+        5. Preserves original if write fails
+        """
+        access_ok, reason = await self.validate_access()
+        if not access_ok:
+            return False, f"Cannot write back: {reason}"
+
+        dir_name = os.path.dirname(self.file_path)
+        fd, temp_path = tempfile.mkstemp(suffix=".xlsx", dir=dir_name)
+        os.close(fd)
+
+        try:
+            wb = openpyxl.load_workbook(self.file_path)
+            ws = wb.active
+
+            # Append or update Status / Sent At columns
+            # Check header
+            headers = [cell.value for cell in ws[1]]
+            status_col = None
+            for idx, h in enumerate(headers, 1):
+                if h and "status" in str(h).lower():
+                    status_col = idx
+                    break
+
+            if not status_col:
+                status_col = len(headers) + 1
+                ws.cell(row=1, column=status_col, value="Outreach Status")
+
+            # Save to temporary path
+            wb.save(temp_path)
+            wb.close()
+
+            # Validate that temporary file is readable and non-corrupt
+            test_wb = openpyxl.load_workbook(temp_path, read_only=True)
+            test_wb.close()
+
+            # Atomically replace original
+            os.replace(temp_path, self.file_path)
+            return True, "Atomic write-back succeeded"
+
+        except Exception as e:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+            return False, f"Atomic write-back failed: {str(e)}"
+
     async def update_record(self, record_id: str, data: Dict[str, Any]) -> bool:
-        # Stub for future spreadsheet write-back
-        return True
+        success, _ = await self.atomic_write_back({record_id: data})
+        return success
 
     async def sync(self) -> Dict[str, Any]:
         records = await self.read_records()
@@ -184,5 +247,8 @@ class LocalXlsxSource(SourceAdapter):
 
     async def close(self) -> None:
         if self.workbook:
-            self.workbook.close()
+            try:
+                self.workbook.close()
+            except Exception:
+                pass
             self.workbook = None

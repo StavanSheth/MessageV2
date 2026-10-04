@@ -65,6 +65,9 @@ async def get_browser_live_feed():
 async def open_visible_browser():
     """Forces open or foregrounds the native Chrome browser window on the user desktop."""
     from backend.automation.instagram.browser import check_cdp_endpoint
+    from fastapi import HTTPException
+    import psutil
+    
     cdp_url = check_cdp_endpoint()
     
     # If Chrome with CDP is already active, simply bring existing Instagram tab to front
@@ -73,18 +76,44 @@ async def open_visible_browser():
             page = await instagram_worker.browser_worker.get_active_instagram_page()
             if page and not page.is_closed():
                 await page.bring_to_front()
-                return {"status": "foregrounded"}
+                return {
+                    "status": "foregrounded",
+                    "browser_status": "CONNECTED",
+                    "cdp_url": cdp_url,
+                    "playwright_connected": True
+                }
         except Exception:
             pass
 
+    chrome_pid = None
     if os.name == "nt":
         import subprocess
         from backend.automation.instagram.browser import get_chrome_executable
         chrome_bin = get_chrome_executable()
-        subprocess.Popen(f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --profile-directory="Profile 4" --restore-last-session http://localhost:5173 https://www.instagram.com', shell=True)
+        proc = subprocess.Popen(
+            f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --profile-directory="Profile 4" --restore-last-session http://localhost:5173 https://www.instagram.com',
+            shell=True
+        )
+        chrome_pid = proc.pid
+
     try:
         await instagram_worker.browser_worker.start()
-        return {"status": "opened"}
+        return {
+            "status": "opened",
+            "browser_status": "CONNECTED",
+            "playwright_connected": True,
+            "chrome_pid": chrome_pid
+        }
     except Exception as e:
-        return {"status": "launched", "note": str(e)}
+        # Strict requirement: failure MUST return 500 with structured diagnostic error
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "BROWSER_STARTUP_FAILED",
+                "browser_status": "DISCONNECTED",
+                "playwright_connected": False,
+                "chrome_pid": chrome_pid,
+                "failure_reason": str(e)
+            }
+        )
 

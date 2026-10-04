@@ -20,9 +20,9 @@ class VerificationService:
                 score=url_score, weight=0.4, notes="URL comparison"
             ))
 
-        # Username match (strong)
-        exp_user = (expected.get("username") or "").lower().lstrip("@")
-        ext_user = (extracted.get("username") or "").lower().lstrip("@")
+        # Username match (critical)
+        exp_user = (expected.get("username") or "").lower().lstrip("@").strip()
+        ext_user = (extracted.get("username") or "").lower().lstrip("@").strip()
         if exp_user and ext_user:
             user_score = 1.0 if exp_user == ext_user else 0.0
             signals.append(VerificationSignal(
@@ -31,8 +31,8 @@ class VerificationService:
             ))
 
         # Display name (supporting)
-        exp_name = (expected.get("name") or "").lower()
-        ext_name = (extracted.get("display_name") or "").lower()
+        exp_name = (expected.get("name") or "").lower().strip()
+        ext_name = (extracted.get("display_name") or "").lower().strip()
         if exp_name and ext_name:
             name_score = 1.0 if exp_name in ext_name or ext_name in exp_name else 0.3
             signals.append(VerificationSignal(
@@ -62,6 +62,31 @@ class VerificationService:
         return round(weighted_sum / total_weight, 4)
 
     async def decide(self, expected: Dict[str, Any], extracted: Dict[str, Any]) -> VerificationOutput:
+        # Check if extracted data is missing core identity evidence
+        if not extracted or not any(extracted.get(k) for k in ("username", "display_name", "url")):
+            return VerificationOutput(
+                confidence=0.0,
+                signals=[],
+                decision=VerificationDecision.UNKNOWN,
+                reason="Missing identity evidence: could not extract profile data"
+            )
+
+        # Strict username mismatch check: if both present and different, immediately fail with MISMATCH
+        exp_user = (expected.get("username") or "").lower().lstrip("@").strip()
+        ext_user = (extracted.get("username") or "").lower().lstrip("@").strip()
+        if exp_user and ext_user and exp_user != ext_user:
+            return VerificationOutput(
+                confidence=0.0,
+                signals=[
+                    VerificationSignal(
+                        name="username", expected=exp_user, extracted=ext_user,
+                        score=0.0, weight=1.0, notes="Explicit username mismatch"
+                    )
+                ],
+                decision=VerificationDecision.MISMATCH,
+                reason=f"Explicit username mismatch: expected '{exp_user}', extracted '{ext_user}'"
+            )
+
         signals = await self.extract_signals(expected, extracted)
         confidence = await self.calculate_confidence(signals)
 

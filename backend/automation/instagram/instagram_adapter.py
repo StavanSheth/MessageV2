@@ -79,27 +79,73 @@ class InstagramAdapter:
         except Exception as e:
             return False, False, False, f"Login check error: {str(e)}"
 
-    async def open_profile(self, profile_url: str) -> Tuple[bool, ResultCode, str]:
-        """Navigate to target profile and verify page validity."""
+    async def open_profile(self, profile_url: str, expected_username: Optional[str] = None) -> Tuple[bool, ResultCode, str]:
+        """
+        Navigate to target profile and verify page validity and identity.
+        Requires positive evidence that the target profile actually loaded.
+        """
         try:
             try:
                 await self.page.bring_to_front()
             except Exception:
                 pass
+
             await self.page.goto(profile_url, wait_until="domcontentloaded", timeout=25000)
             await asyncio.sleep(2)
             await self.dismiss_popups()
 
-            page_text = await self.page.locator("body").inner_text()
-            if "sorry, this page isn't available" in page_text.lower() or "link you followed may be broken" in page_text.lower():
-                return False, ResultCode.PROFILE_NOT_FOUND, "Profile page not found"
+            current_url = self.page.url.lower()
 
-            # Check if profile header loaded
+            # Check for redirect to login or challenge
+            if "/accounts/login" in current_url:
+                return False, ResultCode.LOGIN_REQUIRED, "Redirected to login page"
+            if "/challenge/" in current_url or "/two_factor/" in current_url:
+                return False, ResultCode.CHALLENGE_REQUIRED, "Instagram challenge or 2FA required"
+
+            page_text = (await self.page.locator("body").inner_text()).lower()
+
+            # Check page not found / deleted / unavailable
+            if ("sorry, this page isn't available" in page_text or
+                "link you followed may be broken" in page_text or
+                "page not found" in page_text or
+                "user not found" in page_text):
+                return False, ResultCode.PROFILE_NOT_FOUND, "Profile page not found or deleted"
+
+            # Check action block or rate limit
+            if "action blocked" in page_text or "we limit how often" in page_text or "try again later" in page_text:
+                return False, ResultCode.ACTION_BLOCKED, "Action blocked by Instagram"
+
+            # Check for private profile banner
+            is_private = "this account is private" in page_text or "account is private" in page_text
+
+            # Check for positive evidence that profile header loaded
             header = self.page.locator(InstagramSelectors.PROFILE_HEADER).first
-            if await header.count() > 0:
-                return True, ResultCode.SUCCESS, "Profile opened"
+            has_header = await header.count() > 0
 
-            return True, ResultCode.SUCCESS, "Profile loaded"
+            # Extract username from page to verify identity
+            found_username = None
+            username_elem = self.page.locator(InstagramSelectors.PROFILE_USERNAME).first
+            if await username_elem.count() > 0:
+                raw_text = (await username_elem.inner_text()).strip().lstrip("@")
+                found_username = raw_text.split("\n")[0].strip() if raw_text else None
+
+            if not has_header and not found_username:
+                # Ambiguous DOM state: never return SUCCESS merely because navigation completed
+                return False, ResultCode.UNKNOWN, "Could not positively confirm profile identity"
+
+            # Identity verification: if expected_username provided, compare with found_username
+            if expected_username and found_username:
+                norm_expected = expected_username.lower().lstrip("@").strip()
+                norm_found = found_username.lower().strip()
+                if norm_expected != norm_found:
+                    return False, ResultCode.PROFILE_MISMATCH, f"Profile mismatch: expected '{norm_expected}', loaded '{norm_found}'"
+
+            if is_private:
+                # Private profile check
+                return True, ResultCode.PROFILE_PRIVATE, "Profile loaded (Account is Private)"
+
+            return True, ResultCode.SUCCESS, "Profile verified and loaded"
+
         except PlaywrightTimeoutError:
             return False, ResultCode.TIMEOUT, "Timeout loading profile page"
         except Exception as e:
@@ -118,7 +164,7 @@ class InstagramAdapter:
             # Username
             username_elem = self.page.locator(InstagramSelectors.PROFILE_USERNAME).first
             if await username_elem.count() > 0:
-                data["username"] = (await username_elem.inner_text()).strip()
+                data["username"] = (await username_elem.inner_text()).strip().lstrip("@")
 
             # Followers
             body_text = await self.page.locator("body").inner_text()
@@ -141,7 +187,7 @@ class InstagramAdapter:
                 header_text = await header.inner_text()
                 lines = [l.strip() for l in header_text.split("\n") if l.strip()]
                 if len(lines) > 1 and not data["username"]:
-                    data["username"] = lines[0]
+                    data["username"] = lines[0].lstrip("@")
                 if len(lines) > 2:
                     data["bio"] = "\n".join(lines[2:])
         except Exception:
@@ -150,21 +196,29 @@ class InstagramAdapter:
         return data
 
     async def check_message_availability(self) -> Tuple[bool, ResultCode, str]:
-        """Check if message button exists and is clickable."""
+        """Check if message button exists, profile is reachable, and messaging is allowed."""
         await self.dismiss_popups()
+
+        # Check restricted message text / action blocks
+        content = (await self.page.content()).lower()
+        if "action blocked" in content or "try again later" in content:
+            return False, ResultCode.ACTION_BLOCKED, "Action blocked by Instagram"
+
+        if "you can't message this account" in content or "cannot be messaged" in content:
+            return False, ResultCode.DM_NOT_AVAILABLE, "Account cannot receive messages"
+
         for sel in InstagramSelectors.MESSAGE_BUTTON:
             btn = self.page.locator(sel).first
             if await btn.count() > 0 and await btn.is_visible():
                 return True, ResultCode.SUCCESS, "Message button available"
 
-        # Check restricted message text
-        content = await self.page.content()
-        if "you can't message this account" in content.lower():
-            return False, ResultCode.DM_NOT_AVAILABLE, "Account cannot receive messages"
+        # Check if private account without message capability
+        if "this account is private" in content:
+            return False, ResultCode.PROFILE_PRIVATE, "Account is private and cannot be messaged"
 
         return False, ResultCode.DM_NOT_AVAILABLE, "Message button not found on profile"
 
-    async def prepare_message(self, text: str) -> Tuple[bool, str]:
+    async def prepare_message(self, text: str) -> Tuple[bool, ResultCode, str]:
         """Click message, wait for composer, type text, and verify text in composer."""
         try:
             # Click message button if on profile
@@ -181,14 +235,14 @@ class InstagramAdapter:
                         break
 
                 if not clicked:
-                    return False, "Could not click message button"
+                    return False, ResultCode.DM_NOT_AVAILABLE, "Could not click message button"
 
                 await asyncio.sleep(2)
                 await self.dismiss_popups()
 
             # Locate composer (div[contenteditable='true'] / role='textbox')
             composer = None
-            for _ in range(16):  # Wait up to 8 seconds (16 x 0.5s)
+            for _ in range(16):  # Wait up to 8 seconds
                 for comp_sel in InstagramSelectors.MESSAGE_COMPOSER:
                     c = self.page.locator(comp_sel).first
                     if await c.count() > 0 and await c.is_visible():
@@ -200,7 +254,12 @@ class InstagramAdapter:
                 await asyncio.sleep(0.5)
 
             if not composer:
-                return False, "Message composer not found"
+                return False, ResultCode.COMPOSER_UNAVAILABLE, "Message composer not found"
+
+            # Check if composer is disabled
+            is_editable = await composer.get_attribute("contenteditable")
+            if is_editable == "false":
+                return False, ResultCode.COMPOSER_UNAVAILABLE, "Message composer is disabled or read-only"
 
             # Focus composer and clear any existing draft
             await composer.click()
@@ -213,7 +272,7 @@ class InstagramAdapter:
             await self.page.keyboard.type(text, delay=30)
             await asyncio.sleep(0.5)
 
-            # Verify text is entered in composer using inner_text or text_content (avoid input_value on div)
+            # Verify text is entered in composer
             entered_val = (await composer.inner_text() or "").strip()
             text_content = (await composer.text_content() or "").strip()
             if text.strip() not in entered_val and text.strip() not in text_content:
@@ -221,11 +280,11 @@ class InstagramAdapter:
                 await self.page.keyboard.insert_text(text)
                 await asyncio.sleep(0.4)
 
-            return True, "Message composer ready"
+            return True, ResultCode.SUCCESS, "Message composer ready"
         except Exception as e:
-            return False, f"Prepare message failed: {str(e)}"
+            return False, ResultCode.SEND_FAILED, f"Prepare message failed: {str(e)}"
 
-    async def send_message(self) -> Tuple[bool, str]:
+    async def send_message(self) -> Tuple[bool, ResultCode, str]:
         """Trigger message sending via Send button or Enter key."""
         try:
             sent = False
@@ -243,37 +302,39 @@ class InstagramAdapter:
                 sent = True
 
             await asyncio.sleep(2)
-            return True, "Send triggered"
+            return True, ResultCode.SUCCESS, "Send triggered"
         except Exception as e:
-            return False, f"Send failed: {str(e)}"
+            return False, ResultCode.SEND_FAILED, f"Send failed: {str(e)}"
 
     async def detect_result(self, expected_text: str) -> ResultCode:
-        """Verify whether message was sent, failed, or unknown."""
+        """
+        Verify post-send state using multiple independent signals:
+        1. Action block / rate limit detection
+        2. Send failure detection (e.g. 'failed to send')
+        3. Sent message bubble visible with expected_text -> SUCCESS
+        4. If ambiguous (e.g. composer cleared but no message bubble verified) -> SEND_UNKNOWN
+        CRITICAL: Never treat an empty composer alone as proof of success!
+        """
         try:
-            # Check for error banners, rate limits, or retry icons
+            # 1. Check for error banners, rate limits, or action blocks
             content = (await self.page.content()).lower()
-            if "try again later" in content or "we restrict certain activity" in content or "action blocked" in content or "we limit how often" in content:
+            if "action blocked" in content or "we restrict certain activity" in content:
+                return ResultCode.ACTION_BLOCKED
+            if "try again later" in content or "we limit how often" in content:
                 return ResultCode.RATE_LIMITED
             if "failed to send" in content or "couldn't send" in content:
                 return ResultCode.SEND_FAILED
 
-            # Check if expected message appears in conversation thread
+            # 2. Positive confirmation: message text visible in conversation bubbles
             for bubble_sel in [f"text='{expected_text}'", InstagramSelectors.SENT_MESSAGE_BUBBLES]:
                 match = self.page.locator(f"text='{expected_text}'").last
                 if await match.count() > 0 and await match.is_visible():
                     return ResultCode.SUCCESS
 
-            # Check if composer is cleared
-            for comp_sel in InstagramSelectors.MESSAGE_COMPOSER:
-                c = self.page.locator(comp_sel).first
-                if await c.count() > 0 and await c.is_visible():
-                    text_in_composer = (await c.inner_text()).strip()
-                    if expected_text not in text_in_composer:
-                        return ResultCode.SUCCESS
-
-            return ResultCode.UNKNOWN
+            # 3. If confirmation is ambiguous, return SEND_UNKNOWN (never guess SUCCESS from empty composer)
+            return ResultCode.SEND_UNKNOWN
         except Exception:
-            return ResultCode.UNKNOWN
+            return ResultCode.SEND_UNKNOWN
 
     async def inspect_conversation(self, expected_text: str) -> ResultCode:
         """Inspect conversation thread during reconciliation."""

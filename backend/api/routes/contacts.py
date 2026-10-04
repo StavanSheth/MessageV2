@@ -165,7 +165,23 @@ async def update_replied(contact_id: str, status: str, db: AsyncSession = Depend
     updated = await repo.update_replied(contact_id, status)
     if not updated:
         raise HTTPException(404, "Contact not found")
-    return {"id": contact_id, "replied_status": status}
+
+    from sqlalchemy import select
+    from backend.database.models import Task
+    tasks_res = await db.execute(select(Task).where(Task.contact_id == contact_id))
+    tasks = tasks_res.scalars().all()
+
+    return {
+        "id": contact_id,
+        "replied_status": updated.replied_status,
+        "replied_at": updated.replied_at.isoformat() if updated.replied_at else None,
+        "tasks": [{
+            "id": t.id,
+            "type": t.type,
+            "status": t.status,
+            "manual_review_reason": t.manual_review_reason
+        } for t in tasks]
+    }
 
 @router.get("/export/excel")
 async def export_contacts_excel(db: AsyncSession = Depends(get_db)):

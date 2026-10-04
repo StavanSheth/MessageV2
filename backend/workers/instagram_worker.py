@@ -1,20 +1,25 @@
 """
-Instagram Worker: the heart of automation.
-Runs sequentially through tasks, controlling the visible Chrome browser.
+Instagram Worker: authoritative execution engine.
+Enforces strict task lifecycle:
+READY -> RUNNING -> VERIFYING -> [AWAITING_APPROVAL -> APPROVED] -> SENDING -> COMPLETED
+With safe recovery, lease heartbeating, conversation reconciliation, and idempotency.
 """
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.database.models import Task, Contact, Message, Error
+from backend.database.models import Task, Contact, Message
 from backend.automation.instagram.browser import BrowserWorker
 from backend.automation.instagram.instagram_adapter import InstagramAdapter
-from backend.automation.instagram.result_detector import ResultDetector
+from backend.automation.retry.policy import RetryPolicy
 from backend.verification.verification_service import VerificationService
+from backend.recovery.recovery_service import RecoveryService
+from backend.followups.service import FollowUpService
 from backend.repositories.task_repository import TaskRepository
 from backend.repositories.worker_repository import WorkerRepository, MessageRepository, VerificationRepository
 from backend.repositories.event_repository import EventRepository
@@ -22,7 +27,7 @@ from backend.database.session import AsyncSessionLocal
 from backend.domain.enums import (
     TaskStatus, ResultCode, EventCode, AutomationStage, WorkerStatus, VerificationDecision
 )
-from backend.config.settings import settings, SCREENSHOTS_DIR
+from backend.config.settings import settings
 from backend.events.event_bus import event_bus
 
 logger = logging.getLogger(__name__)
@@ -53,7 +58,6 @@ class InstagramWorker:
 
     async def start(self, batch_limit: Optional[int] = None, delay_seconds: Optional[int] = None) -> None:
         if self._task and not self._task.done():
-            # If already running but paused, update batch target, reset count and unpause
             if self._paused:
                 self.batch_limit = batch_limit if (batch_limit is not None and batch_limit > 0) else None
                 self.batch_sent_count = 0
@@ -165,19 +169,25 @@ class InstagramWorker:
         self._start_time = datetime.now(timezone.utc)
 
         try:
-            # Initialize browser
+            # 1. Startup Recovery: Reconcile any interrupted tasks from previous sessions
+            async with AsyncSessionLocal() as session:
+                recovery = RecoveryService(session)
+                recovery_res = await recovery.reconcile_on_startup()
+                logger.info(f"[Worker] Startup recovery complete: {recovery_res}")
+
+            # 2. Initialize browser
             await self._set_stage(AutomationStage.INITIALIZING)
             page = await self.browser_worker.start()
             await self._update_worker_db(status="RUNNING", browser_status="CONNECTED")
             await event_bus.publish(EventCode.WORKER_STARTED, worker_id=WORKER_ID)
             await event_bus.publish_state(await self.health())
 
-            # Instagram login check
+            # 3. Instagram login check
             await self._set_stage(AutomationStage.CHECKING_LOGIN)
             adapter = InstagramAdapter(page)
             await self._check_login_loop(adapter)
 
-            # Task processing loop
+            # 4. Task processing loop
             while not self._stop_requested:
                 if self._paused:
                     await asyncio.sleep(1)
@@ -203,12 +213,14 @@ class InstagramWorker:
 
                 # Guard: Ensure browser is connected and page is alive
                 if not self.browser_worker.is_running or not self.browser_worker.page or self.browser_worker.page.is_closed():
-                    logger.warning("[Worker] Browser closed or disconnected. Halting task loop.")
+                    logger.warning("[Worker] Browser closed or disconnected. Triggering recovery...")
+                    async with AsyncSessionLocal() as session:
+                        rec = RecoveryService(session)
+                        await rec.handle_browser_crash(self.current_task_id)
                     break
 
                 task = await self._claim_next_task()
                 if not task:
-                    # Check if there are any READY tasks left in the queue
                     async with AsyncSessionLocal() as session:
                         repo = TaskRepository(session)
                         counts = await repo.count_by_status()
@@ -246,7 +258,7 @@ class InstagramWorker:
                     await event_bus.publish_state(await self.health())
                     continue
 
-                # Pacing delay between contacts to protect Instagram account from rate-limiting
+                # Pacing delay between contacts
                 delay = self.delay_between_messages
                 logger.info(f"[Worker] Pacing delay: waiting {delay}s before next contact...")
                 for _ in range(delay):
@@ -300,13 +312,15 @@ class InstagramWorker:
                 await asyncio.sleep(6)
                 continue
 
-            # Unclear state — retry
             await asyncio.sleep(4)
 
     async def _claim_next_task(self):
         async with AsyncSessionLocal() as session:
             repo = TaskRepository(session)
-            return await repo.claim_next_ready(WORKER_ID)
+            task = await repo.claim_next_ready(WORKER_ID)
+            if task:
+                await event_bus.publish(EventCode.TASK_CLAIMED, task_id=task.id, worker_id=WORKER_ID)
+            return task
 
     async def _process_task(self, task, adapter: InstagramAdapter) -> None:
         task_id = task.id
@@ -314,10 +328,17 @@ class InstagramWorker:
         if not contact:
             async with AsyncSessionLocal() as session:
                 repo = TaskRepository(session)
-                await repo.update_status(task_id, TaskStatus.SKIPPED)
+                await repo.update_status(task_id, TaskStatus.SKIPPED, worker_id=WORKER_ID)
             return
 
-        correlation_id = task_id
+        # Pre-send Follow-up Race Check
+        if task.type in {"FOLLOW_UP_1", "FOLLOW_UP_2"}:
+            async with AsyncSessionLocal() as session:
+                safe, fu_reason = await FollowUpService.verify_before_send(session, task_id)
+                if not safe:
+                    logger.info(f"[Worker] Follow-up safety check blocked execution: {fu_reason}")
+                    return
+
         if task.type == "FOLLOW_UP_1":
             message_body = contact.followup_1_message or "Hey! Just following up on my previous message — would love to connect!"
         elif task.type == "FOLLOW_UP_2":
@@ -326,7 +347,11 @@ class InstagramWorker:
             message_body = contact.message or settings.DEFAULT_MESSAGE
 
         try:
-            # Ensure active page is refreshed and synchronized
+            # Heartbeat task lease
+            async with AsyncSessionLocal() as session:
+                repo = TaskRepository(session)
+                await repo.heartbeat(task_id, WORKER_ID)
+
             active_page = await self.browser_worker.get_active_instagram_page(prefer_target_url=contact.instagram_url)
             if active_page and not active_page.is_closed():
                 self.browser_worker.page = active_page
@@ -336,27 +361,31 @@ class InstagramWorker:
                 except Exception:
                     pass
 
-            # ── Open Profile ──────────────────────────────────
+            # ── 1. Open Profile ──────────────────────────────────
             await self._set_stage(AutomationStage.OPENING_PROFILE, contact.name, contact.instagram_url, task_id)
             await event_bus.publish(EventCode.TASK_STARTED, task_id=task_id, contact_name=contact.name,
                                     worker_id=WORKER_ID, payload={"instagram_url": contact.instagram_url})
 
-            success, result_code, reason = await adapter.open_profile(contact.instagram_url)
+            success, result_code, reason = await adapter.open_profile(contact.instagram_url, expected_username=contact.username)
             await self.browser_worker.screenshot("profile_opened")
 
             if not success:
                 if "target page, context or browser has been closed" in str(reason).lower():
-                    logger.warning("[Worker] Browser closed/disconnected during open_profile. Halting worker loop.")
+                    logger.warning("[Worker] Browser closed/disconnected during open_profile.")
                     self._stop_requested = True
                     self.status = WorkerStatus.STOPPED
                 await self._fail_task(task_id, result_code, reason)
                 return
 
-            # ── Extract Profile ───────────────────────────────
+            # ── 2. Transition to VERIFYING & Extract Profile ──────────────
+            async with AsyncSessionLocal() as session:
+                repo = TaskRepository(session)
+                await repo.update_status(task_id, TaskStatus.VERIFYING, worker_id=WORKER_ID)
+
             await self._set_stage(AutomationStage.EXTRACTING_PROFILE, contact.name, task_id=task_id)
             extracted = await adapter.extract_profile()
 
-            # ── Verify ───────────────────────────────────────
+            # ── 3. Identity Verification ───────────────────────────
             await self._set_stage(AutomationStage.VERIFYING, contact.name, task_id=task_id)
             await event_bus.publish(EventCode.VERIFICATION_STARTED, task_id=task_id, worker_id=WORKER_ID)
 
@@ -369,7 +398,6 @@ class InstagramWorker:
             }
             verification = await verifier.decide(expected, extracted)
 
-            # Record verification
             async with AsyncSessionLocal() as session:
                 vrf_repo = VerificationRepository(session)
                 screenshot_url = await self.browser_worker.screenshot("verification_completed")
@@ -383,127 +411,144 @@ class InstagramWorker:
                     reason=verification.reason
                 )
 
-            await event_bus.publish(EventCode.VERIFICATION_COMPLETED, task_id=task_id, worker_id=WORKER_ID,
-                                    payload={"confidence": verification.confidence, "decision": verification.decision.value})
+            await event_bus.publish(
+                EventCode.VERIFICATION_COMPLETED,
+                task_id=task_id,
+                worker_id=WORKER_ID,
+                payload={"confidence": verification.confidence, "decision": verification.decision.value}
+            )
 
-            # Check confidence threshold
-            if verification.decision == VerificationDecision.MISMATCH:
-                await self._fail_task(task_id, ResultCode.PROFILE_MISMATCH, verification.reason,
-                                      new_status=TaskStatus.MANUAL_REVIEW, retryable=False)
+            # Strict Invariant: NO UNVERIFIED IDENTITY -> SEND
+            if verification.decision in {VerificationDecision.MISMATCH, VerificationDecision.LOW_CONFIDENCE, VerificationDecision.UNKNOWN}:
+                await self._fail_task(
+                    task_id,
+                    ResultCode.PROFILE_MISMATCH if verification.decision == VerificationDecision.MISMATCH else ResultCode.UNKNOWN,
+                    verification.reason,
+                    new_status=TaskStatus.MANUAL_REVIEW,
+                    retryable=False
+                )
                 return
 
-            if verification.decision == VerificationDecision.LOW_CONFIDENCE:
-                await self._fail_task(task_id, ResultCode.PROFILE_MISMATCH, "Low verification confidence",
-                                      new_status=TaskStatus.MANUAL_REVIEW, retryable=False)
+            await event_bus.publish(EventCode.PROFILE_VERIFIED, task_id=task_id, worker_id=WORKER_ID)
+
+            # ── 4. Approval Gate ──────────────────────────────────
+            requires_approval = getattr(task, "requires_approval", False) or settings.REQUIRE_MANUAL_APPROVAL or (verification.decision == VerificationDecision.MEDIUM_CONFIDENCE)
+            if requires_approval and task.status != TaskStatus.APPROVED.value:
+                async with AsyncSessionLocal() as session:
+                    repo = TaskRepository(session)
+                    await repo.update_status(task_id, TaskStatus.AWAITING_APPROVAL, worker_id=WORKER_ID)
+                await event_bus.publish(
+                    EventCode.MANUAL_REVIEW_REQUIRED,
+                    task_id=task_id,
+                    worker_id=WORKER_ID,
+                    payload={"reason": "Manual operator approval required before send."}
+                )
+                logger.info(f"[Worker] Task {task_id} is awaiting manual approval before send.")
                 return
 
-            # ── Check DM Availability ─────────────────────────
+            # ── 5. Check DM Availability ─────────────────────────
             await self._set_stage(AutomationStage.CHECKING_DM_AVAILABILITY, contact.name, task_id=task_id)
             dm_available, dm_code, dm_reason = await adapter.check_message_availability()
 
             if not dm_available:
-                await self._fail_task(task_id, dm_code, dm_reason,
-                                      new_status=TaskStatus.SKIPPED, retryable=False)
-                await event_bus.publish(EventCode.TASK_FAILED, task_id=task_id, worker_id=WORKER_ID,
-                                        payload={"reason": dm_reason, "code": dm_code.value})
+                await self._fail_task(task_id, dm_code, dm_reason, new_status=TaskStatus.SKIPPED, retryable=False)
                 return
 
-            # ── Prepare Message ───────────────────────────────
+            # ── 6. Prepare Message ───────────────────────────────
             await self._set_stage(AutomationStage.OPENING_COMPOSER, contact.name, task_id=task_id)
-            prepared, prep_reason = await adapter.prepare_message(message_body)
-            screenshot_url = await self.browser_worker.screenshot("message_composer_opened")
+            prepared, prep_code, prep_reason = await adapter.prepare_message(message_body)
+            await self.browser_worker.screenshot("message_composer_opened")
 
             if not prepared:
-                await self._fail_task(task_id, ResultCode.SEND_FAILED, prep_reason, retryable=True)
+                await self._fail_task(task_id, prep_code, prep_reason, retryable=False)
                 return
 
-            # Create message record
+            # ── 7. Transition to SENDING ──────────────────────────
+            attempt_id = str(uuid.uuid4())
             async with AsyncSessionLocal() as session:
                 msg_repo = MessageRepository(session)
                 msg = await msg_repo.create(contact.id, task_id, message_body)
                 msg_id = msg.id
 
-            # ── Send Message ──────────────────────────────────
-            await self._set_stage(AutomationStage.SENDING_MESSAGE, contact.name, task_id=task_id)
-            await event_bus.publish(EventCode.MESSAGE_ATTEMPTED, task_id=task_id, worker_id=WORKER_ID,
-                                    payload={"body": message_body})
+                task_repo = TaskRepository(session)
+                current_t = await task_repo.get_by_id(task_id)
+                current_t.send_attempt_id = attempt_id
+                await task_repo.update_status(task_id, TaskStatus.SENDING, worker_id=WORKER_ID)
 
-            sent, send_reason = await adapter.send_message()
+            await self._set_stage(AutomationStage.SENDING_MESSAGE, contact.name, task_id=task_id)
+            await event_bus.publish(
+                EventCode.SEND_STARTED,
+                task_id=task_id,
+                worker_id=WORKER_ID,
+                payload={"attempt_id": attempt_id, "body": message_body}
+            )
+
+            # ── 8. Send Action ────────────────────────────────────
+            sent, send_code, send_reason = await adapter.send_message()
             await self.browser_worker.screenshot("message_attempted")
 
-            # ── Detect Result ─────────────────────────────────
+            # ── 9. Result Verification & Reconciliation ────────────
             await self._set_stage(AutomationStage.DETECTING_RESULT, contact.name, task_id=task_id)
             result = await adapter.detect_result(message_body)
             await self.browser_worker.screenshot("message_result")
+
+            now = datetime.now(timezone.utc)
 
             if result == ResultCode.SUCCESS:
                 self.batch_sent_count += 1
                 async with AsyncSessionLocal() as session:
                     msg_repo = MessageRepository(session)
                     await msg_repo.update_result(msg_id, "SENT", "SUCCESS")
-                async with AsyncSessionLocal() as session:
-                    task_repo = TaskRepository(session)
-                    await task_repo.update_status(task_id, TaskStatus.COMPLETED)
 
-                    # Automatically schedule Follow-Up 1 or 2 if contact has not replied
-                    if contact.replied_status != "YES":
-                        from datetime import timedelta
-                        now = datetime.now(timezone.utc)
-                        if task.type == "MESSAGE":
-                            delay = contact.followup_1_delay_days or 3
-                            fu_stmt = select(Task).where(
-                                and_(Task.contact_id == contact.id, Task.type == "FOLLOW_UP_1")
-                            )
-                            existing_fu = (await session.execute(fu_stmt)).scalar_one_or_none()
-                            if not existing_fu:
-                                fu1_task = Task(
-                                    contact_id=contact.id,
-                                    type="FOLLOW_UP_1",
-                                    sequence=2,
-                                    priority=task.priority,
-                                    scheduled_at=now + timedelta(days=delay),
-                                    status=TaskStatus.READY.value
-                                )
-                                session.add(fu1_task)
-                                await session.commit()
-                                logger.info(f"[Worker] Scheduled Follow-up 1 for {contact.name} in {delay} days")
-                        elif task.type == "FOLLOW_UP_1":
-                            delay = contact.followup_2_delay_days or 5
-                            fu_stmt = select(Task).where(
-                                and_(Task.contact_id == contact.id, Task.type == "FOLLOW_UP_2")
-                            )
-                            existing_fu = (await session.execute(fu_stmt)).scalar_one_or_none()
-                            if not existing_fu:
-                                fu2_task = Task(
-                                    contact_id=contact.id,
-                                    type="FOLLOW_UP_2",
-                                    sequence=3,
-                                    priority=task.priority,
-                                    scheduled_at=now + timedelta(days=delay),
-                                    status=TaskStatus.READY.value
-                                )
-                                session.add(fu2_task)
-                                await session.commit()
-                                logger.info(f"[Worker] Scheduled Follow-up 2 for {contact.name} in {delay} days")
+                    task_repo = TaskRepository(session)
+                    await task_repo.update_status(task_id, TaskStatus.COMPLETED, worker_id=WORKER_ID)
+
+                    # Follow-up scheduling using FollowUpService
+                    if task.type == "MESSAGE":
+                        await FollowUpService.schedule_followup(session, contact.id, "FOLLOW_UP_1")
+                    elif task.type == "FOLLOW_UP_1":
+                        await FollowUpService.schedule_followup(session, contact.id, "FOLLOW_UP_2")
 
                 await event_bus.publish(
-                    EventCode.MESSAGE_CONFIRMED,
+                    EventCode.SEND_CONFIRMED,
                     task_id=task_id,
                     worker_id=WORKER_ID,
                     contact_name=contact.name,
                     payload={"result": "SUCCESS", "batch_sent": self.batch_sent_count, "batch_limit": self.batch_limit}
                 )
                 await event_bus.publish(EventCode.TASK_COMPLETED, task_id=task_id, worker_id=WORKER_ID)
-                logger.info(f"[Worker] Task {task_id} COMPLETED — {contact.name} (Batch: {self.batch_sent_count}/{self.batch_limit or 'All'})")
+                logger.info(f"[Worker] Task {task_id} COMPLETED — {contact.name}")
 
-            elif result == ResultCode.RATE_LIMITED:
-                # INSTAGRAM RATE LIMIT / ACTION BLOCK DETECTED -> PAUSE IMMEDIATELY
+            elif result in {ResultCode.SEND_UNKNOWN, ResultCode.UNKNOWN}:
+                # Invariant: NO UNCERTAIN SEND -> AUTOMATIC RETRY
+                logger.warning(f"[Worker] Task {task_id} send result is ambiguous. Transitioning to RECONCILING...")
                 async with AsyncSessionLocal() as session:
                     msg_repo = MessageRepository(session)
-                    await msg_repo.update_result(msg_id, "FAILED", "RATE_LIMITED")
-                async with AsyncSessionLocal() as session:
+                    await msg_repo.update_result(msg_id, "UNKNOWN", "SEND_UNKNOWN")
+
                     task_repo = TaskRepository(session)
-                    await task_repo.update_status(task_id, TaskStatus.MANUAL_REVIEW)
+                    await task_repo.update_status(task_id, TaskStatus.RECONCILING, worker_id=WORKER_ID)
+
+                    # Immediate conversation reconciliation attempt
+                    rec = RecoveryService(session)
+                    rec_status = await rec.reconcile_task_with_conversation(task_id, adapter, expected_text=message_body)
+                    logger.info(f"[Worker] Reconciliation outcome for task {task_id}: {rec_status}")
+
+                await event_bus.publish(
+                    EventCode.SEND_UNKNOWN,
+                    task_id=task_id,
+                    worker_id=WORKER_ID,
+                    payload={"reason": "Ambiguous post-send confirmation"}
+                )
+
+            elif result in {ResultCode.RATE_LIMITED, ResultCode.ACTION_BLOCKED}:
+                async with AsyncSessionLocal() as session:
+                    msg_repo = MessageRepository(session)
+                    await msg_repo.update_result(msg_id, "FAILED", result.value)
+
+                    task_repo = TaskRepository(session)
+                    await task_repo.update_status(task_id, TaskStatus.MANUAL_REVIEW, worker_id=WORKER_ID)
+
                 self._paused = True
                 self.status = WorkerStatus.PAUSED
                 await self._update_worker_db(status="PAUSED")
@@ -511,35 +556,28 @@ class InstagramWorker:
                     EventCode.MANUAL_REVIEW_REQUIRED,
                     task_id=task_id,
                     worker_id=WORKER_ID,
-                    payload={"reason": "Instagram action block or rate limit detected. Automation paused for safety."}
+                    payload={"reason": f"Instagram {result.value} detected. Worker paused for safety."}
                 )
-                logger.warning(f"[Worker] Instagram rate limit / action block detected on task {task_id}. Worker paused.")
-
-            elif result == ResultCode.UNKNOWN:
-                # FAIL CLOSED: unknown = reconcile first
-                async with AsyncSessionLocal() as session:
-                    msg_repo = MessageRepository(session)
-                    await msg_repo.update_result(msg_id, "UNKNOWN", "UNKNOWN")
-                async with AsyncSessionLocal() as session:
-                    task_repo = TaskRepository(session)
-                    await task_repo.update_status(task_id, TaskStatus.RECONCILING)
-                await event_bus.publish(EventCode.MANUAL_REVIEW_REQUIRED, task_id=task_id, worker_id=WORKER_ID,
-                                        payload={"reason": "Unknown send result — reconcile before retry"})
-                logger.warning(f"[Worker] Task {task_id} UNKNOWN_RESULT — moved to RECONCILING")
 
             else:
+                # Deterministic or transient failure
                 async with AsyncSessionLocal() as session:
                     msg_repo = MessageRepository(session)
                     await msg_repo.update_result(msg_id, "FAILED", result.value)
-                is_retryable = ResultDetector.is_retryable(result)
-                new_status = TaskStatus.RETRY_WAIT if is_retryable else TaskStatus.MANUAL_REVIEW
+
+                retry_decision = RetryPolicy.classify(result, attempt=1, error_message=send_reason)
+                new_status = TaskStatus.RETRY_WAIT if retry_decision.should_retry else TaskStatus.MANUAL_REVIEW
+
                 async with AsyncSessionLocal() as session:
                     task_repo = TaskRepository(session)
-                    current_task = await task_repo.get_by_id(task_id)
-                    if current_task and current_task.status == TaskStatus.RUNNING.value:
-                        await task_repo.update_status(task_id, new_status)
-                await event_bus.publish(EventCode.TASK_FAILED, task_id=task_id, worker_id=WORKER_ID,
-                                        payload={"result": result.value, "retryable": is_retryable})
+                    await task_repo.update_status(task_id, new_status, worker_id=WORKER_ID)
+
+                await event_bus.publish(
+                    EventCode.SEND_FAILED,
+                    task_id=task_id,
+                    worker_id=WORKER_ID,
+                    payload={"code": result.value, "retryable": retry_decision.should_retry}
+                )
 
         except Exception as e:
             logger.exception(f"[Worker] Error processing task {task_id}: {e}")
@@ -547,28 +585,28 @@ class InstagramWorker:
             try:
                 async with AsyncSessionLocal() as session:
                     task_repo = TaskRepository(session)
-                    current_task = await task_repo.get_by_id(task_id)
-                    if current_task and current_task.status == TaskStatus.RUNNING.value:
-                        await task_repo.update_status(task_id, TaskStatus.RETRY_WAIT)
+                    await task_repo.update_status(task_id, TaskStatus.MANUAL_REVIEW, worker_id=WORKER_ID)
             except Exception as db_err:
                 logger.error(f"[Worker] Failed to update task status after error: {db_err}")
-            await event_bus.publish(EventCode.TASK_FAILED, task_id=task_id, worker_id=WORKER_ID,
-                                    payload={"error": str(e)})
+            await event_bus.publish(EventCode.TASK_FAILED, task_id=task_id, worker_id=WORKER_ID, payload={"error": str(e)})
 
-        # Brief pause between tasks
         await asyncio.sleep(1)
 
     async def _fail_task(self, task_id: str, result_code: ResultCode, reason: str,
-                         new_status: TaskStatus = TaskStatus.RETRY_WAIT, retryable: bool = True) -> None:
+                         new_status: TaskStatus = TaskStatus.RETRY_WAIT, retryable: bool = False) -> None:
+        retry_decision = RetryPolicy.classify(result_code, attempt=1, error_message=reason)
+        status_to_set = TaskStatus.RETRY_WAIT if retry_decision.should_retry else new_status
+
         async with AsyncSessionLocal() as session:
             task_repo = TaskRepository(session)
-            current_task = await task_repo.get_by_id(task_id)
-            if current_task and current_task.status == TaskStatus.RUNNING.value:
-                await task_repo.update_status(task_id, new_status)
-        await event_bus.publish(EventCode.TASK_FAILED, task_id=task_id, worker_id=WORKER_ID,
-                                payload={"code": result_code.value, "reason": reason, "retryable": retryable})
+            await task_repo.update_status(task_id, status_to_set, worker_id=WORKER_ID)
+
+        await event_bus.publish(
+            EventCode.TASK_FAILED,
+            task_id=task_id,
+            worker_id=WORKER_ID,
+            payload={"code": result_code.value, "reason": reason, "retryable": retry_decision.should_retry}
+        )
         logger.warning(f"[Worker] Task {task_id} failed: {result_code.value} — {reason}")
 
-
-# Singleton worker instance
 instagram_worker = InstagramWorker()

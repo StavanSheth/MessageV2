@@ -1,0 +1,313 @@
+import React from 'react';
+import { 
+  Activity, CheckCircle2, ShieldCheck, Eye, Clock, 
+  Send, AlertCircle, Sparkles, UserCheck, Terminal, Compass 
+} from 'lucide-react';
+import { LiveAutomationState } from '../types';
+
+interface LiveAutomationViewProps {
+  state: LiveAutomationState;
+}
+
+const STAGES = [
+  { key: 'CHECKING_LOGIN', label: 'Login Check' },
+  { key: 'NAVIGATING_PROFILE', label: 'Navigate Profile' },
+  { key: 'VERIFYING_IDENTITY', label: 'Verify Identity' },
+  { key: 'CHECKING_MESSAGE_BUTTON', label: 'Check DM Button' },
+  { key: 'OPENING_THREAD', label: 'Open Thread' },
+  { key: 'TYPING_MESSAGE', label: 'Type Text' },
+  { key: 'SENDING_MESSAGE', label: 'Send Message' },
+  { key: 'CONFIRMING_SEND', label: 'Confirm Result' },
+];
+
+export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({ state }) => {
+  const currentStageIndex = STAGES.findIndex((s) => s.key === state.stage);
+  const screenshotUrl = state.latest_screenshot
+    ? `/screenshots/${state.latest_screenshot}`
+    : null;
+
+  return (
+    <div className="space-y-6">
+      {/* Top Banner: Status + Worker Info */}
+      <div className="bg-gradient-to-r from-gray-900 via-indigo-950/40 to-gray-900 border border-indigo-500/20 rounded-2xl p-6 shadow-2xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
+          <div>
+            <div className="flex items-center space-x-3 mb-2">
+              <span className="p-2 rounded-lg bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                <Activity className="w-5 h-5 animate-pulse" />
+              </span>
+              <h2 className="text-2xl font-black text-white tracking-tight">Live Automation Control</h2>
+            </div>
+            <p className="text-sm text-gray-400 max-w-xl">
+              Real-time feed of the active visible Playwright Chrome session. Watch identity verification, DOM interactions, and message dispatch.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="bg-gray-800/80 border border-gray-700/60 rounded-xl px-4 py-2.5">
+              <span className="text-[10px] text-gray-400 uppercase tracking-wider block font-semibold">Active Worker</span>
+              <span className="text-sm font-bold text-gray-100">{state.worker_name || 'Worker-01'}</span>
+            </div>
+
+            <div className="bg-gray-800/80 border border-gray-700/60 rounded-xl px-4 py-2.5">
+              <span className="text-[10px] text-gray-400 uppercase tracking-wider block font-semibold">Browser Engine</span>
+              <span className="text-sm font-bold text-emerald-400">{state.browser_status || 'VISIBLE CHROME'}</span>
+            </div>
+
+            <div className="bg-gray-800/80 border border-gray-700/60 rounded-xl px-4 py-2.5">
+              <span className="text-[10px] text-gray-400 uppercase tracking-wider block font-semibold">Instagram Session</span>
+              <span className={`text-sm font-bold ${state.instagram_login_status === 'LOGGED_IN' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {state.instagram_login_status || 'UNKNOWN'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Dynamic Stepper Bar */}
+        <div className="mt-8 pt-6 border-t border-gray-800/80">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+            {STAGES.map((s, idx) => {
+              const isPast = currentStageIndex > idx;
+              const isCurrent = state.stage === s.key;
+              return (
+                <div
+                  key={s.key}
+                  className={`flex flex-col items-center p-2 rounded-lg border text-center transition-all ${
+                    isCurrent
+                      ? 'bg-indigo-600/30 border-indigo-400 text-indigo-300 shadow-md shadow-indigo-500/20 scale-105'
+                      : isPast
+                      ? 'bg-emerald-950/20 border-emerald-500/40 text-emerald-400'
+                      : 'bg-gray-900/40 border-gray-800 text-gray-500'
+                  }`}
+                >
+                  <div className="flex items-center space-x-1 mb-1">
+                    {isPast ? (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : isCurrent ? (
+                      <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />
+                    ) : (
+                      <span className="w-2 h-2 rounded-full bg-gray-600" />
+                    )}
+                    <span className="text-[10px] font-mono font-bold">Step {idx + 1}</span>
+                  </div>
+                  <span className="text-xs font-semibold truncate w-full">{s.label}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Main Grid: Target Contact Card + Verification Signals + Screenshot Preview */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left Column: Target Contact & Message */}
+        <div className="space-y-6">
+          <div className="bg-gray-900/80 border border-gray-800 rounded-2xl p-6 shadow-xl">
+            <div className="flex items-center justify-between pb-4 border-b border-gray-800">
+              <div className="flex items-center space-x-2">
+                <UserCheck className="w-5 h-5 text-indigo-400" />
+                <h3 className="font-bold text-white text-base">Current Target</h3>
+              </div>
+              <span className="text-xs font-mono px-2.5 py-1 rounded bg-gray-800 text-gray-300">
+                {state.current_task_id ? `Task #${state.current_task_id.slice(0, 8)}` : 'No Active Task'}
+              </span>
+            </div>
+
+            {state.current_contact ? (
+              <div className="mt-5 space-y-4">
+                <div>
+                  <span className="text-xs text-gray-400 block font-medium">Recipient Name</span>
+                  <p className="text-lg font-bold text-white mt-0.5">{state.current_contact.name || 'N/A'}</p>
+                </div>
+
+                <div>
+                  <span className="text-xs text-gray-400 block font-medium">Instagram Handle</span>
+                  <a
+                    href={state.current_contact.instagram_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-base font-mono font-semibold text-indigo-400 hover:text-indigo-300 transition-colors inline-block mt-0.5"
+                  >
+                    @{state.current_contact.username}
+                  </a>
+                </div>
+
+                <div>
+                  <span className="text-xs text-gray-400 block font-medium">Custom Message Body</span>
+                  <div className="mt-1.5 p-3.5 bg-gray-950/80 border border-gray-800 rounded-xl text-sm text-gray-200 font-sans leading-relaxed">
+                    "{state.current_contact.custom_message || 'Hey'}"
+                  </div>
+                </div>
+
+                {state.current_url && (
+                  <div>
+                    <span className="text-xs text-gray-400 block font-medium">Browser Current URL</span>
+                    <p className="text-xs font-mono text-gray-400 truncate mt-0.5 bg-gray-950 px-2 py-1.5 rounded border border-gray-800/80">
+                      {state.current_url}
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="py-12 text-center text-gray-500">
+                <Compass className="w-10 h-10 mx-auto text-gray-600 mb-2 opacity-60" />
+                <p className="text-sm">Worker is currently waiting or idle.</p>
+                <p className="text-xs text-gray-600 mt-1">Start a run to process queued contacts.</p>
+              </div>
+            )}
+          </div>
+
+          {/* Last Activity Card */}
+          <div className="bg-gray-900/80 border border-gray-800 rounded-2xl p-5 shadow-xl">
+            <div className="flex items-center space-x-2 mb-3">
+              <Terminal className="w-4 h-4 text-emerald-400" />
+              <h4 className="text-xs uppercase tracking-wider font-bold text-gray-300">Last System Event</h4>
+            </div>
+            <p className="text-sm font-mono text-emerald-300/90 bg-black/40 p-3 rounded-lg border border-gray-800 leading-snug">
+              {state.last_event || 'No recent events recorded.'}
+            </p>
+            {state.last_error && (
+              <div className="mt-3 p-3 rounded-lg bg-rose-950/40 border border-rose-800/50 text-xs font-mono text-rose-300">
+                Error: {state.last_error}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Middle Column: Multi-Signal Verification Radar */}
+        <div className="space-y-6">
+          <div className="bg-gray-900/80 border border-gray-800 rounded-2xl p-6 shadow-xl flex flex-col h-full">
+            <div className="flex items-center justify-between pb-4 border-b border-gray-800">
+              <div className="flex items-center space-x-2">
+                <ShieldCheck className="w-5 h-5 text-indigo-400" />
+                <h3 className="font-bold text-white text-base">Identity Verification</h3>
+              </div>
+              {state.verification && (
+                <span
+                  className={`text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wider ${
+                    state.verification.decision === 'HIGH_CONFIDENCE'
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                      : state.verification.decision === 'MEDIUM_CONFIDENCE'
+                      ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                      : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                  }`}
+                >
+                  {state.verification.decision}
+                </span>
+              )}
+            </div>
+
+            {state.verification ? (
+              <div className="mt-5 space-y-6 flex-1 flex flex-col justify-between">
+                {/* Score Gauge */}
+                <div className="bg-gradient-to-b from-gray-950 to-gray-900 p-5 rounded-xl border border-gray-800 text-center">
+                  <span className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Confidence Score</span>
+                  <div className="text-4xl font-black text-white mt-1">
+                    {(state.verification.confidence * 100).toFixed(0)}%
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1 max-w-xs mx-auto">
+                    {state.verification.reason}
+                  </p>
+                </div>
+
+                {/* Signals breakdown */}
+                <div className="space-y-3">
+                  <span className="text-xs text-gray-400 uppercase tracking-wider font-semibold block">
+                    Verification Signals
+                  </span>
+                  {state.verification.signals && state.verification.signals.length > 0 ? (
+                    state.verification.signals.map((sig, i) => (
+                      <div
+                        key={i}
+                        className="bg-gray-950/70 border border-gray-800/80 p-3 rounded-lg flex items-center justify-between"
+                      >
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <span className="text-xs font-bold text-gray-200 capitalize">{sig.name}</span>
+                            <span className="text-[10px] text-gray-500">weight: {sig.weight}</span>
+                          </div>
+                          <span className="text-[11px] text-gray-400 mt-0.5 block">{sig.notes || 'Signal evaluated'}</span>
+                        </div>
+                        <div className="text-right">
+                          <span
+                            className={`text-xs font-mono font-bold ${
+                              sig.score >= 0.8
+                                ? 'text-emerald-400'
+                                : sig.score >= 0.5
+                                ? 'text-amber-400'
+                                : 'text-rose-400'
+                            }`}
+                          >
+                            {(sig.score * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-xs text-gray-500 italic">No detailed signal records available.</p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="py-16 text-center text-gray-500 flex-1 flex flex-col items-center justify-center">
+                <ShieldCheck className="w-10 h-10 mx-auto text-gray-600 mb-2 opacity-50" />
+                <p className="text-sm font-medium">Awaiting profile navigation</p>
+                <p className="text-xs text-gray-600 mt-1">Signals will populate once target profile loads in browser.</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right Column: Screenshot & Browser View */}
+        <div className="space-y-6">
+          <div className="bg-gray-900/80 border border-gray-800 rounded-2xl p-6 shadow-xl flex flex-col h-full">
+            <div className="flex items-center justify-between pb-4 border-b border-gray-800">
+              <div className="flex items-center space-x-2">
+                <Eye className="w-5 h-5 text-indigo-400" />
+                <h3 className="font-bold text-white text-base">Visible Chrome Capture</h3>
+              </div>
+              <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                Live Feed
+              </span>
+            </div>
+
+            <div className="mt-5 flex-1 flex flex-col justify-center">
+              {screenshotUrl ? (
+                <div className="space-y-3">
+                  <div className="relative rounded-xl overflow-hidden border border-gray-700/80 bg-black aspect-video flex items-center justify-center shadow-inner">
+                    <img
+                      src={screenshotUrl}
+                      alt="Current Browser Screenshot"
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-gray-400 px-1">
+                    <span>Captured on current action</span>
+                    <a
+                      href={screenshotUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-indigo-400 hover:underline flex items-center space-x-1"
+                    >
+                      <span>Open Full Size</span>
+                    </a>
+                  </div>
+                </div>
+              ) : (
+                <div className="aspect-video rounded-xl border border-gray-800 bg-black/40 flex flex-col items-center justify-center p-6 text-center">
+                  <Eye className="w-10 h-10 text-gray-600 mb-2 opacity-40" />
+                  <p className="text-sm text-gray-400 font-medium">Visible Playwright Chrome Active</p>
+                  <p className="text-xs text-gray-600 mt-1 max-w-xs">
+                    Watch the actual browser window directly on your screen. Screenshots are saved at checkpoints.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};

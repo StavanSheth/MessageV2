@@ -1,0 +1,178 @@
+import asyncio
+import re
+from typing import List, Dict, Any, Tuple, Optional
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+from backend.sources.base import SourceAdapter
+from backend.sources.xlsx.adapter import LocalXlsxSource
+from backend.config.settings import settings
+
+class BrowserSpreadsheetSource(SourceAdapter):
+    def __init__(self, url: str):
+        self.url = url
+        self.playwright = None
+        self.browser = None
+        self.page = None
+
+    async def open(self) -> bool:
+        if self.page:
+            return True
+        self.playwright = await async_playwright().start()
+        # Open dedicated visible browser instance as required by the specification
+        self.browser = await self.playwright.chromium.launch(
+            headless=settings.BROWSER_HEADLESS,
+            slow_mo=settings.BROWSER_SLOW_MO
+        )
+        self.page = await self.browser.new_page()
+        await self.page.goto(self.url, wait_until="domcontentloaded", timeout=settings.BROWSER_TIMEOUT)
+        await asyncio.sleep(2)
+        return True
+
+    async def validate_access(self) -> Tuple[bool, str]:
+        try:
+            if not self.page:
+                await self.open()
+
+            current_url = self.page.url.lower()
+            page_content = (await self.page.content()).lower()
+            title = (await self.page.title()).lower()
+
+            # Check for permission denied, login required, or 403/404
+            access_prohibited_signals = [
+                "accounts.google.com/signin",
+                "accounts.google.com/v3/signin",
+                "you need access",
+                "request access",
+                "sign in to continue",
+                "access denied",
+                "403 forbidden",
+                "404 not found",
+                "permission denied"
+            ]
+
+            for signal in access_prohibited_signals:
+                if signal in current_url or signal in title or signal in page_content[:2000]:
+                    return False, f"ACCESS_PROHIBITED: {signal.capitalize()}"
+
+            return True, "ACCESSIBLE"
+        except Exception as e:
+            return False, f"SOURCE_UNAVAILABLE: {str(e)}"
+
+    async def read_records(self) -> List[Dict[str, Any]]:
+        is_accessible, reason = await self.validate_access()
+        if not is_accessible:
+            raise PermissionError(reason)
+
+        # Detect table data from HTML table or Google Sheet DOM
+        table_rows = await self.page.locator("table tr").all()
+        extracted_grid: List[List[str]] = []
+
+        if len(table_rows) > 0:
+            for row in table_rows:
+                cells = await row.locator("th, td").all_inner_texts()
+                if any(c.strip() for c in cells):
+                    extracted_grid.append([c.strip() for c in cells])
+        else:
+            # Fallback to general list or text extraction
+            lines = (await self.page.locator("body").inner_text()).split("\n")
+            extracted_grid = [[l.strip()] for l in lines if l.strip()]
+
+        if not extracted_grid:
+            return []
+
+        # Parse identical to LocalXlsxSource
+        header_row = extracted_grid[0]
+        col_map = {}
+        for idx, col in enumerate(header_row):
+            norm = LocalXlsxSource._normalize_header(col)
+            if norm:
+                col_map[norm] = idx
+
+        def find_col(*aliases):
+            for alias in aliases:
+                for norm, idx in col_map.items():
+                    if alias in norm or norm in alias:
+                        return idx
+            return None
+
+        name_idx = find_col("name", "full name", "contact", "user")
+        ig_idx = find_col("instagram url", "instagram link", "instagram id", "instagram", "username", "profile url", "ig")
+        msg_idx = find_col("message", "dm", "text", "body")
+        followers_idx = find_col("expected followers", "followers")
+        notes_idx = find_col("notes", "note")
+
+        records = []
+        for row_idx, row in enumerate(extracted_grid[1:], start=2):
+            if not any(cell for cell in row):
+                continue
+
+            raw_dict = {f"col_{i}": cell for i, cell in enumerate(row)}
+            name_val = row[name_idx] if name_idx is not None and name_idx < len(row) else ""
+            ig_val = row[ig_idx] if ig_idx is not None and ig_idx < len(row) else ""
+            msg_val = row[msg_idx] if msg_idx is not None and msg_idx < len(row) else ""
+            followers_val = None
+            if followers_idx is not None and followers_idx < len(row):
+                try:
+                    followers_val = int(re.sub(r"[^\d]", "", row[followers_idx]))
+                except Exception:
+                    followers_val = None
+            notes_val = row[notes_idx] if notes_idx is not None and notes_idx < len(row) else None
+
+            is_valid = True
+            error_msg = None
+            if not ig_val:
+                is_valid = False
+                error_msg = "Missing Instagram URL or username"
+            else:
+                ig_url, username = LocalXlsxSource._format_instagram_url(ig_val)
+                if not username:
+                    is_valid = False
+                    error_msg = f"Invalid Instagram identifier: {ig_val}"
+
+            if is_valid:
+                norm_data = {
+                    "name": name_val or username,
+                    "instagram_url": ig_url,
+                    "username": username,
+                    "expected_followers": followers_val,
+                    "message": msg_val or "Hey",
+                    "notes": notes_val
+                }
+            else:
+                norm_data = {
+                    "name": name_val or "Unknown",
+                    "instagram_url": ig_val,
+                    "username": None,
+                    "message": msg_val or "Hey",
+                    "notes": notes_val
+                }
+
+            records.append({
+                "row_number": row_idx,
+                "raw": raw_dict,
+                "normalized": norm_data,
+                "is_valid": is_valid,
+                "error": error_msg
+            })
+
+        return records
+
+    async def update_record(self, record_id: str, data: Dict[str, Any]) -> bool:
+        return True
+
+    async def sync(self) -> Dict[str, Any]:
+        records = await self.read_records()
+        valid = sum(1 for r in records if r["is_valid"])
+        return {
+            "total": len(records),
+            "valid": valid,
+            "invalid": len(records) - valid,
+            "records": records
+        }
+
+    async def close(self) -> None:
+        if self.browser:
+            await self.browser.close()
+            self.browser = None
+        if self.playwright:
+            await self.playwright.stop()
+            self.playwright = None

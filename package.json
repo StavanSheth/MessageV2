@@ -1,0 +1,15 @@
+{
+  "name": "messagev2",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Desktop/web-hybrid automation application for Instagram outreach with visible Playwright browser",
+  "scripts": {
+    "dev": "python scripts/start_dev.py",
+    "dashboard:dev": "npm --prefix apps/dashboard run dev",
+    "dashboard:build": "npm --prefix apps/dashboard run build",
+    "test": "pytest tests"
+  },
+  "workspaces": [
+    "apps/*"
+  ]
+}

@@ -1,0 +1,29 @@
+# Virtualenv
+.venv/
+venv/
+ENV/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+.DS_Store
+
+# MessageV2 Runtime Data
+data/*.db
+data/*.db-journal
+data/browser_profiles/
+data/screenshots/*.png
+data/uploads/
+!data/samples/sample_contacts.xlsx
+
+# Secrets & Environment
+.env

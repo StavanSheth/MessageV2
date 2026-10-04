@@ -12,18 +12,19 @@ interface LiveAutomationViewProps {
 }
 
 const STAGES = [
-  { key: 'CHECKING_LOGIN', label: 'Login Check' },
-  { key: 'NAVIGATING_PROFILE', label: 'Navigate Profile' },
-  { key: 'VERIFYING_IDENTITY', label: 'Verify Identity' },
-  { key: 'CHECKING_MESSAGE_BUTTON', label: 'Check DM Button' },
-  { key: 'OPENING_THREAD', label: 'Open Thread' },
-  { key: 'TYPING_MESSAGE', label: 'Type Text' },
-  { key: 'SENDING_MESSAGE', label: 'Send Message' },
-  { key: 'CONFIRMING_SEND', label: 'Confirm Result' },
+  { key: 'CHECKING_LOGIN', label: 'Login Check', aliases: ['INITIALIZING'] },
+  { key: 'OPENING_PROFILE', label: 'Open Profile', aliases: ['WAITING_FOR_PROFILE'] },
+  { key: 'VERIFYING', label: 'Verify Identity', aliases: ['EXTRACTING_PROFILE', 'CLAIMING_TASK'] },
+  { key: 'CHECKING_DM_AVAILABILITY', label: 'Check DM Button', aliases: [] },
+  { key: 'OPENING_COMPOSER', label: 'Type Message', aliases: ['PREPARING_MESSAGE'] },
+  { key: 'SENDING_MESSAGE', label: 'Send Message', aliases: [] },
+  { key: 'DETECTING_RESULT', label: 'Confirm Result', aliases: ['COMPLETED'] },
 ];
 
 export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({ state }) => {
-  const currentStageIndex = STAGES.findIndex((s) => s.key === state.stage);
+  const currentStageIndex = STAGES.findIndex(
+    (s) => s.key === state.stage || s.aliases.includes(state.stage)
+  );
   const [liveTick, setLiveTick] = useState(Date.now());
   const [feedError, setFeedError] = useState(false);
   const [isOpeningBrowser, setIsOpeningBrowser] = useState(false);

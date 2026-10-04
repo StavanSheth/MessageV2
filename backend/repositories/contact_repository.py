@@ -2,7 +2,7 @@ from typing import List, Optional
 from datetime import datetime, timezone
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from backend.database.models import Contact, SourceRecord
+from backend.database.models import Contact, SourceRecord, Task
 
 class ContactRepository:
     def __init__(self, session: AsyncSession):
@@ -42,6 +42,20 @@ class ContactRepository:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_with_tracking(self, limit: int = 1000, offset: int = 0) -> List[Contact]:
+        from sqlalchemy.orm import selectinload
+        stmt = (
+            select(Contact)
+            .options(
+                selectinload(Contact.tasks).selectinload(Task.messages)
+            )
+            .order_by(Contact.name.asc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def count(self) -> int:
         from sqlalchemy import func
         stmt = select(func.count(Contact.id))
@@ -54,4 +68,38 @@ class ContactRepository:
             updated_at=datetime.now(timezone.utc)
         ).returning(Contact)
         result = await self.session.execute(stmt)
+        await self.session.commit()
         return result.scalar_one_or_none()
+
+    async def update_messages(self, contact_id: str, message: Optional[str] = None,
+                              followup_1_message: Optional[str] = None,
+                              followup_2_message: Optional[str] = None) -> Optional[Contact]:
+        values = {"updated_at": datetime.now(timezone.utc)}
+        if message is not None:
+            values["message"] = message
+        if followup_1_message is not None:
+            values["followup_1_message"] = followup_1_message
+        if followup_2_message is not None:
+            values["followup_2_message"] = followup_2_message
+
+        stmt = update(Contact).where(Contact.id == contact_id).values(**values).returning(Contact)
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return result.scalar_one_or_none()
+
+    async def update_bulk_templates(self, default_message: Optional[str] = None,
+                                    followup_1_message: Optional[str] = None,
+                                    followup_2_message: Optional[str] = None,
+                                    apply_to_all: bool = False) -> int:
+        values = {"updated_at": datetime.now(timezone.utc)}
+        if default_message is not None:
+            values["message"] = default_message
+        if followup_1_message is not None:
+            values["followup_1_message"] = followup_1_message
+        if followup_2_message is not None:
+            values["followup_2_message"] = followup_2_message
+
+        stmt = update(Contact).values(**values)
+        res = await self.session.execute(stmt)
+        await self.session.commit()
+        return res.rowcount

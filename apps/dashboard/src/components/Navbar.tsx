@@ -37,6 +37,17 @@ export const Navbar: React.FC<NavbarProps> = ({
   const isRunning = workerStatus === 'RUNNING';
   const isPaused = workerStatus === 'PAUSED';
 
+  const isPreset = batchLimit === null || [1, 3, 5, 10, 25, 50, 100].includes(batchLimit);
+  const [isCustomMode, setIsCustomMode] = React.useState(!isPreset && batchLimit !== null);
+  const [customInput, setCustomInput] = React.useState(batchLimit ? String(batchLimit) : '7');
+
+  React.useEffect(() => {
+    if (batchLimit !== null && ![1, 3, 5, 10, 25, 50, 100].includes(batchLimit)) {
+      setIsCustomMode(true);
+      setCustomInput(String(batchLimit));
+    }
+  }, [batchLimit]);
+
   return (
     <header className="border-b border-gray-800 bg-[#0f172a]/80 backdrop-blur-md sticky top-0 z-50 px-6 py-3">
       <div className="flex items-center justify-between max-w-7xl mx-auto">
@@ -122,20 +133,56 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="flex items-center space-x-2 pl-2">
             {!isRunning && !isPaused && (
               <div className="flex items-center space-x-1.5 bg-gray-800/80 border border-gray-700/80 rounded-lg px-2.5 py-1.5">
-                <span className="text-[11px] text-gray-400 font-medium">Send:</span>
+                <span className="text-[11px] text-gray-400 font-medium">Batch:</span>
                 <select
-                  value={batchLimit === null ? 'all' : String(batchLimit)}
-                  onChange={(e) => setBatchLimit(e.target.value === 'all' ? null : Number(e.target.value))}
+                  value={isCustomMode ? 'custom' : batchLimit === null ? 'all' : String(batchLimit)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === 'custom') {
+                      setIsCustomMode(true);
+                      const parsed = parseInt(customInput, 10) || 5;
+                      setBatchLimit(parsed);
+                    } else if (val === 'all') {
+                      setIsCustomMode(false);
+                      setBatchLimit(null);
+                    } else {
+                      setIsCustomMode(false);
+                      setBatchLimit(Number(val));
+                    }
+                  }}
                   className="bg-gray-900 border border-gray-700 text-gray-200 text-xs rounded px-1.5 py-0.5 focus:outline-none focus:border-indigo-500 font-semibold cursor-pointer"
                 >
                   <option value="1">1 contact</option>
+                  <option value="3">3 contacts</option>
                   <option value="5">5 contacts</option>
                   <option value="10">10 contacts</option>
                   <option value="25">25 contacts</option>
                   <option value="50">50 contacts</option>
                   <option value="100">100 contacts</option>
                   <option value="all">Entire List (All)</option>
+                  <option value="custom">Custom No...</option>
                 </select>
+
+                {isCustomMode && (
+                  <div className="flex items-center space-x-1 pl-1 border-l border-gray-700">
+                    <input
+                      type="number"
+                      min="1"
+                      max="5000"
+                      value={customInput}
+                      onChange={(e) => {
+                        setCustomInput(e.target.value);
+                        const val = parseInt(e.target.value, 10);
+                        if (val > 0) {
+                          setBatchLimit(val);
+                        }
+                      }}
+                      className="w-14 bg-gray-950 border border-indigo-500 text-indigo-200 text-xs font-bold rounded px-1.5 py-0.5 focus:outline-none text-center"
+                      title="Enter custom number of contacts to send in this batch"
+                    />
+                    <span className="text-[10px] text-gray-400">qty</span>
+                  </div>
+                )}
               </div>
             )}
 

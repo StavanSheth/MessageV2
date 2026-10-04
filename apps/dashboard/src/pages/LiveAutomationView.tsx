@@ -197,17 +197,18 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
           <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto justify-end">
             <span className="text-xs text-gray-400 font-semibold mr-1">Batch Size:</span>
             {[
+              { label: '1', val: 1 },
+              { label: '3', val: 3 },
               { label: '5', val: 5 },
               { label: '10', val: 10 },
               { label: '25', val: 25 },
-              { label: '50', val: 50 },
               { label: 'All', val: null },
             ].map((opt) => (
               <button
                 key={opt.label}
                 disabled={state.status === 'RUNNING'}
                 onClick={() => setBatchLimit?.(opt.val)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${
                   batchLimit === opt.val
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30 ring-1 ring-indigo-400'
                     : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
@@ -216,6 +217,27 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                 {opt.label}
               </button>
             ))}
+
+            {/* Custom Number Input */}
+            <div className="flex items-center space-x-1.5 bg-gray-950/80 border border-gray-700/80 rounded-lg px-2 py-1">
+              <span className="text-[11px] text-gray-400 font-medium">Custom:</span>
+              <input
+                type="number"
+                min="1"
+                max="5000"
+                disabled={state.status === 'RUNNING'}
+                placeholder="Qty"
+                value={batchLimit !== null && ![1, 3, 5, 10, 25].includes(batchLimit) ? batchLimit : ''}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  if (val > 0) {
+                    setBatchLimit?.(val);
+                  }
+                }}
+                className="w-14 bg-gray-900 border border-gray-700 text-indigo-300 text-xs font-bold rounded px-1.5 py-0.5 focus:outline-none focus:border-indigo-500 text-center"
+                title="Type any custom number of recipients to send in this batch"
+              />
+            </div>
 
             {state.status !== 'RUNNING' && state.status !== 'PAUSED' && (
               <button

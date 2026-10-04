@@ -55,14 +55,29 @@ export interface Contact {
   name?: string;
   instagram_url: string;
   username: string;
+  message?: string;
+  custom_message?: string;
+  followup_1_message?: string;
+  followup_2_message?: string;
   expected_followers?: number;
   extracted_followers?: number;
-  custom_message?: string;
   verification_status: string;
   verification_confidence?: number;
   has_replied: boolean;
+  replied_status?: string;
   replied_at?: string;
+  notes?: string;
+  // Outreach & Follow-up Tracking
+  first_message_status?: string;
+  first_message_sent_at?: string | null;
+  followup_1_status?: string;
+  followup_1_scheduled_at?: string | null;
+  followup_1_sent_at?: string | null;
+  followup_2_status?: string;
+  followup_2_scheduled_at?: string | null;
+  followup_2_sent_at?: string | null;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface Task {

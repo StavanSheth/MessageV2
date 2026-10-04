@@ -63,11 +63,56 @@ export async function fetchContacts(): Promise<Contact[]> {
   return res.json();
 }
 
-export async function toggleReplied(contactId: string, hasReplied: boolean): Promise<Contact> {
-  const res = await fetch(`${BASE_URL}/api/contacts/${contactId}/replied`, {
-    method: 'PATCH',
+export async function updateContactMessages(
+  contactId: string,
+  messages: {
+    message?: string;
+    followup_1_message?: string;
+    followup_2_message?: string;
+  }
+): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/contacts/${contactId}/messages`, {
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ has_replied: hasReplied }),
+    body: JSON.stringify(messages),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to update messages');
+  }
+  return res.json();
+}
+
+export async function fetchMessageTemplates(): Promise<{
+  default_message: string;
+  followup_1_message: string;
+  followup_2_message: string;
+}> {
+  const res = await fetch(`${BASE_URL}/api/contacts/templates`);
+  return res.json();
+}
+
+export async function applyBulkTemplates(data: {
+  default_message?: string;
+  followup_1_message?: string;
+  followup_2_message?: string;
+  apply_to_all?: boolean;
+}): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/contacts/templates/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to apply templates');
+  }
+  return res.json();
+}
+
+export async function toggleReplied(contactId: string, hasReplied: boolean): Promise<Contact> {
+  const res = await fetch(`${BASE_URL}/api/contacts/${contactId}/replied?status=${hasReplied ? 'YES' : 'NO'}`, {
+    method: 'PATCH',
   });
   return res.json();
 }

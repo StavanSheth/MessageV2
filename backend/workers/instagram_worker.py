@@ -317,6 +317,16 @@ class InstagramWorker:
         message_body = contact.message or settings.DEFAULT_MESSAGE
 
         try:
+            # Ensure active page is refreshed and synchronized
+            active_page = await self.browser_worker.get_active_instagram_page(prefer_target_url=contact.instagram_url)
+            if active_page and not active_page.is_closed():
+                self.browser_worker.page = active_page
+                adapter.page = active_page
+                try:
+                    await adapter.page.bring_to_front()
+                except Exception:
+                    pass
+
             # ── Open Profile ──────────────────────────────────
             await self._set_stage(AutomationStage.OPENING_PROFILE, contact.name, contact.instagram_url, task_id)
             await event_bus.publish(EventCode.TASK_STARTED, task_id=task_id, contact_name=contact.name,

@@ -75,20 +75,17 @@ class BrowserWorker:
                     try:
                         browser = await self.playwright.chromium.connect_over_cdp(cdp_url)
                         self.context = browser.contexts[0]
-                        # Check for existing Instagram tab (preserve localhost dashboard tabs)
-                        instagram_page = None
+                        # Check for existing active Instagram tab (preserve localhost dashboard tabs)
+                        active_ig = await self.get_active_instagram_page()
                         blank_page = None
                         for p in self.context.pages:
-                            if "instagram.com" in p.url:
-                                instagram_page = p
-                                break
-                            elif "localhost" in p.url or "127.0.0.1" in p.url:
+                            if "localhost" in p.url or "127.0.0.1" in p.url:
                                 continue
                             elif p.url in ["about:blank", "chrome://newtab/"]:
                                 blank_page = p
 
-                        if instagram_page:
-                            self.page = instagram_page
+                        if active_ig:
+                            self.page = active_ig
                         elif blank_page:
                             self.page = blank_page
                             try:
@@ -220,14 +217,71 @@ class BrowserWorker:
             "is_running": self.is_running
         }
 
-    async def capture_live_screenshot(self) -> Optional[bytes]:
-        if not self.page or self.page.is_closed():
+    async def get_active_instagram_page(self, prefer_target_url: Optional[str] = None) -> Optional[Page]:
+        """
+        Dynamically finds the active/frontmost Instagram tab in Chrome,
+        resolving mismatches when multiple Instagram tabs are open.
+        """
+        if not self.context or not self.context.pages:
+            return None
+
+        # 1. If actively working on a target URL, prefer the page matching that target
+        if prefer_target_url:
+            clean_target = prefer_target_url.split("?")[0].rstrip("/").lower()
+            for p in self.context.pages:
+                if not p.is_closed():
+                    clean_p = p.url.split("?")[0].rstrip("/").lower()
+                    if clean_target and clean_target in clean_p:
+                        return p
+
+        # 2. Query Chrome DevTools Protocol /json (targets are ordered MRU: active/focused tab first)
+        cdp_host = check_cdp_endpoint()
+        if cdp_host:
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=0.5) as client:
+                    r = await client.get(f"{cdp_host}/json")
+                    if r.status_code == 200:
+                        targets = r.json()
+                        ig_targets = [
+                            t for t in targets
+                            if t.get("type") == "page" and "instagram.com" in t.get("url", "").lower()
+                        ]
+                        if ig_targets:
+                            active_url = ig_targets[0].get("url")
+                            clean_active = active_url.split("?")[0].rstrip("/").lower()
+                            for p in self.context.pages:
+                                if not p.is_closed():
+                                    clean_p = p.url.split("?")[0].rstrip("/").lower()
+                                    if clean_active == clean_p or clean_active in p.url.lower():
+                                        return p
+            except Exception:
+                pass
+
+        # 3. Fallback: current self.page if alive and on Instagram
+        if self.page and not self.page.is_closed() and "instagram.com" in self.page.url:
+            return self.page
+
+        # 4. Fallback: any open Instagram page in context
+        for p in self.context.pages:
+            if not p.is_closed() and "instagram.com" in p.url:
+                return p
+
+        return self.page
+
+    async def capture_live_screenshot(self, target_url: Optional[str] = None) -> Optional[bytes]:
+        if not self.context or not self.page or self.page.is_closed():
             cdp_url = check_cdp_endpoint()
             if cdp_url:
                 try:
                     await self.start()
                 except Exception:
                     pass
+
+        # Synchronize with the currently active or target Instagram tab
+        active_page = await self.get_active_instagram_page(prefer_target_url=target_url)
+        if active_page and not active_page.is_closed():
+            self.page = active_page
 
         if not self.page or self.page.is_closed():
             return None

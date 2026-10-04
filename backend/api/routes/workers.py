@@ -47,7 +47,8 @@ async def get_screenshot(filename: str):
 @router.get("/api/browser/live_feed")
 async def get_browser_live_feed():
     bw = instagram_worker.browser_worker
-    img_bytes = await bw.capture_live_screenshot()
+    target_url = instagram_worker.current_instagram if instagram_worker.status.value == "RUNNING" else None
+    img_bytes = await bw.capture_live_screenshot(target_url=target_url)
     if img_bytes:
         return Response(
             content=img_bytes,
@@ -63,6 +64,19 @@ async def get_browser_live_feed():
 @router.post("/api/browser/open")
 async def open_visible_browser():
     """Forces open or foregrounds the native Chrome browser window on the user desktop."""
+    from backend.automation.instagram.browser import check_cdp_endpoint
+    cdp_url = check_cdp_endpoint()
+    
+    # If Chrome with CDP is already active, simply bring existing Instagram tab to front
+    if cdp_url:
+        try:
+            page = await instagram_worker.browser_worker.get_active_instagram_page()
+            if page and not page.is_closed():
+                await page.bring_to_front()
+                return {"status": "foregrounded"}
+        except Exception:
+            pass
+
     if os.name == "nt":
         import subprocess
         from backend.automation.instagram.browser import get_chrome_executable

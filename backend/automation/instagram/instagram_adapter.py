@@ -82,6 +82,10 @@ class InstagramAdapter:
     async def open_profile(self, profile_url: str) -> Tuple[bool, ResultCode, str]:
         """Navigate to target profile and verify page validity."""
         try:
+            try:
+                await self.page.bring_to_front()
+            except Exception:
+                pass
             await self.page.goto(profile_url, wait_until="domcontentloaded", timeout=25000)
             await asyncio.sleep(2)
             await self.dismiss_popups()

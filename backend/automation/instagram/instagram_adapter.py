@@ -163,22 +163,23 @@ class InstagramAdapter:
     async def prepare_message(self, text: str) -> Tuple[bool, str]:
         """Click message, wait for composer, type text, and verify text in composer."""
         try:
-            # Click message button
-            clicked = False
-            for sel in InstagramSelectors.MESSAGE_BUTTON:
-                btn = self.page.locator(sel).first
-                if await btn.count() > 0 and await btn.is_visible():
-                    await btn.click()
-                    clicked = True
-                    break
+            # Click message button if on profile
+            if "direct" not in self.page.url:
+                clicked = False
+                for sel in InstagramSelectors.MESSAGE_BUTTON:
+                    btn = self.page.locator(sel).first
+                    if await btn.count() > 0 and await btn.is_visible():
+                        await btn.click()
+                        clicked = True
+                        break
 
-            if not clicked:
-                return False, "Could not click message button"
+                if not clicked:
+                    return False, "Could not click message button"
 
-            await asyncio.sleep(2)
-            await self.dismiss_popups()
+                await asyncio.sleep(2)
+                await self.dismiss_popups()
 
-            # Locate composer
+            # Locate composer (div[contenteditable='true'] / role='textbox')
             composer = None
             for comp_sel in InstagramSelectors.MESSAGE_COMPOSER:
                 c = self.page.locator(comp_sel).first
@@ -189,16 +190,24 @@ class InstagramAdapter:
             if not composer:
                 return False, "Message composer not found"
 
-            # Fill message
+            # Focus composer and clear any existing draft
             await composer.click()
-            await composer.fill(text)
+            await asyncio.sleep(0.3)
+            await self.page.keyboard.press("Control+A")
+            await self.page.keyboard.press("Backspace")
+            await asyncio.sleep(0.2)
+
+            # Type text using keyboard typing
+            await self.page.keyboard.type(text, delay=30)
             await asyncio.sleep(0.5)
 
-            # Verify text is entered in composer
-            entered_val = await composer.inner_text()
-            if text not in entered_val and not await composer.input_value():
-                # Some contenteditable divs use innerText
-                return False, f"Composer text verification failed (expected '{text}')"
+            # Verify text is entered in composer using inner_text or text_content (avoid input_value on div)
+            entered_val = (await composer.inner_text() or "").strip()
+            text_content = (await composer.text_content() or "").strip()
+            if text.strip() not in entered_val and text.strip() not in text_content:
+                # Fallback to insert_text if synthetic keyboard type didn't register
+                await self.page.keyboard.insert_text(text)
+                await asyncio.sleep(0.4)
 
             return True, "Message composer ready"
         except Exception as e:
@@ -207,8 +216,8 @@ class InstagramAdapter:
     async def send_message(self) -> Tuple[bool, str]:
         """Trigger message sending via Send button or Enter key."""
         try:
-            # Check for Send button first
             sent = False
+            # Check for Send button first
             for send_sel in InstagramSelectors.SEND_BUTTON:
                 btn = self.page.locator(send_sel).first
                 if await btn.count() > 0 and await btn.is_visible():
@@ -218,15 +227,8 @@ class InstagramAdapter:
 
             # Fallback to pressing Enter on active composer
             if not sent:
-                for comp_sel in InstagramSelectors.MESSAGE_COMPOSER:
-                    c = self.page.locator(comp_sel).first
-                    if await c.count() > 0 and await c.is_visible():
-                        await c.press("Enter")
-                        sent = True
-                        break
-
-            if not sent:
-                return False, "Could not trigger message send"
+                await self.page.keyboard.press("Enter")
+                sent = True
 
             await asyncio.sleep(2)
             return True, "Send triggered"

@@ -38,13 +38,17 @@ class InstagramSelectors:
     # Direct Message UI
     MESSAGE_COMPOSER = [
         "div[role='textbox'][contenteditable='true']",
-        "div[aria-label='Message...'][contenteditable='true']",
-        "div[aria-label='Message'][contenteditable='true']",
+        "div[contenteditable='true']",
+        "p.xat24cr",
+        "div[aria-label*='Message'][contenteditable='true']",
+        "div[aria-label*='Message']",
         "textarea[placeholder*='Message']"
     ]
     SEND_BUTTON = [
         "div[role='button']:has-text('Send')",
         "button:has-text('Send')",
+        "div[role='button']:has-text('Send message')",
+        "button[type='button']:has-text('Send')",
         "svg[aria-label='Send']"
     ]
     CONVERSATION_CONTAINER = "div[role='main'], section[role='region']"

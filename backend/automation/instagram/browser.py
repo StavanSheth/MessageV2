@@ -63,7 +63,7 @@ class BrowserWorker:
 
                 if not cdp_url:
                     chrome_bin = get_chrome_executable()
-                    cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --profile-directory="Profile 4" --restore-last-session https://www.instagram.com'
+                    cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --profile-directory="Profile 4" --restore-last-session http://localhost:5173 https://www.instagram.com'
                     subprocess.Popen(cmd, shell=True)
                     for _ in range(15):
                         await asyncio.sleep(0.4)
@@ -75,18 +75,34 @@ class BrowserWorker:
                     try:
                         browser = await self.playwright.chromium.connect_over_cdp(cdp_url)
                         self.context = browser.contexts[0]
-                        # Check for existing Instagram tab
+                        # Check for existing Instagram tab (preserve localhost dashboard tabs)
                         instagram_page = None
+                        blank_page = None
                         for p in self.context.pages:
                             if "instagram.com" in p.url:
                                 instagram_page = p
                                 break
-                        self.page = instagram_page or (self.context.pages[0] if self.context.pages else await self.context.new_page())
-                        if "instagram.com" not in self.page.url:
+                            elif "localhost" in p.url or "127.0.0.1" in p.url:
+                                continue
+                            elif p.url in ["about:blank", "chrome://newtab/"]:
+                                blank_page = p
+
+                        if instagram_page:
+                            self.page = instagram_page
+                        elif blank_page:
+                            self.page = blank_page
                             try:
                                 await self.page.goto("https://www.instagram.com", wait_until="domcontentloaded", timeout=settings.BROWSER_TIMEOUT)
                             except Exception:
                                 pass
+                        else:
+                            # Do NOT overwrite localhost dashboard tabs! Open a new tab in the same Chrome window!
+                            self.page = await self.context.new_page()
+                            try:
+                                await self.page.goto("https://www.instagram.com", wait_until="domcontentloaded", timeout=settings.BROWSER_TIMEOUT)
+                            except Exception:
+                                pass
+
                         try:
                             await self.page.bring_to_front()
                         except Exception:
@@ -121,9 +137,22 @@ class BrowserWorker:
                     no_viewport=True
                 )
 
-            # Get or create page
-            if len(self.context.pages) > 0:
-                self.page = self.context.pages[0]
+            # Get or create page (protect localhost dashboard tabs)
+            instagram_page = None
+            blank_page = None
+            for p in self.context.pages:
+                if "instagram.com" in p.url:
+                    instagram_page = p
+                    break
+                elif "localhost" in p.url or "127.0.0.1" in p.url:
+                    continue
+                elif p.url in ["about:blank", "chrome://newtab/"]:
+                    blank_page = p
+
+            if instagram_page:
+                self.page = instagram_page
+            elif blank_page:
+                self.page = blank_page
             else:
                 self.page = await self.context.new_page()
 

@@ -67,7 +67,7 @@ async def open_visible_browser():
         import subprocess
         from backend.automation.instagram.browser import get_chrome_executable
         chrome_bin = get_chrome_executable()
-        subprocess.Popen(f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --profile-directory="Profile 4" --restore-last-session https://www.instagram.com', shell=True)
+        subprocess.Popen(f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --profile-directory="Profile 4" --restore-last-session http://localhost:5173 https://www.instagram.com', shell=True)
     try:
         await instagram_worker.browser_worker.start()
         return {"status": "opened"}

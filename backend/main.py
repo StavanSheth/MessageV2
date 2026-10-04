@@ -36,12 +36,12 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized.")
 
-    # Run startup recovery: mark leftover RUNNING tasks as INTERRUPTED
+    # Run startup recovery: safely reconcile any in-flight or interrupted tasks
     async with AsyncSessionLocal() as session:
         recovery = RecoveryService(session)
-        affected = await recovery.reconcile_interrupted()
+        affected = await recovery.reconcile_on_startup()
         if affected:
-            logger.warning(f"Recovery: {len(affected)} interrupted task(s) found and marked: {affected}")
+            logger.info(f"Startup recovery complete: {affected}")
 
     logger.info(f"Backend ready on http://{settings.HOST}:{settings.PORT}")
     yield

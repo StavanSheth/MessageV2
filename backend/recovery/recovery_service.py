@@ -86,6 +86,8 @@ class RecoveryService:
         await self.session.commit()
         return affected
 
+    reconcile_interrupted = reconcile_on_startup
+
     async def reconcile_task_with_conversation(
         self,
         task_id: str,

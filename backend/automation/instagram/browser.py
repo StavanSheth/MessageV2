@@ -89,9 +89,8 @@ class BrowserWorker:
 
             self.playwright = await async_playwright().start()
 
-            # On Windows, try connecting to active Chrome if open via CDP (e.g. open_chrome.bat)
+            # Prioritize connecting to Desktop Chrome (zero cmd.exe)
             if os.name == "nt":
-                import subprocess
                 cdp_url = check_cdp_endpoint()
 
                 if not cdp_url:

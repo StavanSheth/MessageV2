@@ -104,7 +104,7 @@ export const ChromeProfileSelector: React.FC<ChromeProfileSelectorProps> = ({
             type="button"
             onClick={handleLaunch}
             disabled={isLaunching}
-            title="Launch Chrome Live on Screen"
+            title="Open Desktop Chrome Live (Default, Zero cmd)"
             className="flex items-center space-x-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg px-2.5 py-1.5 text-xs font-bold transition shadow-sm hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50"
           >
             {isLaunching ? (
@@ -112,7 +112,7 @@ export const ChromeProfileSelector: React.FC<ChromeProfileSelectorProps> = ({
             ) : (
               <Monitor className="w-3.5 h-3.5" />
             )}
-            <span className="hidden sm:inline">Live Screen</span>
+            <span className="hidden sm:inline">Desktop Chrome</span>
           </button>
         </div>
 
@@ -257,7 +257,7 @@ export const ChromeProfileSelector: React.FC<ChromeProfileSelectorProps> = ({
             ) : (
               <Monitor className="w-4 h-4" />
             )}
-            <span>Launch Chrome Live (On Screen)</span>
+            <span>Open Desktop Chrome (Default)</span>
           </button>
         </div>
       </div>

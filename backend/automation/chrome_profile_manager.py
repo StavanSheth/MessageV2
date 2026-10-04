@@ -152,37 +152,55 @@ class ChromeProfileManager:
         logger.info(f"Switched active Chrome profile to '{profile_id}'")
         return self.get_active_profile()
 
-    def get_or_create_junction_user_data(self) -> Path:
-        """
-        Creates an NTFS junction pointing directly to the user's real Chrome User Data directory.
-        This provides instant, zero-copy access to the user's authentic Chrome profiles, extensions,
-        cookies, and Instagram login sessions, while allowing Chrome to open with port 9222 enabled.
-        """
-        junction_path = DATA_DIR / "chrome_junction"
-        if not junction_path.exists() and os.name == "nt":
-            try:
-                import _winapi
-                _winapi.CreateJunction(str(self._user_data_path), str(junction_path))
-                logger.info(f"Created Chrome User Data junction at {junction_path}")
-            except Exception as e:
-                logger.debug(f"Could not create junction, falling back to direct path: {e}")
-
-        target_dir = junction_path if junction_path.exists() else self._user_data_path
-
-        # Clear any stale lockfile in the junction path
+    def get_automation_user_data_path(self) -> Path:
+        """Returns the isolated User Data path for Desktop Chrome Automation."""
         if os.name == "nt":
-            for lock_name in ["lockfile", "SingletonLock", "LOCK"]:
-                lock_file = target_dir / lock_name
-                if lock_file.exists():
-                    try:
-                        lock_file.unlink()
-                    except Exception:
-                        pass
-        return target_dir
+            local_app_data = os.environ.get("LOCALAPPDATA", "")
+            if local_app_data:
+                auto_path = Path(local_app_data) / "Google" / "Chrome" / "User Data - Automation"
+                auto_path.mkdir(parents=True, exist_ok=True)
+                return auto_path
+        return Path(settings.USER_DATA_DIR)
 
     def sync_profile_to_live_dir(self, profile_id: str) -> Path:
-        """Alias for backward compatibility - points to authentic user data junction."""
-        return self.get_or_create_junction_user_data()
+        """Ensures the automation profile directory exists without creating any junctions or locks."""
+        target_dir = self.get_automation_user_data_path()
+        (target_dir / profile_id).mkdir(parents=True, exist_ok=True)
+        return target_dir
+
+    def ensure_desktop_shortcut(self) -> Optional[Path]:
+        """Creates or updates the Desktop Chrome shortcut on the user's Windows desktop."""
+        if os.name != "nt":
+            return None
+        try:
+            desktop_dir = Path(os.environ.get("USERPROFILE", "")) / "Desktop"
+            if not desktop_dir.exists():
+                return None
+            shortcut_path = desktop_dir / "Google Chrome (Automation).lnk"
+            from backend.automation.instagram.browser import get_chrome_executable
+            chrome_bin = get_chrome_executable()
+            auto_user_data = self.get_automation_user_data_path()
+            target_profile = self._active_profile_id or "Default"
+            args = (
+                f'--user-data-dir="{auto_user_data}" '
+                f'--profile-directory="{target_profile}" '
+                f'--remote-debugging-port=9222 '
+                f'--remote-allow-origins=* '
+                f'--start-maximized '
+                f'http://localhost:5173 https://www.instagram.com'
+            )
+            ps_script = f"""
+            $ws = New-Object -ComObject WScript.Shell
+            $s = $ws.CreateShortcut('{shortcut_path}')
+            $s.TargetPath = '{chrome_bin}'
+            $s.Arguments = '{args}'
+            $s.Save()
+            """
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=5)
+            return shortcut_path
+        except Exception as e:
+            logger.debug(f"Could not create desktop shortcut: {e}")
+            return None
 
     async def sync_from_db(self, session) -> str:
         """Loads and syncs the persistent default Chrome profile from the database."""
@@ -225,49 +243,41 @@ class ChromeProfileManager:
         chrome_bin = get_chrome_executable()
         cdp_url = check_cdp_endpoint()
 
-        # If Chrome with port 9222 is not already running, use native user data junction
-        if not cdp_url and os.name == "nt":
-            user_data_target = self.get_or_create_junction_user_data()
-            bat_path = Path("open_chrome.bat").resolve()
+        # Prioritize already-running Desktop Chrome session on port 9222
+        if cdp_url:
+            logger.info(f"Prioritizing active Desktop Chrome session at {cdp_url}")
+            return {
+                "status": "connected",
+                "cdp_url": cdp_url,
+                "profile": self.get_active_profile(),
+                "chrome_binary": chrome_bin,
+                "mode": "desktop",
+                "live_on_screen": True
+            }
 
-            bat_content = (
-                "@echo off\r\n"
-                "setlocal\r\n\r\n"
-                "set \"TARGET_PROFILE=" + target_profile + "\"\r\n"
-                "if not \"%~1\"==\"\" set \"TARGET_PROFILE=%~1\"\r\n\r\n"
-                "title MessageV2 - Live Visible Chrome Launcher (%TARGET_PROFILE%)\r\n"
-                "echo ========================================================\r\n"
-                "echo   Launching Visible Google Chrome for Live Automation\r\n"
-                "echo   Profile: %TARGET_PROFILE% (Existing Chrome Profile)\r\n"
-                "echo   Port: 9222 (DevTools Protocol)\r\n"
-                "echo ========================================================\r\n"
-                "echo.\r\n"
-                "echo Launching Google Chrome live on your screen...\r\n"
-                f'start "" "{chrome_bin}" --user-data-dir="{user_data_target}" --profile-directory="%TARGET_PROFILE%" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --no-first-run --no-default-browser-check --restore-last-session http://localhost:5173 https://www.instagram.com\r\n'
-                "echo.\r\n"
-                "echo Chrome has been launched live on your screen!\r\n"
+        # If Desktop Chrome with port 9222 is not already running, launch natively via ShellExecute (zero cmd.exe)
+        if os.name == "nt":
+            auto_user_data = self.get_automation_user_data_path()
+            self.ensure_desktop_shortcut()
+            self.sync_profile_to_live_dir(target_profile)
+
+            args = (
+                f'--user-data-dir="{auto_user_data}" '
+                f'--profile-directory="{target_profile}" '
+                f'--remote-debugging-port=9222 '
+                f'--remote-allow-origins=* '
+                f'--start-maximized '
+                f'--no-first-run '
+                f'--no-default-browser-check '
+                f'http://localhost:5173 https://www.instagram.com'
             )
-            try:
-                bat_path.write_text(bat_content, encoding="utf-8")
-            except Exception:
-                pass
 
-            # Launch interactively onto the user's active desktop WinSta0\Default
             try:
-                subprocess.run(
-                    [
-                        "schtasks", "/create", "/tn", "MessageV2_LaunchChrome",
-                        "/tr", str(bat_path), "/sc", "once", "/st", "23:59", "/it", "/f"
-                    ],
-                    capture_output=True, timeout=3
-                )
-                subprocess.run(
-                    ["schtasks", "/run", "/tn", "MessageV2_LaunchChrome"],
-                    capture_output=True, timeout=3
-                )
-            except Exception:
-                cmd = f'cmd.exe /c start "" "{chrome_bin}" --user-data-dir="{user_data_target}" --profile-directory="{target_profile}" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --no-first-run --no-default-browser-check --restore-last-session http://localhost:5173 https://www.instagram.com'
-                subprocess.Popen(cmd, shell=True)
+                # Pure Windows native launch (identical to desktop icon click, zero cmd.exe)
+                os.startfile(chrome_bin, arguments=args)
+                logger.info("Launched Desktop Chrome via native Windows ShellExecute (no cmd)")
+            except Exception as e:
+                logger.warning(f"Native desktop startfile error: {e}")
 
             # Wait for CDP endpoint to become ready
             for _ in range(12):

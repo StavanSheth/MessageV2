@@ -1,15 +1,14 @@
 @echo off
-set "CHROME_PROFILE=Default"
-if not "%~1"=="" set "CHROME_PROFILE=%~1"
+setlocal
 
-title MessageV2 - Visible Chrome Launcher (%CHROME_PROFILE%)
+title MessageV2 - Live Visible Chrome Launcher
 echo ========================================================
-echo   Launching Your Existing Logged-in Chrome (%CHROME_PROFILE%)
-echo   User: Stavan Sheth (stavanasheth@gmail.com)
+echo   Launching Visible Google Chrome for Live Automation
+echo   Profile: Stavan Sheth (Live Synced Profile)
+echo   Port: 9222 (DevTools Protocol)
 echo ========================================================
 echo.
-echo Launching Google Chrome with profile "%CHROME_PROFILE%", port 9222, and both Dashboard + Instagram...
-start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --profile-directory="%CHROME_PROFILE%" --restore-last-session http://localhost:5173 https://www.instagram.com
+echo Launching Google Chrome live on your screen...
+start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="%~dp0data\chrome_live_profile" --profile-directory="Default" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --no-first-run --no-default-browser-check http://localhost:5173 https://www.instagram.com
 echo.
-echo Chrome has been launched live on screen with profile "%CHROME_PROFILE%"!
-echo.
+echo Chrome has been launched live on your screen!

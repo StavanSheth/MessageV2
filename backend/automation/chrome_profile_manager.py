@@ -152,6 +152,65 @@ class ChromeProfileManager:
         logger.info(f"Switched active Chrome profile to '{profile_id}'")
         return self.get_active_profile()
 
+    def sync_profile_to_live_dir(self, profile_id: str) -> Path:
+        """
+        Syncs session, cookies, and local state from the user's real Chrome profile
+        into the local live profile directory (data/chrome_live_profile).
+        This allows Chrome to open with port 9222 enabled while preserving the user's
+        existing Instagram logins without file lock conflicts.
+        """
+        import shutil
+        dst_user_data = DATA_DIR / "chrome_live_profile"
+        dst_user_data.mkdir(parents=True, exist_ok=True)
+
+        src_local_state = self._user_data_path / "Local State"
+        dst_local_state = dst_user_data / "Local State"
+        if src_local_state.exists():
+            try:
+                shutil.copy2(src_local_state, dst_local_state)
+            except Exception as e:
+                logger.debug(f"Could not copy Local State: {e}")
+
+        src_prof = self._user_data_path / profile_id
+        dst_prof = dst_user_data / profile_id
+        dst_prof.mkdir(parents=True, exist_ok=True)
+
+        items_to_copy = [
+            "Preferences",
+            "Secure Preferences",
+            "Login Data",
+            "Web Data",
+        ]
+        dirs_to_copy = [
+            "Network",
+            "Local Storage",
+            "Session Storage",
+            "Sessions",
+            "IndexedDB",
+        ]
+
+        for item in items_to_copy:
+            s = src_prof / item
+            d = dst_prof / item
+            if s.exists():
+                try:
+                    shutil.copy2(s, d)
+                except Exception:
+                    pass
+
+        for dname in dirs_to_copy:
+            s = src_prof / dname
+            d = dst_prof / dname
+            if s.exists():
+                try:
+                    if d.exists():
+                        shutil.rmtree(d, ignore_errors=True)
+                    shutil.copytree(s, d, dirs_exist_ok=True)
+                except Exception:
+                    pass
+
+        return dst_user_data
+
     async def launch_chrome_live(self, profile_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Launches Google Chrome visibly on screen with the specified or active profile,
@@ -166,14 +225,51 @@ class ChromeProfileManager:
         chrome_bin = get_chrome_executable()
         cdp_url = check_cdp_endpoint()
 
-        # If Chrome with port 9222 is not already running, launch it
+        # If Chrome with port 9222 is not already running, sync profile and launch it
         if not cdp_url and os.name == "nt":
-            cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --profile-directory="{target_profile}" --restore-last-session http://localhost:5173 https://www.instagram.com'
-            logger.info(f"Launching visible Chrome: {cmd}")
-            subprocess.Popen(cmd, shell=True)
+            live_dir = self.sync_profile_to_live_dir(target_profile)
+            bat_path = Path("open_chrome.bat").resolve()
+
+            # Ensure bat file has the latest target profile and live profile path
+            bat_content = (
+                "@echo off\r\n"
+                "setlocal\r\n\r\n"
+                "title MessageV2 - Live Visible Chrome Launcher\r\n"
+                "echo ========================================================\r\n"
+                f"echo   Launching Visible Google Chrome for Live Automation\r\n"
+                f"echo   Profile: {target_profile} (Live Synced Profile)\r\n"
+                "echo   Port: 9222 (DevTools Protocol)\r\n"
+                "echo ========================================================\r\n"
+                "echo.\r\n"
+                "echo Launching Google Chrome live on your screen...\r\n"
+                f'start "" "{chrome_bin}" --user-data-dir="{live_dir}" --profile-directory="{target_profile}" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --no-first-run --no-default-browser-check http://localhost:5173 https://www.instagram.com\r\n'
+                "echo.\r\n"
+                "echo Chrome has been launched live on your screen!\r\n"
+            )
+            try:
+                bat_path.write_text(bat_content, encoding="utf-8")
+            except Exception:
+                pass
+
+            # Launch interactively onto the user's active desktop WinSta0\Default
+            try:
+                subprocess.run(
+                    [
+                        "schtasks", "/create", "/tn", "MessageV2_LaunchChrome",
+                        "/tr", str(bat_path), "/sc", "once", "/st", "23:59", "/it", "/f"
+                    ],
+                    capture_output=True, timeout=3
+                )
+                subprocess.run(
+                    ["schtasks", "/run", "/tn", "MessageV2_LaunchChrome"],
+                    capture_output=True, timeout=3
+                )
+            except Exception:
+                cmd = f'cmd.exe /c start "" "{chrome_bin}" --user-data-dir="{live_dir}" --profile-directory="{target_profile}" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --no-first-run --no-default-browser-check http://localhost:5173 https://www.instagram.com'
+                subprocess.Popen(cmd, shell=True)
 
             # Wait for CDP endpoint to become ready
-            for _ in range(8):
+            for _ in range(12):
                 await asyncio.sleep(0.4)
                 cdp_url = check_cdp_endpoint()
                 if cdp_url:
@@ -196,23 +292,45 @@ class ChromeProfileManager:
         if os.name != "nt":
             return False
         try:
-            ps_script = (
-                "$procs = Get-Process -Name chrome -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }; "
-                "if ($procs) { "
-                "  $sig = @'\n"
-                "  [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);\n"
-                "  [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);\n"
-                "  [DllImport(\"user32.dll\")] public static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);\n"
-                "'@;\n"
-                "  $w = Add-Type -MemberDefinition $sig -Name ('Win32Fore_' + (Get-Random)) -Namespace 'Win32' -PassThru; "
-                "  foreach ($p in $procs) { "
-                "    $w::ShowWindow($p.MainWindowHandle, 3); " # SW_MAXIMIZE = 3, SW_RESTORE = 9
-                "    $w::SetForegroundWindow($p.MainWindowHandle); "
-                "    $w::SwitchToThisWindow($p.MainWindowHandle, $true); "
-                "  } "
-                "}"
-            )
-            subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=3)
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            WM_SYSCOMMAND = 0x0112
+            SC_RESTORE = 0xF120
+            SC_MAXIMIZE = 0xF030
+            SW_RESTORE = 9
+            SW_SHOWMAXIMIZED = 3
+
+            try:
+                hwinsta = user32.OpenWindowStationA(b"WinSta0", False, 0x10000000)
+                if hwinsta:
+                    user32.SetProcessWindowStation(hwinsta)
+                hdesk = user32.OpenDesktopA(b"Default", 0, False, 0x10000000)
+                if hdesk:
+                    user32.SetThreadDesktop(hdesk)
+            except Exception:
+                pass
+
+            def enum_cb(hwnd, lparam):
+                if user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length > 0:
+                        buff = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buff, length + 1)
+                        title = buff.value.lower()
+                        if "chrome" in title or "instagram" in title or "dashboard" in title:
+                            # PostMessage SC_RESTORE and SC_MAXIMIZE directly to Chrome's window message loop
+                            user32.PostMessageW(hwnd, WM_SYSCOMMAND, SC_RESTORE, 0)
+                            user32.PostMessageW(hwnd, WM_SYSCOMMAND, SC_MAXIMIZE, 0)
+                            user32.ShowWindowAsync(hwnd, SW_RESTORE)
+                            user32.ShowWindow(hwnd, SW_SHOWMAXIMIZED)
+                            user32.SetForegroundWindow(hwnd)
+                            user32.BringWindowToTop(hwnd)
+                            user32.SwitchToThisWindow(hwnd, True)
+                return True
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+            user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
             return True
         except Exception as e:
             logger.debug(f"Could not foreground Chrome window: {e}")
@@ -220,3 +338,4 @@ class ChromeProfileManager:
 
 # Global singleton
 chrome_profile_manager = ChromeProfileManager()
+

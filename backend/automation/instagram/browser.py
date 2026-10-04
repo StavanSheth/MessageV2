@@ -96,18 +96,8 @@ class BrowserWorker:
 
                 if not cdp_url:
                     from backend.automation.chrome_profile_manager import chrome_profile_manager
-                    chrome_bin = get_chrome_executable()
-                    active_profile = chrome_profile_manager.get_active_profile_id()
-                    cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --profile-directory="{active_profile}" --restore-last-session http://localhost:5173 https://www.instagram.com'
-                    try:
-                        subprocess.Popen(cmd, shell=True)
-                    except Exception:
-                        pass
-                    for _ in range(5):
-                        await asyncio.sleep(0.3)
-                        cdp_url = check_cdp_endpoint()
-                        if cdp_url:
-                            break
+                    launch_res = await chrome_profile_manager.launch_chrome_live()
+                    cdp_url = launch_res.get("cdp_url") or check_cdp_endpoint()
 
                 if cdp_url:
                     from backend.automation.chrome_profile_manager import chrome_profile_manager

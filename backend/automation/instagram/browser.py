@@ -20,15 +20,56 @@ def get_chrome_executable() -> str:
     return "chrome"
 
 def check_cdp_endpoint() -> Optional[str]:
+    import socket
     import httpx
-    for host in ["http://localhost:9222", "http://127.0.0.1:9222", "http://[::1]:9222"]:
+    try:
+        with socket.create_connection(("127.0.0.1", 9222), timeout=0.08):
+            pass
+    except Exception:
+        return None
+
+    for host in ["http://127.0.0.1:9222", "http://localhost:9222"]:
         try:
-            r = httpx.get(f"{host}/json/version", timeout=0.6)
+            r = httpx.get(f"{host}/json/version", timeout=0.4)
             if r.status_code == 200:
                 return host
         except Exception:
             pass
     return None
+
+def cleanup_profile_locks(user_data_dir: str) -> None:
+    if os.name == "nt":
+        import subprocess
+        import json
+        try:
+            cmd = [
+                'powershell', '-NoProfile', '-Command',
+                'Get-CimInstance Win32_Process -Filter "Name = \'chrome.exe\'" | Select-Object ProcessId, CommandLine | ConvertTo-Json'
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+            if res.returncode == 0 and res.stdout.strip():
+                data = json.loads(res.stdout)
+                if isinstance(data, dict):
+                    data = [data]
+                norm_dir = os.path.normpath(user_data_dir).lower()
+                for p in data:
+                    c = (p.get('CommandLine') or '').lower()
+                    if norm_dir in c and '--type=' in c:
+                        pid = p.get('ProcessId')
+                        try:
+                            subprocess.run(['taskkill', '/F', '/PID', str(pid)], capture_output=True, timeout=2)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    for lock_name in ["SingletonLock", "Lockfile", "lockfile"]:
+        f = Path(user_data_dir) / lock_name
+        if f.exists():
+            try:
+                f.unlink()
+            except Exception:
+                pass
 
 class BrowserWorker:
     def __init__(self, user_data_dir: Optional[str] = None):
@@ -44,19 +85,11 @@ class BrowserWorker:
             if self.is_running and self.page and not self.page.is_closed():
                 return self.page
 
-            Path(self.user_data_dir).mkdir(parents=True, exist_ok=True)
-            # Remove any stale Chromium lock files
-            for lock_name in ["SingletonLock", "Lockfile", "lockfile"]:
-                f = Path(self.user_data_dir) / lock_name
-                if f.exists():
-                    try:
-                        f.unlink()
-                    except Exception:
-                        pass
+            cleanup_profile_locks(self.user_data_dir)
 
             self.playwright = await async_playwright().start()
 
-            # On Windows, launch Chrome via Windows Shell so it renders on the active interactive desktop
+            # On Windows, try connecting to active Chrome if open via CDP (e.g. open_chrome.bat)
             if os.name == "nt":
                 import subprocess
                 cdp_url = check_cdp_endpoint()
@@ -64,9 +97,12 @@ class BrowserWorker:
                 if not cdp_url:
                     chrome_bin = get_chrome_executable()
                     cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --profile-directory="Profile 4" --restore-last-session http://localhost:5173 https://www.instagram.com'
-                    subprocess.Popen(cmd, shell=True)
-                    for _ in range(15):
-                        await asyncio.sleep(0.4)
+                    try:
+                        subprocess.Popen(cmd, shell=True)
+                    except Exception:
+                        pass
+                    for _ in range(5):
+                        await asyncio.sleep(0.3)
                         cdp_url = check_cdp_endpoint()
                         if cdp_url:
                             break
@@ -110,6 +146,7 @@ class BrowserWorker:
                         print(f"[BrowserWorker] CDP connection error: {e}, falling back to persistent context")
 
             # Launch persistent browser context with native Google Chrome
+            cleanup_profile_locks(self.user_data_dir)
             launch_args = [
                 "--disable-blink-features=AutomationControlled",
                 "--start-maximized",
@@ -122,16 +159,19 @@ class BrowserWorker:
                     headless=False,
                     slow_mo=settings.BROWSER_SLOW_MO,
                     args=launch_args,
-                    no_viewport=True
+                    no_viewport=True,
+                    timeout=15000
                 )
-            except Exception:
-                # Fallback to bundled chromium
+            except Exception as e:
+                print(f"[BrowserWorker] Chrome persistent launch error: {e}, trying bundled chromium")
+                cleanup_profile_locks(self.user_data_dir)
                 self.context = await self.playwright.chromium.launch_persistent_context(
                     user_data_dir=self.user_data_dir,
                     headless=False,
                     slow_mo=settings.BROWSER_SLOW_MO,
                     args=launch_args,
-                    no_viewport=True
+                    no_viewport=True,
+                    timeout=15000
                 )
 
             # Get or create page (protect localhost dashboard tabs)

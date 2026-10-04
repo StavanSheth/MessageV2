@@ -53,8 +53,12 @@ class InstagramWorker:
 
     async def start(self, batch_limit: Optional[int] = None, delay_seconds: Optional[int] = None) -> None:
         if self._task and not self._task.done():
-            # If already running but paused, unpause
+            # If already running but paused, update batch target, reset count and unpause
             if self._paused:
+                self.batch_limit = batch_limit if (batch_limit is not None and batch_limit > 0) else None
+                self.batch_sent_count = 0
+                if delay_seconds is not None and delay_seconds >= 5:
+                    self.delay_between_messages = delay_seconds
                 await self.resume()
             return
         self.batch_limit = batch_limit if (batch_limit is not None and batch_limit > 0) else None

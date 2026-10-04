@@ -1,5 +1,12 @@
+import sys
 import asyncio
 import logging
+
+def proactor_loop_factory(use_subprocess: bool = False):
+    return asyncio.ProactorEventLoop()
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

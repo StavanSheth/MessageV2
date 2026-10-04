@@ -19,6 +19,17 @@ def get_chrome_executable() -> str:
             return p
     return "chrome"
 
+def check_cdp_endpoint() -> Optional[str]:
+    import httpx
+    for host in ["http://localhost:9222", "http://127.0.0.1:9222", "http://[::1]:9222"]:
+        try:
+            r = httpx.get(f"{host}/json/version", timeout=0.6)
+            if r.status_code == 200:
+                return host
+        except Exception:
+            pass
+    return None
+
 class BrowserWorker:
     def __init__(self, user_data_dir: Optional[str] = None):
         self.user_data_dir = user_data_dir or settings.USER_DATA_DIR
@@ -48,35 +59,35 @@ class BrowserWorker:
             # On Windows, launch Chrome via Windows Shell so it renders on the active interactive desktop
             if os.name == "nt":
                 import subprocess
-                import httpx
-                cdp_ready = False
-                try:
-                    r = httpx.get("http://127.0.0.1:9222/json/version", timeout=1.0)
-                    if r.status_code == 200:
-                        cdp_ready = True
-                except Exception:
-                    cdp_ready = False
+                cdp_url = check_cdp_endpoint()
 
-                if not cdp_ready:
+                if not cdp_url:
                     profile_escaped = str(self.user_data_dir).replace('/', '\\')
                     chrome_bin = get_chrome_executable()
                     cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --user-data-dir="{profile_escaped}" https://www.instagram.com'
                     subprocess.Popen(cmd, shell=True)
                     for _ in range(15):
                         await asyncio.sleep(0.4)
-                        try:
-                            r = httpx.get("http://127.0.0.1:9222/json/version", timeout=1.0)
-                            if r.status_code == 200:
-                                cdp_ready = True
-                                break
-                        except Exception:
-                            pass
+                        cdp_url = check_cdp_endpoint()
+                        if cdp_url:
+                            break
 
-                if cdp_ready:
+                if cdp_url:
                     try:
-                        browser = await self.playwright.chromium.connect_over_cdp("http://127.0.0.1:9222")
+                        browser = await self.playwright.chromium.connect_over_cdp(cdp_url)
                         self.context = browser.contexts[0]
-                        self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+                        # Check for existing Instagram tab
+                        instagram_page = None
+                        for p in self.context.pages:
+                            if "instagram.com" in p.url:
+                                instagram_page = p
+                                break
+                        self.page = instagram_page or (self.context.pages[0] if self.context.pages else await self.context.new_page())
+                        if "instagram.com" not in self.page.url:
+                            try:
+                                await self.page.goto("https://www.instagram.com", wait_until="domcontentloaded", timeout=settings.BROWSER_TIMEOUT)
+                            except Exception:
+                                pass
                         try:
                             await self.page.bring_to_front()
                         except Exception:
@@ -180,13 +191,12 @@ class BrowserWorker:
 
     async def capture_live_screenshot(self) -> Optional[bytes]:
         if not self.page or self.page.is_closed():
-            try:
-                import httpx
-                r = httpx.get("http://127.0.0.1:9222/json/version", timeout=0.5)
-                if r.status_code == 200:
+            cdp_url = check_cdp_endpoint()
+            if cdp_url:
+                try:
                     await self.start()
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
         if not self.page or self.page.is_closed():
             return None

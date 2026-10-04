@@ -33,6 +33,7 @@ class InstagramWorker:
         self.browser_worker = BrowserWorker()
         self.status = WorkerStatus.IDLE
         self.stage = AutomationStage.IDLE
+        self.instagram_login_status = "UNKNOWN"
         self.current_task_id: Optional[str] = None
         self.current_contact_name: Optional[str] = None
         self.current_instagram: Optional[str] = None
@@ -58,12 +59,14 @@ class InstagramWorker:
         self.status = WorkerStatus.PAUSED
         await self._update_worker_db(status="PAUSED")
         await event_bus.publish(EventCode.WORKER_PAUSED, worker_id=WORKER_ID)
+        await event_bus.publish_state(await self.health())
 
     async def resume(self) -> None:
         self._paused = False
         self.status = WorkerStatus.RUNNING
         await self._update_worker_db(status="RUNNING")
         await event_bus.publish(EventCode.WORKER_RESUMED, worker_id=WORKER_ID)
+        await event_bus.publish_state(await self.health())
 
     async def stop(self) -> None:
         self._stop_requested = True
@@ -77,6 +80,7 @@ class InstagramWorker:
         self.status = WorkerStatus.STOPPED
         await self._update_worker_db(status="STOPPED", browser_status="DISCONNECTED", current_stage="IDLE")
         await event_bus.publish(EventCode.WORKER_STOPPED, worker_id=WORKER_ID)
+        await event_bus.publish_state(await self.health())
         logger.info(f"[Worker] {WORKER_NAME} stopped")
 
     # ───────────────────────────────────────────────
@@ -91,6 +95,7 @@ class InstagramWorker:
             "status": self.status.value,
             "stage": self.stage.value,
             "browser_status": bh.get("status", "DISCONNECTED"),
+            "instagram_login_status": self.instagram_login_status,
             "current_task_id": self.current_task_id,
             "current_contact_name": self.current_contact_name,
             "current_instagram": self.current_instagram,
@@ -146,6 +151,7 @@ class InstagramWorker:
             page = await self.browser_worker.start()
             await self._update_worker_db(status="RUNNING", browser_status="CONNECTED")
             await event_bus.publish(EventCode.WORKER_STARTED, worker_id=WORKER_ID)
+            await event_bus.publish_state(await self.health())
 
             # Instagram login check
             await self._set_stage(AutomationStage.CHECKING_LOGIN)
@@ -176,37 +182,48 @@ class InstagramWorker:
             logger.exception(f"[Worker] Fatal error: {e}")
             self.status = WorkerStatus.ERROR
             await self._update_worker_db(status="ERROR")
+            await event_bus.publish_state(await self.health())
         finally:
             self.status = WorkerStatus.STOPPED
             self.stage = AutomationStage.IDLE
+            await self._update_worker_db(status="STOPPED", current_stage="IDLE")
+            await event_bus.publish_state(await self.health())
 
     async def _check_login_loop(self, adapter: InstagramAdapter) -> None:
         while True:
+            if self._stop_requested:
+                return
+
             is_logged_in, requires_login, has_challenge, reason = await adapter.check_login()
 
             if has_challenge:
                 logger.warning("[Worker] Instagram challenge detected — manual intervention needed")
+                self.instagram_login_status = "CHALLENGE"
                 await self._update_worker_db(instagram_login_status="CHALLENGE")
                 await event_bus.publish(EventCode.MANUAL_REVIEW_REQUIRED, payload={"reason": reason}, worker_id=WORKER_ID)
-                # Wait for human intervention
-                await asyncio.sleep(10)
+                await event_bus.publish_state(await self.health())
+                await asyncio.sleep(6)
                 continue
 
             if is_logged_in:
                 logger.info("[Worker] Instagram session active")
+                self.instagram_login_status = "LOGGED_IN"
                 await self._update_worker_db(instagram_login_status="LOGGED_IN")
                 await event_bus.publish(EventCode.LOGIN_DETECTED, worker_id=WORKER_ID)
+                await event_bus.publish_state(await self.health())
                 return
 
             if requires_login:
                 logger.warning("[Worker] LOGIN_REQUIRED — waiting for user to log in manually")
+                self.instagram_login_status = "LOGIN_REQUIRED"
                 await self._update_worker_db(instagram_login_status="LOGIN_REQUIRED")
                 await event_bus.publish(EventCode.LOGIN_REQUIRED, payload={"reason": reason}, worker_id=WORKER_ID)
-                await asyncio.sleep(8)
+                await event_bus.publish_state(await self.health())
+                await asyncio.sleep(6)
                 continue
 
             # Unclear state — retry
-            await asyncio.sleep(5)
+            await asyncio.sleep(4)
 
     async def _claim_next_task(self):
         async with AsyncSessionLocal() as session:

@@ -77,13 +77,33 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({ state })
 
             <div className="bg-gray-800/80 border border-gray-700/60 rounded-xl px-4 py-2.5">
               <span className="text-[10px] text-gray-400 uppercase tracking-wider block font-semibold">Browser Engine</span>
-              <span className="text-sm font-bold text-emerald-400">{state.browser_status || 'VISIBLE CHROME'}</span>
+              <span className={`text-sm font-bold flex items-center space-x-1.5 ${
+                state.browser_status === 'CONNECTED'
+                  ? 'text-emerald-400'
+                  : 'text-gray-400'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${state.browser_status === 'CONNECTED' ? 'bg-emerald-400 animate-pulse' : 'bg-gray-500'}`} />
+                <span>{state.browser_status || 'DISCONNECTED'}</span>
+              </span>
             </div>
 
             <div className="bg-gray-800/80 border border-gray-700/60 rounded-xl px-4 py-2.5">
               <span className="text-[10px] text-gray-400 uppercase tracking-wider block font-semibold">Instagram Session</span>
-              <span className={`text-sm font-bold ${state.instagram_login_status === 'LOGGED_IN' ? 'text-emerald-400' : 'text-amber-400'}`}>
-                {state.instagram_login_status || 'UNKNOWN'}
+              <span className={`text-sm font-bold flex items-center space-x-1.5 ${
+                state.instagram_login_status === 'LOGGED_IN'
+                  ? 'text-emerald-400'
+                  : state.instagram_login_status === 'LOGIN_REQUIRED' || state.instagram_login_status === 'CHALLENGE'
+                  ? 'text-amber-400 animate-pulse'
+                  : 'text-gray-400'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${
+                  state.instagram_login_status === 'LOGGED_IN'
+                    ? 'bg-emerald-400'
+                    : state.instagram_login_status === 'LOGIN_REQUIRED' || state.instagram_login_status === 'CHALLENGE'
+                    ? 'bg-amber-400'
+                    : 'bg-gray-500'
+                }`} />
+                <span>{state.instagram_login_status || 'UNKNOWN'}</span>
               </span>
             </div>
           </div>

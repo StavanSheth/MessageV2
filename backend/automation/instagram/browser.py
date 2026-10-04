@@ -21,20 +21,42 @@ class BrowserWorker:
                 return self.page
 
             Path(self.user_data_dir).mkdir(parents=True, exist_ok=True)
+            # Remove any stale Chromium lock files
+            for lock_name in ["SingletonLock", "Lockfile", "lockfile"]:
+                f = Path(self.user_data_dir) / lock_name
+                if f.exists():
+                    try:
+                        f.unlink()
+                    except Exception:
+                        pass
+
             self.playwright = await async_playwright().start()
 
-            # Launch persistent browser context (VISIBLE CHROME/CHROMIUM)
-            self.context = await self.playwright.chromium.launch_persistent_context(
-                user_data_dir=self.user_data_dir,
-                headless=settings.BROWSER_HEADLESS,
-                slow_mo=settings.BROWSER_SLOW_MO,
-                viewport={"width": 1280, "height": 850},
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--start-maximized"
-                ],
-                no_viewport=False
-            )
+
+            # Launch persistent browser context with native Google Chrome
+            launch_args = [
+                "--disable-blink-features=AutomationControlled",
+                "--start-maximized",
+                "--no-sandbox"
+            ]
+            try:
+                self.context = await self.playwright.chromium.launch_persistent_context(
+                    user_data_dir=self.user_data_dir,
+                    channel="chrome",
+                    headless=False,
+                    slow_mo=settings.BROWSER_SLOW_MO,
+                    args=launch_args,
+                    no_viewport=True
+                )
+            except Exception:
+                # Fallback to bundled chromium
+                self.context = await self.playwright.chromium.launch_persistent_context(
+                    user_data_dir=self.user_data_dir,
+                    headless=False,
+                    slow_mo=settings.BROWSER_SLOW_MO,
+                    args=launch_args,
+                    no_viewport=True
+                )
 
             # Get or create page
             if len(self.context.pages) > 0:
@@ -42,8 +64,14 @@ class BrowserWorker:
             else:
                 self.page = await self.context.new_page()
 
+            try:
+                await self.page.bring_to_front()
+            except Exception:
+                pass
+
             self.is_running = True
             return self.page
+
 
     async def stop(self) -> None:
         async with self._lock:

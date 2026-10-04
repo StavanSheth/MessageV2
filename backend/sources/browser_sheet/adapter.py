@@ -17,19 +17,33 @@ class BrowserSpreadsheetSource(SourceAdapter):
         if self.page:
             return True
         self.playwright = await async_playwright().start()
-        # Open dedicated visible browser instance as required by the specification
-        self.browser = await self.playwright.chromium.launch(
-            headless=False,
-            slow_mo=settings.BROWSER_SLOW_MO,
-            args=["--start-maximized"]
-        )
+        # Open dedicated visible native Chrome browser instance
+        launch_args = ["--disable-blink-features=AutomationControlled", "--start-maximized", "--no-sandbox"]
+        try:
+            self.browser = await self.playwright.chromium.launch(
+                channel="chrome",
+                headless=False,
+                slow_mo=settings.BROWSER_SLOW_MO,
+                args=launch_args
+            )
+        except Exception:
+            self.browser = await self.playwright.chromium.launch(
+                headless=False,
+                slow_mo=settings.BROWSER_SLOW_MO,
+                args=launch_args
+            )
         self.page = await self.browser.new_page(no_viewport=True)
+        try:
+            await self.page.bring_to_front()
+        except Exception:
+            pass
         try:
             await self.page.goto(self.url, wait_until="commit", timeout=settings.BROWSER_TIMEOUT)
         except Exception as e:
             print(f"[BrowserSpreadsheetSource] goto warning: {e}")
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
         return True
+
 
     async def validate_access(self) -> Tuple[bool, str]:
         try:

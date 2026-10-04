@@ -52,7 +52,7 @@ class MessageRepository:
             status="PENDING"
         )
         self.session.add(msg)
-        await self.session.flush()
+        await self.session.commit()
         return msg
 
     async def update_result(self, message_id: str, status: str, result_code: str):

@@ -35,9 +35,43 @@ async def worker_live_state():
 async def health_check():
     return {"status": "ok", "service": "MessageV2 Backend"}
 
+from fastapi.responses import FileResponse, Response
+
 @router.get("/screenshots/{filename}")
 async def get_screenshot(filename: str):
     path = SCREENSHOTS_DIR / filename
     if path.exists() and path.is_file():
         return FileResponse(str(path), media_type="image/png")
     return {"error": "Screenshot not found"}
+
+@router.get("/api/browser/live_feed")
+async def get_browser_live_feed():
+    bw = instagram_worker.browser_worker
+    img_bytes = await bw.capture_live_screenshot()
+    if img_bytes:
+        return Response(
+            content=img_bytes,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+        )
+    # If no live page, return latest file from screenshots dir if available
+    screenshots = sorted(list(SCREENSHOTS_DIR.glob("*.png")), key=os.path.getmtime, reverse=True)
+    if screenshots:
+        return FileResponse(str(screenshots[0]), media_type="image/png")
+    return Response(status_code=204)
+
+@router.post("/api/browser/open")
+async def open_visible_browser():
+    """Forces open or foregrounds the native Chrome browser window on the user desktop."""
+    if os.name == "nt":
+        import subprocess
+        from backend.automation.instagram.browser import get_chrome_executable
+        profile_escaped = str(settings.USER_DATA_DIR).replace('/', '\\')
+        chrome_bin = get_chrome_executable()
+        subprocess.Popen(f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --user-data-dir="{profile_escaped}" https://www.instagram.com', shell=True)
+    try:
+        await instagram_worker.browser_worker.start()
+        return {"status": "opened"}
+    except Exception as e:
+        return {"status": "launched", "note": str(e)}
+

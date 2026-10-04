@@ -36,6 +36,12 @@ export async function stopAutomation(): Promise<{ status: string }> {
   return res.json();
 }
 
+export async function openBrowserWindow(): Promise<{ status: string }> {
+  const res = await fetch(`${BASE_URL}/api/browser/open`, { method: 'POST' });
+  return res.json();
+}
+
+
 export async function fetchContacts(): Promise<Contact[]> {
   const res = await fetch(`${BASE_URL}/api/contacts`);
   return res.json();

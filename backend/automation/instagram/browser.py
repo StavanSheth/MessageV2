@@ -6,6 +6,19 @@ from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright, BrowserContext, Page, Playwright
 from backend.config.settings import settings, SCREENSHOTS_DIR
 
+def get_chrome_executable() -> str:
+    possible_paths = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+    for p in possible_paths:
+        if os.path.exists(p):
+            return p
+    return "chrome"
+
 class BrowserWorker:
     def __init__(self, user_data_dir: Optional[str] = None):
         self.user_data_dir = user_data_dir or settings.USER_DATA_DIR
@@ -32,6 +45,46 @@ class BrowserWorker:
 
             self.playwright = await async_playwright().start()
 
+            # On Windows, launch Chrome via Windows Shell so it renders on the active interactive desktop
+            if os.name == "nt":
+                import subprocess
+                import httpx
+                cdp_ready = False
+                try:
+                    r = httpx.get("http://127.0.0.1:9222/json/version", timeout=1.0)
+                    if r.status_code == 200:
+                        cdp_ready = True
+                except Exception:
+                    cdp_ready = False
+
+                if not cdp_ready:
+                    profile_escaped = str(self.user_data_dir).replace('/', '\\')
+                    chrome_bin = get_chrome_executable()
+                    cmd = f'cmd.exe /c start "" "{chrome_bin}" --remote-debugging-port=9222 --user-data-dir="{profile_escaped}" https://www.instagram.com'
+                    subprocess.Popen(cmd, shell=True)
+                    for _ in range(15):
+                        await asyncio.sleep(0.4)
+                        try:
+                            r = httpx.get("http://127.0.0.1:9222/json/version", timeout=1.0)
+                            if r.status_code == 200:
+                                cdp_ready = True
+                                break
+                        except Exception:
+                            pass
+
+                if cdp_ready:
+                    try:
+                        browser = await self.playwright.chromium.connect_over_cdp("http://127.0.0.1:9222")
+                        self.context = browser.contexts[0]
+                        self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+                        try:
+                            await self.page.bring_to_front()
+                        except Exception:
+                            pass
+                        self.is_running = True
+                        return self.page
+                    except Exception as e:
+                        print(f"[BrowserWorker] CDP connection error: {e}, falling back to persistent context")
 
             # Launch persistent browser context with native Google Chrome
             launch_args = [
@@ -63,6 +116,7 @@ class BrowserWorker:
                 self.page = self.context.pages[0]
             else:
                 self.page = await self.context.new_page()
+
 
             try:
                 await self.page.bring_to_front()
@@ -123,3 +177,21 @@ class BrowserWorker:
             "url": h.get("url"),
             "is_running": self.is_running
         }
+
+    async def capture_live_screenshot(self) -> Optional[bytes]:
+        if not self.page or self.page.is_closed():
+            try:
+                import httpx
+                r = httpx.get("http://127.0.0.1:9222/json/version", timeout=0.5)
+                if r.status_code == 200:
+                    await self.start()
+            except Exception:
+                pass
+
+        if not self.page or self.page.is_closed():
+            return None
+        try:
+            return await self.page.screenshot(type="jpeg", quality=75)
+        except Exception:
+            return None
+

@@ -181,11 +181,16 @@ class InstagramAdapter:
 
             # Locate composer (div[contenteditable='true'] / role='textbox')
             composer = None
-            for comp_sel in InstagramSelectors.MESSAGE_COMPOSER:
-                c = self.page.locator(comp_sel).first
-                if await c.count() > 0 and await c.is_visible():
-                    composer = c
+            for _ in range(16):  # Wait up to 8 seconds (16 x 0.5s)
+                for comp_sel in InstagramSelectors.MESSAGE_COMPOSER:
+                    c = self.page.locator(comp_sel).first
+                    if await c.count() > 0 and await c.is_visible():
+                        composer = c
+                        break
+                if composer:
                     break
+                await self.dismiss_popups()
+                await asyncio.sleep(0.5)
 
             if not composer:
                 return False, "Message composer not found"

@@ -45,6 +45,9 @@ class InstagramSelectors:
         "textarea[placeholder*='Message']"
     ]
     SEND_BUTTON = [
+        "div[role='button'][aria-label='Send']",
+        "div[aria-label='Send']",
+        "[aria-label='Send']",
         "div[role='button']:has-text('Send')",
         "button:has-text('Send')",
         "div[role='button']:has-text('Send message')",

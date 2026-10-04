@@ -26,6 +26,8 @@ data/*.db-journal
 data/browser_profiles/
 data/chrome_debug_profile/
 data/chrome_live_profile/
+data/chrome_junction/
+data/chrome_user_data/
 data/screenshots/*.png
 data/uploads/
 !data/samples/sample_contacts.xlsx

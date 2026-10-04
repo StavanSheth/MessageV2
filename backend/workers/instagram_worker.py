@@ -332,17 +332,20 @@ class InstagramWorker:
         """
         from backend.automation.chrome_profile_manager import chrome_profile_manager
 
+        initial_notify = True
         while True:
             if self._stop_requested:
                 return
 
-            # Ensure Chrome is visible and in front on screen
-            try:
-                chrome_profile_manager.bring_chrome_to_front()
-                if adapter.page and not adapter.page.is_closed():
-                    await adapter.page.bring_to_front()
-            except Exception:
-                pass
+            # Bring Chrome window to front once initially so user knows to log in, without disrupting ongoing laptop work
+            if initial_notify:
+                try:
+                    chrome_profile_manager.bring_chrome_to_front()
+                    if adapter.page and not adapter.page.is_closed():
+                        await adapter.page.bring_to_front()
+                except Exception:
+                    pass
+                initial_notify = False
 
             is_logged_in, requires_login, has_challenge, reason = await adapter.check_login()
 

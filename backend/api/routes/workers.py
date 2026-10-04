@@ -68,9 +68,10 @@ class ProfileSelectRequest(BaseModel):
     profile_id: Optional[str] = "Default"
 
 @router.get("/api/browser/profiles")
-async def list_browser_profiles():
+async def list_browser_profiles(db: AsyncSession = Depends(get_db)):
     """Lists all detected Chrome profiles on the host machine, prioritizing Stavan Sheth (Default)."""
     from backend.automation.chrome_profile_manager import chrome_profile_manager
+    await chrome_profile_manager.sync_from_db(db)
     profiles = chrome_profile_manager.list_profiles()
     active = chrome_profile_manager.get_active_profile()
     return {
@@ -79,16 +80,18 @@ async def list_browser_profiles():
     }
 
 @router.get("/api/browser/profile/active")
-async def get_active_browser_profile():
+async def get_active_browser_profile(db: AsyncSession = Depends(get_db)):
     from backend.automation.chrome_profile_manager import chrome_profile_manager
+    await chrome_profile_manager.sync_from_db(db)
     return chrome_profile_manager.get_active_profile()
 
 @router.post("/api/browser/profile/select")
-async def select_browser_profile(req: ProfileSelectRequest):
+async def select_browser_profile(req: ProfileSelectRequest, db: AsyncSession = Depends(get_db)):
     from backend.automation.chrome_profile_manager import chrome_profile_manager
     from fastapi import HTTPException
     try:
         updated = chrome_profile_manager.set_active_profile(req.profile_id or "Default")
+        await chrome_profile_manager.save_to_db(updated["id"], db)
         return {
             "status": "selected",
             "active_profile": updated

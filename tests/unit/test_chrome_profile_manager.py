@@ -26,3 +26,22 @@ def test_chrome_profile_invalid_selection():
     manager = ChromeProfileManager()
     with pytest.raises(ValueError):
         manager.set_active_profile("NonExistentProfile_99999")
+
+@pytest.mark.asyncio
+async def test_setting_repository_and_profile_sync(test_session):
+    from backend.repositories.setting_repository import SettingRepository
+    repo = SettingRepository(test_session)
+    
+    # Set setting
+    s = await repo.set_value("default_chrome_profile", "Default", "Default user profile")
+    assert s.value == "Default"
+    
+    # Read setting
+    val = await repo.get_value("default_chrome_profile")
+    assert val == "Default"
+    
+    # Sync with manager
+    manager = ChromeProfileManager()
+    synced = await manager.sync_from_db(test_session)
+    assert synced == "Default"
+    assert manager.get_active_profile_id() == "Default"

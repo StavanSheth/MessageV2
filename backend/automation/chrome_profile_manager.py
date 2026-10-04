@@ -152,64 +152,64 @@ class ChromeProfileManager:
         logger.info(f"Switched active Chrome profile to '{profile_id}'")
         return self.get_active_profile()
 
-    def sync_profile_to_live_dir(self, profile_id: str) -> Path:
+    def get_or_create_junction_user_data(self) -> Path:
         """
-        Syncs session, cookies, and local state from the user's real Chrome profile
-        into the local live profile directory (data/chrome_live_profile).
-        This allows Chrome to open with port 9222 enabled while preserving the user's
-        existing Instagram logins without file lock conflicts.
+        Creates an NTFS junction pointing directly to the user's real Chrome User Data directory.
+        This provides instant, zero-copy access to the user's authentic Chrome profiles, extensions,
+        cookies, and Instagram login sessions, while allowing Chrome to open with port 9222 enabled.
         """
-        import shutil
-        dst_user_data = DATA_DIR / "chrome_live_profile"
-        dst_user_data.mkdir(parents=True, exist_ok=True)
-
-        src_local_state = self._user_data_path / "Local State"
-        dst_local_state = dst_user_data / "Local State"
-        if src_local_state.exists():
+        junction_path = DATA_DIR / "chrome_junction"
+        if not junction_path.exists() and os.name == "nt":
             try:
-                shutil.copy2(src_local_state, dst_local_state)
+                import _winapi
+                _winapi.CreateJunction(str(self._user_data_path), str(junction_path))
+                logger.info(f"Created Chrome User Data junction at {junction_path}")
             except Exception as e:
-                logger.debug(f"Could not copy Local State: {e}")
+                logger.debug(f"Could not create junction, falling back to direct path: {e}")
 
-        src_prof = self._user_data_path / profile_id
-        dst_prof = dst_user_data / profile_id
-        dst_prof.mkdir(parents=True, exist_ok=True)
+        target_dir = junction_path if junction_path.exists() else self._user_data_path
 
-        items_to_copy = [
-            "Preferences",
-            "Secure Preferences",
-            "Login Data",
-            "Web Data",
-        ]
-        dirs_to_copy = [
-            "Network",
-            "Local Storage",
-            "Session Storage",
-            "Sessions",
-            "IndexedDB",
-        ]
+        # Clear any stale lockfile in the junction path
+        if os.name == "nt":
+            for lock_name in ["lockfile", "SingletonLock", "LOCK"]:
+                lock_file = target_dir / lock_name
+                if lock_file.exists():
+                    try:
+                        lock_file.unlink()
+                    except Exception:
+                        pass
+        return target_dir
 
-        for item in items_to_copy:
-            s = src_prof / item
-            d = dst_prof / item
-            if s.exists():
-                try:
-                    shutil.copy2(s, d)
-                except Exception:
-                    pass
+    def sync_profile_to_live_dir(self, profile_id: str) -> Path:
+        """Alias for backward compatibility - points to authentic user data junction."""
+        return self.get_or_create_junction_user_data()
 
-        for dname in dirs_to_copy:
-            s = src_prof / dname
-            d = dst_prof / dname
-            if s.exists():
-                try:
-                    if d.exists():
-                        shutil.rmtree(d, ignore_errors=True)
-                    shutil.copytree(s, d, dirs_exist_ok=True)
-                except Exception:
-                    pass
+    async def sync_from_db(self, session) -> str:
+        """Loads and syncs the persistent default Chrome profile from the database."""
+        from backend.repositories.setting_repository import SettingRepository
+        try:
+            repo = SettingRepository(session)
+            saved_profile = await repo.get_value("default_chrome_profile")
+            if saved_profile:
+                self._active_profile_id = saved_profile
+                self._save_persisted_profile_id(saved_profile)
+                return saved_profile
+        except Exception as e:
+            logger.debug(f"Could not load profile from DB: {e}")
+        return self._active_profile_id
 
-        return dst_user_data
+    async def save_to_db(self, profile_id: str, session) -> None:
+        """Saves the active Chrome profile to the database settings table."""
+        from backend.repositories.setting_repository import SettingRepository
+        try:
+            repo = SettingRepository(session)
+            await repo.set_value(
+                key="default_chrome_profile",
+                value=profile_id,
+                description="Default Chrome browser profile used for live Instagram automation"
+            )
+        except Exception as e:
+            logger.warning(f"Could not save profile to DB: {e}")
 
     async def launch_chrome_live(self, profile_id: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -225,24 +225,25 @@ class ChromeProfileManager:
         chrome_bin = get_chrome_executable()
         cdp_url = check_cdp_endpoint()
 
-        # If Chrome with port 9222 is not already running, sync profile and launch it
+        # If Chrome with port 9222 is not already running, use native user data junction
         if not cdp_url and os.name == "nt":
-            live_dir = self.sync_profile_to_live_dir(target_profile)
+            user_data_target = self.get_or_create_junction_user_data()
             bat_path = Path("open_chrome.bat").resolve()
 
-            # Ensure bat file has the latest target profile and live profile path
             bat_content = (
                 "@echo off\r\n"
                 "setlocal\r\n\r\n"
-                "title MessageV2 - Live Visible Chrome Launcher\r\n"
+                "set \"TARGET_PROFILE=" + target_profile + "\"\r\n"
+                "if not \"%~1\"==\"\" set \"TARGET_PROFILE=%~1\"\r\n\r\n"
+                "title MessageV2 - Live Visible Chrome Launcher (%TARGET_PROFILE%)\r\n"
                 "echo ========================================================\r\n"
-                f"echo   Launching Visible Google Chrome for Live Automation\r\n"
-                f"echo   Profile: {target_profile} (Live Synced Profile)\r\n"
+                "echo   Launching Visible Google Chrome for Live Automation\r\n"
+                "echo   Profile: %TARGET_PROFILE% (Existing Chrome Profile)\r\n"
                 "echo   Port: 9222 (DevTools Protocol)\r\n"
                 "echo ========================================================\r\n"
                 "echo.\r\n"
                 "echo Launching Google Chrome live on your screen...\r\n"
-                f'start "" "{chrome_bin}" --user-data-dir="{live_dir}" --profile-directory="{target_profile}" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --no-first-run --no-default-browser-check http://localhost:5173 https://www.instagram.com\r\n'
+                f'start "" "{chrome_bin}" --user-data-dir="{user_data_target}" --profile-directory="%TARGET_PROFILE%" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --no-first-run --no-default-browser-check --restore-last-session http://localhost:5173 https://www.instagram.com\r\n'
                 "echo.\r\n"
                 "echo Chrome has been launched live on your screen!\r\n"
             )
@@ -265,7 +266,7 @@ class ChromeProfileManager:
                     capture_output=True, timeout=3
                 )
             except Exception:
-                cmd = f'cmd.exe /c start "" "{chrome_bin}" --user-data-dir="{live_dir}" --profile-directory="{target_profile}" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --no-first-run --no-default-browser-check http://localhost:5173 https://www.instagram.com'
+                cmd = f'cmd.exe /c start "" "{chrome_bin}" --user-data-dir="{user_data_target}" --profile-directory="{target_profile}" --remote-debugging-port=9222 --remote-allow-origins=* --start-maximized --no-first-run --no-default-browser-check --restore-last-session http://localhost:5173 https://www.instagram.com'
                 subprocess.Popen(cmd, shell=True)
 
             # Wait for CDP endpoint to become ready

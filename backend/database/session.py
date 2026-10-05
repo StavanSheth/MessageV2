@@ -36,6 +36,20 @@ SyncSessionLocal = sessionmaker(
     autoflush=False
 )
 
+from sqlalchemy import event
+
+def _set_sqlite_pragmas(dbapi_connection, connection_record):
+    """Enforce foreign keys, WAL mode for high concurrency, and 10s busy timeout."""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys = ON")
+    cursor.execute("PRAGMA journal_mode = WAL")
+    cursor.execute("PRAGMA busy_timeout = 10000")
+    cursor.execute("PRAGMA synchronous = NORMAL")
+    cursor.close()
+
+event.listen(sync_engine, "connect", _set_sqlite_pragmas)
+event.listen(async_engine.sync_engine, "connect", _set_sqlite_pragmas)
+
 async def init_db():
     """Create all tables in the SQLite database asynchronously."""
     async with async_engine.begin() as conn:

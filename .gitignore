@@ -21,8 +21,10 @@ dist/
 data/**/*.db
 data/*.db
 *.db
+*.db-*
 *.sqlite3
 data/*.db-journal
+data/database/
 # Runtime caches & data
 data/browser_profiles/
 data/chrome_debug_profile/

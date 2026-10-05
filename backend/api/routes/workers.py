@@ -241,3 +241,44 @@ async def open_visible_browser():
     except Exception as e:
         return {"status": "launched", "note": str(e)}
 
+from pydantic import BaseModel
+from typing import Optional
+from backend.automation.chrome_profile_manager import chrome_profile_manager
+
+class ProfileSelectRequest(BaseModel):
+    profile_id: str
+
+class BrowserLaunchRequest(BaseModel):
+    profile_id: Optional[str] = None
+
+@router.get("/api/browser/profiles")
+async def get_browser_profiles(db: AsyncSession = Depends(get_db)):
+    """Returns discovered Chrome profiles and the currently active profile."""
+    try:
+        await chrome_profile_manager.sync_from_db(db)
+    except Exception:
+        pass
+    profiles = chrome_profile_manager.list_profiles()
+    active_profile = chrome_profile_manager.get_active_profile()
+    return {
+        "profiles": profiles,
+        "active_profile": active_profile
+    }
+
+@router.post("/api/browser/profiles/select")
+async def select_browser_profile(req: ProfileSelectRequest, db: AsyncSession = Depends(get_db)):
+    """Selects and persists active Chrome profile."""
+    try:
+        active_profile = chrome_profile_manager.set_active_profile(req.profile_id)
+        await chrome_profile_manager.save_to_db(req.profile_id, db)
+        return {"success": True, "active_profile": active_profile}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@router.post("/api/browser/launch")
+async def launch_browser(req: Optional[BrowserLaunchRequest] = None):
+    """Launches or connects to the visible desktop Chrome session."""
+    target_profile = req.profile_id if req else None
+    res = await chrome_profile_manager.launch_chrome_live(target_profile)
+    return res
+

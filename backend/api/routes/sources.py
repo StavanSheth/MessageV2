@@ -32,10 +32,24 @@ router = APIRouter(prefix="/api/sources", tags=["sources"])
 STAGED_IMPORTS: Dict[str, Dict[str, Any]] = {}
 
 
+def _canonical_lead_key(instagram_url: str, username: Optional[str] = None) -> str:
+    """Returns a normalized lowercase canonical key for deduplication."""
+    if username:
+        return username.lstrip("@").strip().lower()
+    if instagram_url:
+        clean = str(instagram_url).split("?")[0].split("#")[0].rstrip("/").lower()
+        parts = clean.split("/")
+        if parts and parts[-1]:
+            return parts[-1]
+        return clean
+    return ""
+
+
 async def _analyze_records_internal(records: list, db: AsyncSession, contact_repo: ContactRepository):
     unique_records = []
     duplicate_records = []
     invalid_records = []
+    seen_in_batch: Dict[str, Dict[str, Any]] = {}
 
     for idx, rec in enumerate(records):
         if not rec.get("is_valid", True):
@@ -49,8 +63,32 @@ async def _analyze_records_internal(records: list, db: AsyncSession, contact_rep
         norm = rec.get("normalized", {})
         instagram_url = norm.get("instagram_url", "")
         username = norm.get("username")
+        row_num = rec.get("row_number", idx + 2)
+        canon_key = _canonical_lead_key(instagram_url, username)
 
-        # Check existing contact
+        # 1. Intra-Source Duplicate Check (multiple identical links/handles inside the same spreadsheet)
+        if canon_key and canon_key in seen_in_batch:
+            first_seen = seen_in_batch[canon_key]
+            first_row = first_seen.get("row_number", first_seen.get("index", 1))
+            duplicate_records.append({
+                "index": idx,
+                "name": norm.get("name", "") or first_seen.get("name", ""),
+                "username": username or first_seen.get("username"),
+                "instagram_url": instagram_url or first_seen.get("instagram_url"),
+                "message": norm.get("message", "Hey"),
+                "notes": norm.get("notes", ""),
+                "existing_id": None,
+                "existing_name": first_seen.get("name"),
+                "existing_username": first_seen.get("username"),
+                "existing_replied_status": "INTRA_SOURCE_DUPLICATE",
+                "previously_contacted": False,
+                "reason": f"Duplicate inside spreadsheet (matches row {first_row}: @{first_seen.get('username') or canon_key})",
+                "raw": rec.get("raw", {}),
+                "normalized": norm
+            })
+            continue
+
+        # 2. Database Duplicate Check (against existing database leads)
         existing = await contact_repo.get_by_instagram(instagram_url, username)
 
         # Check outreach history
@@ -76,10 +114,18 @@ async def _analyze_records_internal(records: list, db: AsyncSession, contact_rep
                 "existing_username": existing.username,
                 "existing_replied_status": existing.replied_status,
                 "previously_contacted": bool(hist_check),
-                "reason": f"Matches existing lead '{existing.name}' (@{existing.username or 'unknown'}) [Status: {existing.replied_status}]",
+                "reason": f"Matches existing database lead '{existing.name}' (@{existing.username or 'unknown'}) [Status: {existing.replied_status}]",
                 "raw": rec.get("raw", {}),
                 "normalized": norm
             })
+            if canon_key:
+                seen_in_batch[canon_key] = {
+                    "index": idx,
+                    "row_number": row_num,
+                    "name": existing.name,
+                    "username": existing.username,
+                    "instagram_url": existing.instagram_url
+                }
         else:
             unique_records.append({
                 "index": idx,
@@ -97,6 +143,14 @@ async def _analyze_records_internal(records: list, db: AsyncSession, contact_rep
                 "raw": rec.get("raw", {}),
                 "normalized": norm
             })
+            if canon_key:
+                seen_in_batch[canon_key] = {
+                    "index": idx,
+                    "row_number": row_num,
+                    "name": norm.get("name", ""),
+                    "username": username,
+                    "instagram_url": instagram_url
+                }
 
     return unique_records, duplicate_records, invalid_records
 
@@ -243,10 +297,18 @@ async def confirm_staged_import(payload: ConfirmImportRequest, db: AsyncSession 
 
     try:
         # 1. Process Unique Records
+        created_lead_keys: set = set()
         for item in staged["unique_records"]:
             idx = item["index"]
             norm = item.get("normalized", {})
             if idx not in selected_unique_set:
+                continue
+
+            ig_url = norm.get("instagram_url", "")
+            u_name = norm.get("username")
+            canon_key = _canonical_lead_key(ig_url, u_name)
+            if canon_key and canon_key in created_lead_keys:
+                duplicates_skipped += 1
                 continue
 
             raw_rec = await source_repo.create_record(
@@ -272,6 +334,8 @@ async def confirm_staged_import(payload: ConfirmImportRequest, db: AsyncSession 
             await task_repo.create(contact_id=contact.id, task_type="MESSAGE")
             imported += 1
             unique_added += 1
+            if canon_key:
+                created_lead_keys.add(canon_key)
             await event_repo.log_event(EventCode.CONTACT_CREATED, {"contact_id": contact.id, "name": contact.name})
             await event_repo.log_event(EventCode.TASK_CREATED, {"contact_id": contact.id})
 

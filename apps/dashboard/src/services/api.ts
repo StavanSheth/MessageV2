@@ -359,6 +359,15 @@ export async function fetchWorker3Status(): Promise<any> {
   return res.json();
 }
 
+export async function makeFollowupsDueNow(count?: number | null): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/worker3/make_due_now`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ count: count || null })
+  });
+  return res.json();
+}
+
 export async function fetchCoordinatorStatus(): Promise<{
   active_sender: string | null;
   mode: string;

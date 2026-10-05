@@ -21,6 +21,7 @@ import {
   resumeWorker3,
   stopWorker3,
   fetchWorker3Status,
+  makeFollowupsDueNow,
   fetchCoordinatorStatus,
   setCoordinatorMode
 } from '../services/api';
@@ -155,10 +156,15 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     is_running: boolean;
     is_paused: boolean;
     lock_held: boolean;
+    due_count?: number;
+    future_count?: number;
+    next_due_at?: string | null;
   } | null>(null);
 
   const [worker3BatchLimit, setWorker3BatchLimit] = useState<number | null>(5);
   const [worker3ActionLoading, setWorker3ActionLoading] = useState(false);
+  const [fastForwardLoading, setFastForwardLoading] = useState(false);
+  const [fastForwardMsg, setFastForwardMsg] = useState<string | null>(null);
 
   // Coordinator Mutex State
   const [coordinatorStatus, setCoordinatorStatus] = useState<{
@@ -277,6 +283,23 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
       const coord = await fetchCoordinatorStatus();
       setCoordinatorStatus(coord);
     } catch (e) {}
+  };
+
+  const handleMakeDueNow = async (count: number | null = null) => {
+    try {
+      setFastForwardLoading(true);
+      const res = await makeFollowupsDueNow(count);
+      setFastForwardMsg(res.message || 'Follow-ups are now due!');
+      const updated = await fetchWorker3Status();
+      setWorker3Status(updated);
+      const coord = await fetchCoordinatorStatus();
+      setCoordinatorStatus(coord);
+    } catch (e: any) {
+      alert(`Error fast-forwarding follow-ups: ${e.message}`);
+    } finally {
+      setFastForwardLoading(false);
+      setTimeout(() => setFastForwardMsg(null), 5000);
+    }
   };
 
   const handleSetMode = async (mode: string) => {
@@ -1514,7 +1537,11 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
 
             <div className="flex items-center space-x-3 flex-wrap gap-y-2">
               <span className="text-xs font-mono text-gray-400">
-                Processed: <strong className="text-white font-bold">{worker3Status?.batch_sent_count || 0}</strong>
+                Due Now: <strong className={worker3Status?.due_count ? "text-emerald-400 font-bold" : "text-gray-400"}>{worker3Status?.due_count || 0}</strong>
+                <span className="text-gray-600 px-1">•</span>
+                Future: <strong className="text-amber-400 font-bold">{worker3Status?.future_count || 0}</strong>
+                <span className="text-gray-600 px-1">•</span>
+                Sent: <strong className="text-white font-bold">{worker3Status?.batch_sent_count || 0}</strong>
               </span>
 
               {/* Individual Worker 3 Start / Pause Controls in Deck Header */}
@@ -1724,10 +1751,49 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                   </a>
                 </div>
               ) : (
-                <div className="py-4 text-center text-xs text-gray-500">
-                  <Repeat className="w-6 h-6 mx-auto mb-1 text-gray-600" />
-                  <p>Worker 3 is currently waiting or idle.</p>
-                  <p className="text-[10px]">Start a batch to send scheduled follow-ups.</p>
+                <div className="py-2 text-center text-xs text-gray-500 space-y-2">
+                  <Repeat className="w-5 h-5 mx-auto mb-1 text-gray-600" />
+                  <p className="font-semibold text-gray-300">
+                    {(worker3Status?.due_count || 0) > 0
+                      ? `${worker3Status?.due_count} follow-up(s) ready to send right now!`
+                      : '0 follow-ups currently due.'}
+                  </p>
+                  {(worker3Status?.future_count || 0) > 0 ? (
+                    <div className="bg-amber-950/40 border border-amber-800/60 rounded-xl p-2.5 text-left space-y-1.5 shadow-inner">
+                      <div className="flex items-center justify-between text-[11px] text-amber-300 font-bold">
+                        <span>{worker3Status?.future_count} scheduled in future</span>
+                        <span className="font-mono text-[10px] text-amber-400/90">
+                          {worker3Status?.next_due_at ? new Date(worker3Status.next_due_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A'}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-gray-400 leading-relaxed">
+                        Follow-ups wait 48h after initial outreach. Want to test sending immediately?
+                      </p>
+                      <div className="flex items-center gap-1.5 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => handleMakeDueNow(1)}
+                          disabled={fastForwardLoading}
+                          className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold transition active:scale-95 cursor-pointer disabled:opacity-50 shadow"
+                        >
+                          {fastForwardLoading ? '...' : '⚡ Make 1 Due Now'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleMakeDueNow(null)}
+                          disabled={fastForwardLoading}
+                          className="px-2.5 py-1 rounded-lg bg-amber-700 hover:bg-amber-600 text-white text-[10px] font-bold transition active:scale-95 cursor-pointer disabled:opacity-50 shadow"
+                        >
+                          {fastForwardLoading ? '...' : '⚡ Make All Due Now'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-gray-500">No follow-ups pending in queue.</p>
+                  )}
+                  {fastForwardMsg && (
+                    <p className="text-[10px] text-emerald-400 font-semibold">{fastForwardMsg}</p>
+                  )}
                 </div>
               )}
             </div>

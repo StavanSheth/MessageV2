@@ -148,6 +148,29 @@ class FollowUpWorker:
         await event_bus.publish_state(await self.health())
 
     async def health(self) -> Dict[str, Any]:
+        due_count = 0
+        future_count = 0
+        next_due_at = None
+        try:
+            now = datetime.now(timezone.utc)
+            async with AsyncSessionLocal() as session:
+                due_stmt = select(func.count(Task.id)).where(
+                    and_(Task.status == TaskStatus.READY.value, Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]), Task.scheduled_at <= now)
+                )
+                future_stmt = select(func.count(Task.id)).where(
+                    and_(Task.status == TaskStatus.READY.value, Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]), Task.scheduled_at > now)
+                )
+                earliest_future_stmt = select(func.min(Task.scheduled_at)).where(
+                    and_(Task.status == TaskStatus.READY.value, Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]), Task.scheduled_at > now)
+                )
+                due_count = (await session.execute(due_stmt)).scalar() or 0
+                future_count = (await session.execute(future_stmt)).scalar() or 0
+                next_due_at_dt = (await session.execute(earliest_future_stmt)).scalar_one_or_none()
+                if next_due_at_dt:
+                    next_due_at = next_due_at_dt.isoformat()
+        except Exception:
+            pass
+
         return {
             "worker_id": WORKER_ID,
             "worker_name": WORKER_NAME,
@@ -161,7 +184,10 @@ class FollowUpWorker:
             "batch_limit": self.batch_limit,
             "is_running": self.is_running,
             "is_paused": self.is_paused,
-            "lock_held": coordinator.active_sender == WORKER_ID
+            "lock_held": coordinator.active_sender == WORKER_ID,
+            "due_count": due_count,
+            "future_count": future_count,
+            "next_due_at": next_due_at
         }
 
     async def _update_worker_db(self, **kwargs) -> None:

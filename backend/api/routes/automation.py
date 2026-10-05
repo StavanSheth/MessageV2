@@ -142,6 +142,39 @@ async def worker3_status():
     from backend.workers.followup_worker import followup_worker
     return await followup_worker.health()
 
+class MakeDueNowRequest(BaseModel):
+    count: Optional[int] = None
+
+@router.post("/worker3/make_due_now")
+async def make_followups_due_now(req: Optional[MakeDueNowRequest] = None, db: AsyncSession = Depends(get_db)):
+    """Fast-forward pending future follow-up tasks to NOW so they can be tested/sent immediately."""
+    from backend.database.models import Task
+    from sqlalchemy import select, and_
+    now = datetime.now(timezone.utc)
+    limit = req.count if (req and req.count and req.count > 0) else None
+
+    stmt = (
+        select(Task)
+        .where(and_(Task.status == "READY", Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]), Task.scheduled_at > now))
+        .order_by(Task.scheduled_at.asc())
+    )
+    if limit:
+        stmt = stmt.limit(limit)
+    tasks = (await db.execute(stmt)).scalars().all()
+    if not tasks:
+        return {"status": "none_found", "message": "No future follow-up tasks found to fast-forward.", "updated_count": 0}
+
+    for t in tasks:
+        t.scheduled_at = now
+    await db.commit()
+
+    return {
+        "status": "success",
+        "updated_count": len(tasks),
+        "task_ids": [t.id for t in tasks],
+        "message": f"Successfully fast-forwarded {len(tasks)} follow-up task(s) to DUE NOW."
+    }
+
 # ─────────────────────────────────────────────────────────────
 # Coordinator & Lock Management Endpoints
 # ─────────────────────────────────────────────────────────────

@@ -51,13 +51,28 @@ event.listen(sync_engine, "connect", _set_sqlite_pragmas)
 event.listen(async_engine.sync_engine, "connect", _set_sqlite_pragmas)
 
 async def init_db():
-    """Create all tables in the SQLite database asynchronously."""
+    """Create all tables in the SQLite database asynchronously and ensure schema updates."""
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        def _check_columns(sync_conn):
+            from sqlalchemy import inspect, text
+            inspector = inspect(sync_conn)
+            if "contacts" in inspector.get_table_names():
+                cols = [c["name"] for c in inspector.get_columns("contacts")]
+                if "is_archived" not in cols:
+                    sync_conn.execute(text("ALTER TABLE contacts ADD COLUMN is_archived BOOLEAN DEFAULT 0"))
+        await conn.run_sync(_check_columns)
 
 def init_db_sync():
-    """Create all tables in the SQLite database synchronously."""
+    """Create all tables in the SQLite database synchronously and ensure schema updates."""
     Base.metadata.create_all(bind=sync_engine)
+    from sqlalchemy import inspect, text
+    with sync_engine.begin() as conn:
+        inspector = inspect(conn)
+        if "contacts" in inspector.get_table_names():
+            cols = [c["name"] for c in inspector.get_columns("contacts")]
+            if "is_archived" not in cols:
+                conn.execute(text("ALTER TABLE contacts ADD COLUMN is_archived BOOLEAN DEFAULT 0"))
 
 @asynccontextmanager
 async def get_async_db():

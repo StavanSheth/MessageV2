@@ -79,6 +79,7 @@ class Contact(Base):
     reply_detected_at = Column(DateTime, nullable=True)
     replied_at = Column(DateTime, nullable=True)
     notes = Column(Text, nullable=True)
+    is_archived = Column(Boolean, default=False, index=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -265,3 +266,15 @@ class Setting(Base):
     value = Column(Text, nullable=False)
     description = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+class OutreachHistory(Base):
+    __tablename__ = "outreach_history"
+
+    id = Column(String(64), primary_key=True, default=lambda: generate_id("oh_"))
+    username = Column(String(255), nullable=True, index=True)
+    instagram_url = Column(String(512), nullable=False, index=True)
+    contact_name = Column(String(255), nullable=True)
+    action = Column(String(64), nullable=False)  # MESSAGED, REPLIED, FOLLOW_UP_1, FOLLOW_UP_2, ARCHIVED
+    details = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+

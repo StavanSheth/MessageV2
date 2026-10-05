@@ -270,6 +270,19 @@ async def get_contact(contact_id: str, db: AsyncSession = Depends(get_db)):
         "updated_at": contact.updated_at
     }
 
+class UpdateContactDetailsRequest(BaseModel):
+    name: Optional[str] = None
+    username: Optional[str] = None
+    instagram_url: Optional[str] = None
+    notes: Optional[str] = None
+    expected_followers: Optional[int] = None
+
+class BulkDeleteRequest(BaseModel):
+    contact_ids: List[str]
+
+class ClearContactsRequest(BaseModel):
+    confirm: bool = False
+
 @router.delete("/{contact_id}")
 async def delete_contact(contact_id: str, db: AsyncSession = Depends(get_db)):
     repo = ContactRepository(db)
@@ -281,4 +294,72 @@ async def delete_contact(contact_id: str, db: AsyncSession = Depends(get_db)):
     if not deleted:
         raise HTTPException(500, "Failed to delete contact")
     return {"id": contact_id, "status": "deleted"}
+
+@router.patch("/{contact_id}")
+@router.put("/{contact_id}")
+async def update_contact_details(contact_id: str, req: UpdateContactDetailsRequest, db: AsyncSession = Depends(get_db)):
+    """Update contact identity details (name, username, URL, notes, expected followers)."""
+    repo = ContactRepository(db)
+    updated = await repo.update_contact_details(
+        contact_id=contact_id,
+        name=req.name,
+        username=req.username,
+        instagram_url=req.instagram_url,
+        notes=req.notes,
+        expected_followers=req.expected_followers
+    )
+    if not updated:
+        raise HTTPException(404, "Contact not found")
+    return {
+        "id": updated.id,
+        "name": updated.name,
+        "username": updated.username,
+        "instagram_url": updated.instagram_url,
+        "notes": updated.notes,
+        "expected_followers": updated.expected_followers,
+        "status": "updated"
+    }
+
+@router.post("/bulk_delete")
+async def bulk_delete_contacts(req: BulkDeleteRequest, db: AsyncSession = Depends(get_db)):
+    """Delete multiple contacts and their associated tasks/messages in bulk."""
+    repo = ContactRepository(db)
+    deleted_count = await repo.bulk_delete(req.contact_ids)
+    return {
+        "status": "success",
+        "deleted_count": deleted_count,
+        "message": f"Successfully deleted {deleted_count} contact(s)."
+    }
+
+@router.post("/clear")
+async def clear_all_contacts(req: ClearContactsRequest, db: AsyncSession = Depends(get_db)):
+    """Clear all contacts, tasks, and messages from the database."""
+    if not req.confirm:
+        raise HTTPException(400, "Must set confirm=True to clear all contacts.")
+    repo = ContactRepository(db)
+    cleared_count = await repo.clear_all()
+    return {
+        "status": "success",
+        "cleared_count": cleared_count,
+        "message": f"Successfully cleared {cleared_count} contact(s) and reset the queue."
+    }
+
+class BulkRepliedRequest(BaseModel):
+    status: str
+    contact_ids: Optional[List[str]] = None
+
+@router.post("/bulk_replied")
+async def bulk_update_replied(req: BulkRepliedRequest, db: AsyncSession = Depends(get_db)):
+    """Bulk update replied status across contacts, reviving follow-ups if reset to NO or UNKNOWN."""
+    if req.status not in ("YES", "NO", "UNKNOWN"):
+        raise HTTPException(400, "status must be YES, NO, or UNKNOWN")
+    repo = ContactRepository(db)
+    updated_count = await repo.bulk_update_replied(req.status, req.contact_ids)
+    return {
+        "status": "success",
+        "updated_count": updated_count,
+        "replied_status": req.status,
+        "message": f"Updated replied status to {req.status} for {updated_count} contact(s)."
+    }
+
 

@@ -46,6 +46,7 @@ class InstagramWorker:
         self.delay_between_messages: int = 15
         self._paused = False
         self._stop_requested = False
+        self.is_dispatching_dm = False
         self._task: Optional[asyncio.Task] = None
         self._start_time: Optional[datetime] = None
 
@@ -329,9 +330,11 @@ class InstagramWorker:
                 contact = task.contact
                 self.current_task_id = task.id
                 self.current_contact_name = contact.name if contact else "Unknown"
-                self.current_instagram = contact.instagram_url if contact else ""
-
-                await self._process_task(task, adapter)
+                try:
+                    self.is_dispatching_dm = True
+                    await self._process_task(task, adapter)
+                finally:
+                    self.is_dispatching_dm = False
 
                 # Batch limit check immediately after task completes
                 if self.batch_limit is not None and self.batch_sent_count >= self.batch_limit:
@@ -618,6 +621,18 @@ class InstagramWorker:
                 await self._fail_task(task_id, ResultCode.TASK_CANCELLED, "Worker stopped", new_status=TaskStatus.READY)
                 return
 
+            # Re-verify latest contact state & reply status before initiating send
+            async with AsyncSessionLocal() as chk_session:
+                chk_c = await chk_session.get(Contact, contact.id)
+                if chk_c and chk_c.replied_status in ["YES", "AUTOMATED_MESSAGE"]:
+                    logger.info(f"[Worker] Contact {contact.name} already replied ({chk_c.replied_status}). Aborting send.")
+                    t_repo = TaskRepository(chk_session)
+                    await t_repo.update_status(task_id, TaskStatus.CANCELLED, manual_review_reason=f"Cancelled: Contact replied {chk_c.replied_status}")
+                    self.current_task_id = None
+                    return
+                if chk_c and chk_c.message:
+                    message_body = chk_c.message
+
             # ── Send Message ──────────────────────────────────
             await self._set_stage(AutomationStage.SENDING_MESSAGE, contact.name, task_id=task_id)
             await event_bus.publish(EventCode.MESSAGE_ATTEMPTED, task_id=task_id, worker_id=WORKER_ID,
@@ -689,7 +704,7 @@ class InstagramWorker:
                     await task_repo.update_status(task_id, TaskStatus.COMPLETED)
 
                     # Automatically schedule Follow-Up 1 or 2 if contact has not replied
-                    if contact.replied_status != "YES":
+                    if contact.replied_status not in ["YES", "AUTOMATED_MESSAGE"]:
                         from datetime import timedelta
                         now = datetime.now(timezone.utc)
                         if task.type == "MESSAGE":
@@ -728,6 +743,21 @@ class InstagramWorker:
                                 session.add(fu2_task)
                                 await session.commit()
                                 logger.info(f"[Worker] Scheduled Follow-up 2 for {contact.name} in {delay} days")
+
+                    # Record OutreachHistory entry to retain long-term memory
+                    try:
+                        from backend.database.models import OutreachHistory
+                        history_entry = OutreachHistory(
+                            username=contact.username,
+                            instagram_url=contact.instagram_url,
+                            contact_name=contact.name,
+                            action="MESSAGED" if task.type == "MESSAGE" else task.type,
+                            details=f"Sent {task.type} successfully"
+                        )
+                        session.add(history_entry)
+                        await session.commit()
+                    except Exception as e:
+                        logger.warning(f"[Worker 1] Could not record outreach history: {e}")
 
                 await event_bus.publish(
                     EventCode.MESSAGE_CONFIRMED,

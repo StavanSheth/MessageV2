@@ -48,39 +48,73 @@ async def upload_xlsx(file: UploadFile = File(...), db: AsyncSession = Depends(g
         invalid_count = result["invalid"]
 
         imported = 0
-        for rec in records:
-            norm = rec.get("normalized", {})
-            raw_rec = await source_repo.create_record(
-                source_id=source.id,
-                raw_data=rec.get("raw", {}),
-                normalized_data=norm,
-                status="VALID" if rec["is_valid"] else "INVALID",
-                error_message=rec.get("error")
-            )
+        previously_messaged_count = 0
+        try:
+            from backend.database.models import OutreachHistory
+            from sqlalchemy import select, or_
 
-            if not rec["is_valid"]:
-                continue
-
-            # Check for duplicate by instagram_url
-            existing = await contact_repo.get_by_instagram(norm["instagram_url"], norm.get("username"))
-            if not existing:
-                contact = await contact_repo.create(
-                    name=norm.get("name", ""),
-                    instagram_url=norm.get("instagram_url", ""),
-                    username=norm.get("username"),
-                    message=norm.get("message", "Hey"),
-                    expected_followers=norm.get("expected_followers"),
-                    source_record_id=raw_rec.id,
-                    notes=norm.get("notes")
+            for rec in records:
+                norm = rec.get("normalized", {})
+                raw_rec = await source_repo.create_record(
+                    source_id=source.id,
+                    raw_data=rec.get("raw", {}),
+                    normalized_data=norm,
+                    status="VALID" if rec["is_valid"] else "INVALID",
+                    error_message=rec.get("error")
                 )
-                await task_repo.create(contact_id=contact.id, task_type="MESSAGE")
-                imported += 1
-                await event_repo.log_event(EventCode.CONTACT_CREATED, {"contact_id": contact.id, "name": contact.name})
-                await event_repo.log_event(EventCode.TASK_CREATED, {"contact_id": contact.id})
 
-        await source_repo.update_counts(source.id, len(records), valid_count, invalid_count, imported)
+                if not rec["is_valid"]:
+                    continue
 
-        payload = {"source_id": source.id, "total": len(records), "valid": valid_count, "invalid": invalid_count, "imported": imported}
+                # Check if this contact has outreach history
+                conditions = []
+                if norm.get("username"):
+                    conditions.append(OutreachHistory.username == norm.get("username"))
+                if norm.get("instagram_url"):
+                    conditions.append(OutreachHistory.instagram_url == norm.get("instagram_url"))
+                if conditions:
+                    hist_check = (await db.execute(select(OutreachHistory).where(or_(*conditions)))).scalars().first()
+                    if hist_check:
+                        previously_messaged_count += 1
+
+                # Canonical duplicate check
+                existing = await contact_repo.get_by_instagram(norm["instagram_url"], norm.get("username"))
+                if not existing:
+                    contact = await contact_repo.create(
+                        name=norm.get("name", ""),
+                        instagram_url=norm.get("instagram_url", ""),
+                        username=norm.get("username"),
+                        message=norm.get("message", "Hey"),
+                        expected_followers=norm.get("expected_followers"),
+                        source_record_id=raw_rec.id,
+                        notes=norm.get("notes"),
+                        followup_1_message=norm.get("followup_1_message"),
+                        followup_1_delay_days=norm.get("followup_1_delay_days", 3),
+                        followup_2_message=norm.get("followup_2_message"),
+                        followup_2_delay_days=norm.get("followup_2_delay_days", 5),
+                        replied_status=norm.get("replied_status", "UNKNOWN")
+                    )
+                    await task_repo.create(contact_id=contact.id, task_type="MESSAGE")
+                    imported += 1
+                    await event_repo.log_event(EventCode.CONTACT_CREATED, {"contact_id": contact.id, "name": contact.name})
+                    await event_repo.log_event(EventCode.TASK_CREATED, {"contact_id": contact.id})
+                else:
+                    # Link source record to existing contact and enrich empty fields
+                    if norm.get("notes") and not existing.notes:
+                        existing.notes = norm.get("notes")
+                    if norm.get("followup_1_message") and not existing.followup_1_message:
+                        existing.followup_1_message = norm.get("followup_1_message")
+                    if norm.get("followup_2_message") and not existing.followup_2_message:
+                        existing.followup_2_message = norm.get("followup_2_message")
+
+            await source_repo.update_counts(source.id, len(records), valid_count, invalid_count, imported)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Failed to process source import: {e}", exc_info=True)
+            raise HTTPException(500, f"Failed to import records: {str(e)}")
+
+        payload = {"source_id": source.id, "total": len(records), "valid": valid_count, "invalid": invalid_count, "imported": imported, "previously_contacted": previously_messaged_count}
         await event_repo.log_event(EventCode.SOURCE_IMPORTED, payload)
         await event_bus.publish(EventCode.SOURCE_IMPORTED, payload)
 
@@ -93,6 +127,7 @@ async def upload_xlsx(file: UploadFile = File(...), db: AsyncSession = Depends(g
             "invalid": invalid_count,
             "imported": imported,
             "tasks_created": imported,
+            "previously_contacted": previously_messaged_count,
             "status": "ok"
         }
     finally:
@@ -130,26 +165,32 @@ async def import_spreadsheet_url(payload: UrlSourcePayload, db: AsyncSession = D
         invalid_count = result["invalid"]
 
         imported = 0
-        for rec in records:
-            norm = rec.get("normalized", {})
-            raw_rec = await source_repo.create_record(source.id, rec.get("raw", {}), norm,
-                                                       status="VALID" if rec["is_valid"] else "INVALID",
-                                                       error_message=rec.get("error"))
-            if not rec["is_valid"]:
-                continue
-            existing = await contact_repo.get_by_instagram(norm["instagram_url"], norm.get("username"))
-            if not existing:
-                contact = await contact_repo.create(
-                    name=norm.get("name", ""),
-                    instagram_url=norm.get("instagram_url", ""),
-                    username=norm.get("username"),
-                    message=norm.get("message", "Hey"),
-                    source_record_id=raw_rec.id
-                )
-                await task_repo.create(contact_id=contact.id, task_type="MESSAGE")
-                imported += 1
+        try:
+            for rec in records:
+                norm = rec.get("normalized", {})
+                raw_rec = await source_repo.create_record(source.id, rec.get("raw", {}), norm,
+                                                           status="VALID" if rec["is_valid"] else "INVALID",
+                                                           error_message=rec.get("error"))
+                if not rec["is_valid"]:
+                    continue
+                existing = await contact_repo.get_by_instagram(norm["instagram_url"], norm.get("username"))
+                if not existing:
+                    contact = await contact_repo.create(
+                        name=norm.get("name", ""),
+                        instagram_url=norm.get("instagram_url", ""),
+                        username=norm.get("username"),
+                        message=norm.get("message", "Hey"),
+                        source_record_id=raw_rec.id
+                    )
+                    await task_repo.create(contact_id=contact.id, task_type="MESSAGE")
+                    imported += 1
 
-        await source_repo.update_counts(source.id, len(records), valid_count, invalid_count, imported)
+            await source_repo.update_counts(source.id, len(records), valid_count, invalid_count, imported)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Failed to import URL source records: {e}", exc_info=True)
+            raise HTTPException(500, f"Failed to import records: {str(e)}")
         return {
             "source_id": source.id,
             "total": len(records),

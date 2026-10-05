@@ -63,6 +63,12 @@ async def extension_status():
         "extension_connected": extension_bridge.is_connected
     }
 
+@router.get("/hardware")
+async def get_hardware_status():
+    """Detect NVIDIA GPU & VRAM capability per Doc 1 §11."""
+    from backend.config.hardware import detect_gpu_capabilities
+    return detect_gpu_capabilities()
+
 @router.post("/replies/scan")
 async def scan_replies():
     from backend.workers.reply_scanner_worker import reply_scanner_worker

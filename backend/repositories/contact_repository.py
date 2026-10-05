@@ -11,7 +11,10 @@ class ContactRepository:
 
     async def create(self, name: str, instagram_url: str, username: Optional[str] = None,
                      message: str = "Hey", expected_followers: Optional[int] = None,
-                     source_record_id: Optional[str] = None, notes: Optional[str] = None) -> Contact:
+                     source_record_id: Optional[str] = None, notes: Optional[str] = None,
+                     followup_1_message: Optional[str] = None, followup_1_delay_days: int = 3,
+                     followup_2_message: Optional[str] = None, followup_2_delay_days: int = 5,
+                     replied_status: str = "UNKNOWN") -> Contact:
         contact = Contact(
             name=name,
             instagram_url=instagram_url,
@@ -19,7 +22,12 @@ class ContactRepository:
             message=message,
             expected_followers=expected_followers,
             source_record_id=source_record_id,
-            notes=notes
+            notes=notes,
+            followup_1_message=followup_1_message,
+            followup_1_delay_days=followup_1_delay_days,
+            followup_2_message=followup_2_message,
+            followup_2_delay_days=followup_2_delay_days,
+            replied_status=replied_status
         )
         self.session.add(contact)
         await self.session.flush()
@@ -31,12 +39,64 @@ class ContactRepository:
         return result.scalar_one_or_none()
 
     async def get_by_instagram(self, instagram_url: str, username: Optional[str] = None) -> Optional[Contact]:
-        conditions = [Contact.instagram_url == instagram_url]
+        from sqlalchemy import or_, func
+        conditions = []
+        if instagram_url:
+            clean_url = str(instagram_url).split("?")[0].split("#")[0].rstrip("/").lower()
+            conditions.append(func.lower(Contact.instagram_url).like(f"{clean_url}%"))
         if username:
-            conditions.append(Contact.username == username)
-        stmt = select(Contact).where(*conditions)
+            clean_user = str(username).lstrip("@").strip().lower()
+            conditions.append(func.lower(Contact.username) == clean_user)
+        if not conditions:
+            return None
+        stmt = select(Contact).where(or_(*conditions))
         result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        return result.scalars().first()
+
+    async def update_contact_details(self, contact_id: str, name: Optional[str] = None,
+                                     username: Optional[str] = None, instagram_url: Optional[str] = None,
+                                     notes: Optional[str] = None, expected_followers: Optional[int] = None) -> Optional[Contact]:
+        contact = await self.get_by_id(contact_id)
+        if not contact:
+            return None
+        if name is not None:
+            contact.name = name.strip()
+        if username is not None:
+            contact.username = username.lstrip("@").strip()
+        if instagram_url is not None:
+            contact.instagram_url = instagram_url.strip()
+        if notes is not None:
+            contact.notes = notes
+        if expected_followers is not None:
+            contact.expected_followers = expected_followers
+        contact.updated_at = datetime.now(timezone.utc)
+        await self.session.commit()
+        await self.session.refresh(contact)
+        return contact
+
+    async def bulk_delete(self, contact_ids: List[str]) -> int:
+        from sqlalchemy import delete
+        from backend.database.models import Task, Message, VerificationResult
+        if not contact_ids:
+            return 0
+        await self.session.execute(delete(VerificationResult).where(VerificationResult.contact_id.in_(contact_ids)))
+        await self.session.execute(delete(Message).where(Message.contact_id.in_(contact_ids)))
+        await self.session.execute(delete(Task).where(Task.contact_id.in_(contact_ids)))
+        stmt = delete(Contact).where(Contact.id.in_(contact_ids))
+        res = await self.session.execute(stmt)
+        await self.session.commit()
+        return res.rowcount
+
+    async def clear_all(self) -> int:
+        from sqlalchemy import delete
+        from backend.database.models import Task, Message, VerificationResult
+        await self.session.execute(delete(VerificationResult))
+        await self.session.execute(delete(Message))
+        await self.session.execute(delete(Task))
+        stmt = delete(Contact)
+        res = await self.session.execute(stmt)
+        await self.session.commit()
+        return res.rowcount
 
     async def list_all(self, limit: int = 100, offset: int = 0) -> List[Contact]:
         stmt = select(Contact).order_by(Contact.created_at.desc()).limit(limit).offset(offset)
@@ -53,7 +113,7 @@ class ContactRepository:
             .order_by(Contact.name.asc())
             .limit(limit)
             .offset(offset)
-        )
+            )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
@@ -169,7 +229,13 @@ class ContactRepository:
                         and_(Task.contact_id == t.contact_id, Task.type == "FOLLOW_UP_1")
                     )
                     fu1_task = (await self.session.execute(fu1_task_stmt)).scalar_one_or_none()
-                    if fu1_task and fu1_task.completed_at:
+                    if fu1_task and fu1_task.status in ["CANCELLED", "SKIPPED", "FAILED"]:
+                        t.status = "CANCELLED"
+                        t.manual_review_reason = "Cancelled: Follow-Up 1 was cancelled or not completed"
+                        t.updated_at = now
+                        rescheduled_count += 1
+                        continue
+                    elif fu1_task and fu1_task.completed_at:
                         base = fu1_task.completed_at
                     elif fu1_task and fu1_task.scheduled_at:
                         base = fu1_task.scheduled_at
@@ -264,7 +330,19 @@ class ContactRepository:
 
     async def delete(self, contact_id: str) -> bool:
         from sqlalchemy import delete
-        from backend.database.models import Task, Message, VerificationResult
+        from backend.database.models import Task, Message, VerificationResult, OutreachHistory
+        contact = await self.get_by_id(contact_id)
+        if contact:
+            try:
+                self.session.add(OutreachHistory(
+                    username=contact.username,
+                    instagram_url=contact.instagram_url,
+                    contact_name=contact.name,
+                    action="ARCHIVED",
+                    details="Contact deleted"
+                ))
+            except Exception:
+                pass
         await self.session.execute(delete(VerificationResult).where(VerificationResult.contact_id == contact_id))
         await self.session.execute(delete(Message).where(Message.contact_id == contact_id))
         await self.session.execute(delete(Task).where(Task.contact_id == contact_id))
@@ -272,6 +350,103 @@ class ContactRepository:
         res = await self.session.execute(stmt)
         await self.session.commit()
         return res.rowcount > 0
+
+    async def update_contact_details(self, contact_id: str, data: dict) -> Optional[Contact]:
+        contact = await self.get_by_id(contact_id)
+        if not contact:
+            return None
+        allowed_fields = ["name", "username", "instagram_url", "notes", "expected_followers", "is_archived"]
+        for k in allowed_fields:
+            if k in data and data[k] is not None:
+                if k == "instagram_url":
+                    from backend.sources.xlsx.adapter import LocalXlsxSource
+                    can_url, can_user = LocalXlsxSource._format_instagram_url(data[k])
+                    setattr(contact, "instagram_url", can_url or data[k])
+                    if can_user and not data.get("username"):
+                        setattr(contact, "username", can_user)
+                elif k == "username":
+                    user_clean = str(data[k]).lstrip("@").strip()
+                    setattr(contact, "username", user_clean)
+                else:
+                    setattr(contact, k, data[k])
+        contact.updated_at = datetime.now(timezone.utc)
+        await self.session.commit()
+        await self.session.refresh(contact)
+        return contact
+
+    async def bulk_delete(self, contact_ids: List[str]) -> int:
+        from sqlalchemy import delete
+        from backend.database.models import Task, Message, VerificationResult, OutreachHistory
+        if not contact_ids:
+            return 0
+        c_stmt = select(Contact).where(Contact.id.in_(contact_ids))
+        contacts = (await self.session.execute(c_stmt)).scalars().all()
+        for c in contacts:
+            try:
+                self.session.add(OutreachHistory(
+                    username=c.username,
+                    instagram_url=c.instagram_url,
+                    contact_name=c.name,
+                    action="ARCHIVED",
+                    details="Contact bulk deleted"
+                ))
+            except Exception:
+                pass
+        await self.session.execute(delete(VerificationResult).where(VerificationResult.contact_id.in_(contact_ids)))
+        await self.session.execute(delete(Message).where(Message.contact_id.in_(contact_ids)))
+        await self.session.execute(delete(Task).where(Task.contact_id.in_(contact_ids)))
+        res = await self.session.execute(delete(Contact).where(Contact.id.in_(contact_ids)))
+        await self.session.commit()
+        return res.rowcount
+
+    async def clear_all(self) -> int:
+        from sqlalchemy import delete
+        from backend.database.models import Task, Message, VerificationResult, OutreachHistory
+        all_contacts = (await self.session.execute(select(Contact))).scalars().all()
+        for c in all_contacts:
+            try:
+                self.session.add(OutreachHistory(
+                    username=c.username,
+                    instagram_url=c.instagram_url,
+                    contact_name=c.name,
+                    action="ARCHIVED",
+                    details="Contact cleared in DB wipe"
+                ))
+            except Exception:
+                pass
+        await self.session.execute(delete(VerificationResult))
+        await self.session.execute(delete(Message))
+        await self.session.execute(delete(Task))
+        res = await self.session.execute(delete(Contact))
+        await self.session.commit()
+        return res.rowcount
+
+    async def bulk_update_replied(self, status: str, contact_ids: Optional[List[str]] = None) -> int:
+        now = datetime.now(timezone.utc)
+        stmt = update(Contact).values(replied_status=status, updated_at=now)
+        if contact_ids:
+            stmt = stmt.where(Contact.id.in_(contact_ids))
+        res = await self.session.execute(stmt)
+        count = res.rowcount
+
+        # If transitioning to NO or UNKNOWN, revive cancelled follow-up tasks back to READY
+        if status in ("NO", "UNKNOWN"):
+            conditions = [
+                Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]),
+                Task.status == TaskStatus.CANCELLED.value,
+                Task.manual_review_reason.like("%replied%")
+            ]
+            if contact_ids:
+                conditions.append(Task.contact_id.in_(contact_ids))
+            revive_stmt = update(Task).where(and_(*conditions)).values(
+                status=TaskStatus.READY.value,
+                manual_review_reason=None,
+                updated_at=now
+            )
+            await self.session.execute(revive_stmt)
+
+        await self.session.commit()
+        return count
 
 
 

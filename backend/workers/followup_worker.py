@@ -48,6 +48,7 @@ class FollowUpWorker:
         self.delay_between_messages: int = 15
         self._paused = False
         self._stop_requested = False
+        self.is_dispatching_dm = False
         self._task: Optional[asyncio.Task] = None
         self._start_time: Optional[datetime] = None
 
@@ -267,9 +268,11 @@ class FollowUpWorker:
                 self.current_task_id = task.id
                 self.current_contact_name = contact.name if contact else "Unknown"
                 self.current_instagram = contact.instagram_url if contact else ""
-                self.current_touch = task.type
-
-                await self._process_followup(task, adapter)
+                try:
+                    self.is_dispatching_dm = True
+                    await self._process_followup(task, adapter)
+                finally:
+                    self.is_dispatching_dm = False
 
                 # Batch limit check right after task
                 if self.batch_limit is not None and self.batch_sent_count >= self.batch_limit:
@@ -352,6 +355,33 @@ class FollowUpWorker:
             if self._stop_requested:
                 return
 
+            # Re-verify latest contact state & reply status before initiating follow-up send
+            async with AsyncSessionLocal() as chk_session:
+                chk_c = await chk_session.get(Contact, contact.id)
+                if chk_c and chk_c.replied_status in ["YES", "AUTOMATED_MESSAGE"]:
+                    logger.info(f"[Worker 3] Contact {contact.name} already replied ({chk_c.replied_status}). Aborting follow-up send.")
+                    t_repo = TaskRepository(chk_session)
+                    await t_repo.update_status(task_id, TaskStatus.CANCELLED, manual_review_reason=f"Cancelled: Contact replied {chk_c.replied_status}")
+                    self.current_task_id = None
+                    return
+                if chk_c:
+                    if task.type == "FOLLOW_UP_2":
+                        from sqlalchemy import select, and_
+                        fu1_stmt = select(Task).where(
+                            and_(Task.contact_id == contact.id, Task.type == "FOLLOW_UP_1")
+                        )
+                        fu1_task = (await chk_session.execute(fu1_stmt)).scalar_one_or_none()
+                        if not fu1_task or fu1_task.status != TaskStatus.COMPLETED.value:
+                            logger.warning(f"[Worker 3] Cannot send Follow-Up 2 for {contact.name}: Follow-Up 1 was not completed (status: {getattr(fu1_task, 'status', 'None')}). Aborting.")
+                            t_repo = TaskRepository(chk_session)
+                            await t_repo.update_status(task_id, TaskStatus.CANCELLED, manual_review_reason="Cancelled: Follow-Up 1 was not completed")
+                            self.current_task_id = None
+                            return
+                    if task.type == "FOLLOW_UP_1" and chk_c.followup_1_message:
+                        followup_body = chk_c.followup_1_message
+                    elif task.type == "FOLLOW_UP_2" and chk_c.followup_2_message:
+                        followup_body = chk_c.followup_2_message
+
             # ── Send Follow-Up Message ──
             self.stage = AutomationStage.SENDING_MESSAGE
             await event_bus.publish(
@@ -403,7 +433,7 @@ class FollowUpWorker:
                     await t_repo.update_status(task_id, TaskStatus.COMPLETED)
 
                     # If this was Follow-Up 1, automatically schedule Follow-Up 2 (+5 days)
-                    if task.type == "FOLLOW_UP_1" and contact.replied_status != "YES":
+                    if task.type == "FOLLOW_UP_1" and contact.replied_status not in ["YES", "AUTOMATED_MESSAGE"]:
                         fu2_delay = contact.followup_2_delay_days or 5
                         now = datetime.now(timezone.utc)
                         fu2_task = Task(
@@ -417,6 +447,21 @@ class FollowUpWorker:
                         session.add(fu2_task)
                         await session.commit()
                         logger.info(f"[Worker 3] Follow-Up 1 completed! Scheduled Follow-Up 2 for {contact.name} in {fu2_delay} days.")
+
+                    # Record OutreachHistory entry to retain long-term memory
+                    try:
+                        from backend.database.models import OutreachHistory
+                        history_entry = OutreachHistory(
+                            username=contact.username,
+                            instagram_url=contact.instagram_url,
+                            contact_name=contact.name,
+                            action=task.type,
+                            details=f"Sent {task.type} successfully"
+                        )
+                        session.add(history_entry)
+                        await session.commit()
+                    except Exception as e:
+                        logger.warning(f"[Worker 3] Could not record outreach history: {e}")
 
                 await event_bus.publish(
                     EventCode.MESSAGE_CONFIRMED,

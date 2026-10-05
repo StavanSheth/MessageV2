@@ -192,12 +192,25 @@ class FollowUpService:
         if not contact:
             return False, "Contact not found"
 
-        if contact.replied_status == "YES":
+        if contact.replied_status in ["YES", "AUTOMATED_MESSAGE"]:
             # Cancel task immediately
             task.status = TaskStatus.CANCELLED.value
-            task.manual_review_reason = "Cancelled: Contact replied YES prior to FU execution"
+            task.manual_review_reason = f"Cancelled: Contact replied {contact.replied_status} prior to FU execution"
             task.updated_at = datetime.now(timezone.utc)
             await session.commit()
-            return False, "Contact has replied YES. Follow-up cancelled."
+            return False, f"Contact has replied {contact.replied_status}. Follow-up cancelled."
+
+        # For FOLLOW_UP_2, strictly verify FOLLOW_UP_1 completed successfully
+        if task.type == "FOLLOW_UP_2":
+            fu1_stmt = select(Task).where(
+                and_(Task.contact_id == task.contact_id, Task.type == "FOLLOW_UP_1")
+            )
+            fu1_task = (await session.execute(fu1_stmt)).scalar_one_or_none()
+            if not fu1_task or fu1_task.status != TaskStatus.COMPLETED.value:
+                task.status = TaskStatus.CANCELLED.value
+                task.manual_review_reason = "Cancelled: Follow-Up 1 was not completed"
+                task.updated_at = datetime.now(timezone.utc)
+                await session.commit()
+                return False, "Follow-Up 1 was not completed. Follow-up 2 cancelled."
 
         return True, "Verified safe to send"

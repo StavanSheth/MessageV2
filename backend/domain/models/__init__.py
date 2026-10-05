@@ -36,6 +36,7 @@ class ContactBase(BaseModel):
     last_checked_reply_at: Optional[datetime] = None
     reply_detected_at: Optional[datetime] = None
     notes: Optional[str] = None
+    is_archived: bool = False
 
 class ContactCreate(ContactBase):
     source_record_id: Optional[str] = None
@@ -44,6 +45,8 @@ class ContactUpdate(BaseModel):
     name: Optional[str] = None
     instagram_url: Optional[str] = None
     username: Optional[str] = None
+    notes: Optional[str] = None
+    is_archived: Optional[bool] = None
     expected_followers: Optional[int] = None
     message: Optional[str] = None
     replied_status: Optional[RepliedStatus] = None

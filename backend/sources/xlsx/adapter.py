@@ -13,6 +13,7 @@ class LocalXlsxSource(SourceAdapter):
     async def open(self) -> bool:
         if not os.path.exists(self.file_path):
             raise FileNotFoundError(f"File not found: {self.file_path}")
+        self._last_mtime = os.path.getmtime(self.file_path)
         self.workbook = openpyxl.load_workbook(self.file_path, data_only=True)
         self.sheet = self.workbook.active
         return True
@@ -37,21 +38,28 @@ class LocalXlsxSource(SourceAdapter):
     def _extract_username_from_url(url: str) -> Optional[str]:
         if not url:
             return None
-        match = re.search(r"instagram\.com/([a-zA-Z0-9_\.\-]+)/?", url)
+        clean = str(url).split("?")[0].split("#")[0].rstrip("/")
+        match = re.search(r"instagram\.com/([a-zA-Z0-9_\.\-]+)", clean, re.IGNORECASE)
         if match:
-            return match.group(1).strip()
+            user = match.group(1).strip()
+            if user.lower() not in ["p", "reel", "reels", "stories", "explore", "direct"]:
+                return user
         return None
 
     @staticmethod
     def _format_instagram_url(val: str) -> Tuple[str, str]:
-        """Returns (instagram_url, username)."""
-        val = str(val).strip()
-        if "instagram.com" in val:
-            url = val if val.startswith("http") else f"https://{val}"
-            username = LocalXlsxSource._extract_username_from_url(url) or ""
+        """Returns canonical (instagram_url, username)."""
+        val_str = str(val).strip()
+        clean = val_str.split("?")[0].split("#")[0].rstrip("/")
+        if "instagram.com" in clean.lower():
+            username = LocalXlsxSource._extract_username_from_url(clean) or ""
+            if username:
+                url = f"https://www.instagram.com/{username}/"
+            else:
+                url = clean if clean.startswith("http") else f"https://{clean}"
             return url, username
         else:
-            clean_user = val.lstrip("@").strip()
+            clean_user = clean.lstrip("@").strip()
             if clean_user and re.match(r"^[a-zA-Z0-9_\.]+$", clean_user):
                 username = clean_user
                 url = f"https://www.instagram.com/{username}/"
@@ -104,6 +112,11 @@ class LocalXlsxSource(SourceAdapter):
         msg_idx = find_col("message", "dm", "text", "body", "initial message", "reason")
         followers_idx = find_col("expected followers", "followers", "follower count")
         notes_idx = find_col("notes", "note", "comment", "remarks")
+        fu1_msg_idx = find_col("follow up 1 message", "follow-up 1 message", "followup 1 message", "fu1 message", "follow up 1", "follow-up 1", "fu1", "1st follow up")
+        fu1_delay_idx = find_col("follow up 1 delay", "follow-up 1 delay", "followup 1 delay", "fu1 delay", "delay 1")
+        fu2_msg_idx = find_col("follow up 2 message", "follow-up 2 message", "followup 2 message", "fu2 message", "follow up 2", "follow-up 2", "fu2", "2nd follow up")
+        fu2_delay_idx = find_col("follow up 2 delay", "follow-up 2 delay", "followup 2 delay", "fu2 delay", "delay 2")
+        replied_idx = find_col("replied status", "replied", "reply status", "has replied")
 
         records = []
         for row_idx, row in enumerate(rows[header_row_idx + 1:], start=header_row_idx + 2):
@@ -126,6 +139,31 @@ class LocalXlsxSource(SourceAdapter):
                 except Exception:
                     followers_val = None
             notes_val = str(row[notes_idx]).strip() if notes_idx is not None and notes_idx < len(row) and row[notes_idx] is not None else None
+
+            fu1_msg_val = str(row[fu1_msg_idx]).strip() if fu1_msg_idx is not None and fu1_msg_idx < len(row) and row[fu1_msg_idx] is not None else None
+            fu2_msg_val = str(row[fu2_msg_idx]).strip() if fu2_msg_idx is not None and fu2_msg_idx < len(row) and row[fu2_msg_idx] is not None else None
+
+            fu1_delay_val = 3
+            if fu1_delay_idx is not None and fu1_delay_idx < len(row) and row[fu1_delay_idx] is not None:
+                try:
+                    fu1_delay_val = int(re.sub(r"[^\d]", "", str(row[fu1_delay_idx]))) or 3
+                except Exception:
+                    fu1_delay_val = 3
+
+            fu2_delay_val = 5
+            if fu2_delay_idx is not None and fu2_delay_idx < len(row) and row[fu2_delay_idx] is not None:
+                try:
+                    fu2_delay_val = int(re.sub(r"[^\d]", "", str(row[fu2_delay_idx]))) or 5
+                except Exception:
+                    fu2_delay_val = 5
+
+            replied_val = "UNKNOWN"
+            if replied_idx is not None and replied_idx < len(row) and row[replied_idx] is not None:
+                r_str = str(row[replied_idx]).strip().upper()
+                if r_str in ["YES", "TRUE", "Y"]:
+                    replied_val = "YES"
+                elif r_str in ["NO", "FALSE", "N"]:
+                    replied_val = "NO"
 
             # Validation
             is_valid = True
@@ -152,6 +190,11 @@ class LocalXlsxSource(SourceAdapter):
                     "username": username,
                     "expected_followers": followers_val,
                     "message": msg_val,
+                    "followup_1_message": fu1_msg_val,
+                    "followup_1_delay_days": fu1_delay_val,
+                    "followup_2_message": fu2_msg_val,
+                    "followup_2_delay_days": fu2_delay_val,
+                    "replied_status": replied_val,
                     "notes": notes_val
                 }
             else:
@@ -160,6 +203,11 @@ class LocalXlsxSource(SourceAdapter):
                     "instagram_url": ig_val,
                     "username": None,
                     "message": msg_val or "Hey",
+                    "followup_1_message": fu1_msg_val,
+                    "followup_1_delay_days": fu1_delay_val,
+                    "followup_2_message": fu2_msg_val,
+                    "followup_2_delay_days": fu2_delay_val,
+                    "replied_status": replied_val,
                     "notes": notes_val
                 }
 
@@ -173,7 +221,15 @@ class LocalXlsxSource(SourceAdapter):
 
         return records
 
-    async def atomic_write_back(self, updates: Dict[str, Any]) -> Tuple[bool, str]:
+    async def atomic_write_back(self, updates: Dict[str, Any], check_conflict: bool = True) -> Tuple[bool, str]:
+        if not os.path.exists(self.file_path):
+            return False, "File does not exist on disk"
+
+        if check_conflict and hasattr(self, "_last_mtime") and self._last_mtime is not None:
+            current_mtime = os.path.getmtime(self.file_path)
+            if current_mtime > self._last_mtime + 0.5:
+                return False, "SYNC_CONFLICT: Source file was modified externally"
+
         if self.workbook:
             try:
                 self.workbook.close()
@@ -213,6 +269,7 @@ class LocalXlsxSource(SourceAdapter):
             wb.save(tmp_path)
             wb.close()
             os.replace(tmp_path, self.file_path)
+            self._last_mtime = os.path.getmtime(self.file_path)
             return True, "Write-back successful"
         except Exception as e:
             return False, str(e)

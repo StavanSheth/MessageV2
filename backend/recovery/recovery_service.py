@@ -126,6 +126,8 @@ class RecoveryService:
             except Exception as e:
                 logger.error(f"[Recovery] Failed to interrupt task {task.id}: {e}")
         return affected
+
+    async def reconcile_unknown_send(self, task_id: str, instagram_adapter=None, message_text: str = "Hey") -> str:
         """
         Inspect the conversation and determine whether message was sent.
         Returns: CONFIRMED, NOT_DONE, MANUAL_REVIEW

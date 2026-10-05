@@ -77,10 +77,20 @@ class DMCoordinator:
                 from backend.workers.instagram_worker import instagram_worker
                 if instagram_worker.is_running and not instagram_worker.is_paused:
                     await instagram_worker.pause()
+                    # Wait safely if a DM is actively being typed or dispatched
+                    for _ in range(30):
+                        if not getattr(instagram_worker, "is_dispatching_dm", False):
+                            break
+                        await asyncio.sleep(0.3)
             elif worker_id == "WORKER-03":
                 from backend.workers.followup_worker import followup_worker
                 if followup_worker.is_running and not followup_worker.is_paused:
                     await followup_worker.pause()
+                    # Wait safely if a DM is actively being typed or dispatched
+                    for _ in range(30):
+                        if not getattr(followup_worker, "is_dispatching_dm", False):
+                            break
+                        await asyncio.sleep(0.3)
         except Exception as e:
             logger.warning(f"[Coordinator] Error preempting {worker_id}: {e}")
 

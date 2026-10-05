@@ -155,13 +155,33 @@ class ReplyScannerWorker:
                         if not thread_name:
                             continue
 
-                        # Match contact by name or username
+                        # Match contact by exact username or token-bounded name
                         matched_contact = None
+                        clean_tname = thread_name.strip().lower()
+                        thread_tokens = set(re.findall(r"[a-zA-Z0-9_\.]+", clean_tname)) if clean_tname else set()
+
                         for c in all_contacts:
+                            c_user = (c.username or "").strip().lower().lstrip("@")
                             c_name = (c.name or "").strip().lower()
-                            c_user = (c.username or "").strip().lower()
-                            if (c_name and (c_name in thread_name or thread_name in c_name)) or \
-                               (c_user and (c_user in thread_name or thread_name in c_user)):
+
+                            # 1. Exact username match
+                            if c_user and (clean_tname == c_user or clean_tname == f"@{c_user}"):
+                                matched_contact = c
+                                break
+                            # 2. Check thread_href for username
+                            if c_user and thread_href and c_user in thread_href.lower():
+                                matched_contact = c
+                                break
+                            # 3. Exact full name match
+                            if c_name and clean_tname == c_name:
+                                matched_contact = c
+                                break
+                            # 4. Thread contains exact username token
+                            if c_user and c_user in thread_tokens:
+                                matched_contact = c
+                                break
+                            # 5. Multi-word full name match
+                            if c_name and len(c_name.split()) >= 2 and c_name in clean_tname:
                                 matched_contact = c
                                 break
 
@@ -206,13 +226,18 @@ class ReplyScannerWorker:
                                 matched_contact.reply_detected_at = now
                                 matched_contact.notes = (matched_contact.notes or "") + f" [Auto-Reply: {inbound_text[:80]}...]"
 
-                                # Cancel further scheduled follow-ups
+                                # Cancel all pending/ready follow-ups for this contact
                                 fu_stmt = select(Task).where(
-                                    and_(Task.contact_id == matched_contact.id, Task.status == TaskStatus.READY.value)
+                                    and_(
+                                        Task.contact_id == matched_contact.id,
+                                        Task.status.in_([TaskStatus.READY.value, TaskStatus.CREATED.value, TaskStatus.QUEUED.value])
+                                    )
                                 )
-                                ready_tasks = (await session.execute(fu_stmt)).scalars().all()
-                                for rt in ready_tasks:
-                                    rt.status = TaskStatus.CANCELLED.value
+                                pending_tasks = (await session.execute(fu_stmt)).scalars().all()
+                                for pt in pending_tasks:
+                                    pt.status = TaskStatus.CANCELLED.value
+                                    pt.manual_review_reason = "Cancelled: Contact automated reply detected"
+                                    pt.updated_at = now
 
                                 logger.info(f"[ReplyScanner] Automated message detected from {matched_contact.name}: Phone={extracted['phone']}, Email={extracted['email']}")
                             else:
@@ -224,13 +249,18 @@ class ReplyScannerWorker:
                                 matched_contact.extracted_link = extracted["link"]
                                 matched_contact.reply_detected_at = now
 
-                                # Cancel further scheduled follow-ups
+                                # Cancel all pending/ready follow-ups for this contact
                                 fu_stmt = select(Task).where(
-                                    and_(Task.contact_id == matched_contact.id, Task.status == TaskStatus.READY.value)
+                                    and_(
+                                        Task.contact_id == matched_contact.id,
+                                        Task.status.in_([TaskStatus.READY.value, TaskStatus.CREATED.value, TaskStatus.QUEUED.value])
+                                    )
                                 )
-                                ready_tasks = (await session.execute(fu_stmt)).scalars().all()
-                                for rt in ready_tasks:
-                                    rt.status = TaskStatus.CANCELLED.value
+                                pending_tasks = (await session.execute(fu_stmt)).scalars().all()
+                                for pt in pending_tasks:
+                                    pt.status = TaskStatus.CANCELLED.value
+                                    pt.manual_review_reason = "Cancelled: Contact human reply detected"
+                                    pt.updated_at = now
 
                                 logger.info(f"[ReplyScanner] Human reply detected from {matched_contact.name}: {inbound_text[:80]}")
                         else:

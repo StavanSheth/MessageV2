@@ -145,6 +145,89 @@ export async function toggleReplied(contactId: string, hasReplied: boolean): Pro
   return res.json();
 }
 
+export async function updateContactDetails(
+  contactId: string,
+  data: {
+    name?: string;
+    username?: string;
+    instagram_url?: string;
+    notes?: string;
+    expected_followers?: number;
+  }
+): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/contacts/${contactId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to update contact details');
+  }
+  return res.json();
+}
+
+export async function bulkDeleteContacts(contactIds: string[]): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/contacts/bulk_delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contact_ids: contactIds }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to bulk delete contacts');
+  }
+  return res.json();
+}
+
+export async function clearAllContacts(): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/contacts/clear`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm: true }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to clear all contacts');
+  }
+  return res.json();
+}
+
+export async function bulkUpdateReplied(status: 'YES' | 'NO' | 'UNKNOWN', contactIds?: string[]): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/contacts/bulk_replied`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status, contact_ids: contactIds }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to bulk update replied status');
+  }
+  return res.json();
+}
+
+export async function getHardwareCapabilities(): Promise<{
+  has_nvidia_gpu: boolean;
+  gpu_name: string | null;
+  vram_mb: number;
+  supported_modes: string[];
+  recommended_mode: string;
+  enforce_single_browser: boolean;
+}> {
+  const res = await fetch(`${BASE_URL}/api/automation/hardware`);
+  if (!res.ok) {
+    return {
+      has_nvidia_gpu: false,
+      gpu_name: null,
+      vram_mb: 0,
+      supported_modes: ['SINGLE_BROWSER'],
+      recommended_mode: 'SINGLE_BROWSER',
+      enforce_single_browser: true,
+    };
+  }
+  return res.json();
+}
+
 export async function fetchTasks(): Promise<Task[]> {
   const res = await fetch(`${BASE_URL}/api/tasks`);
   return res.json();

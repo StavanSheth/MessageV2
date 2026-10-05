@@ -62,6 +62,13 @@ class VerificationService:
         return round(weighted_sum / total_weight, 4)
 
     async def decide(self, expected: Dict[str, Any], extracted: Dict[str, Any]) -> VerificationOutput:
+        if not extracted or not any(extracted.values()):
+            return VerificationOutput(
+                confidence=0.0,
+                signals=[],
+                decision=VerificationDecision.UNKNOWN,
+                reason="Missing identity data"
+            )
         signals = await self.extract_signals(expected, extracted)
         confidence = await self.calculate_confidence(signals)
 

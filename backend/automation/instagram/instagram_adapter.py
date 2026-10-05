@@ -86,7 +86,7 @@ class InstagramAdapter:
         except Exception as e:
             return False, True, False, f"Login check error: {str(e)}"
 
-    async def open_profile(self, profile_url: str) -> Tuple[bool, ResultCode, str]:
+    async def open_profile(self, profile_url: str, expected_username: Optional[str] = None) -> Tuple[bool, ResultCode, str]:
         """Navigate to target profile and verify page validity."""
         try:
             try:
@@ -97,9 +97,27 @@ class InstagramAdapter:
             await asyncio.sleep(2)
             await self.dismiss_popups()
 
+            # Check for login redirection or challenge
+            current_url = getattr(self.page, "url", "") or ""
+            if "accounts/login" in current_url.lower():
+                return False, ResultCode.LOGIN_REQUIRED, "Instagram login required"
+            if "/challenge/" in current_url.lower() or "/two_factor/" in current_url.lower():
+                return False, ResultCode.CHALLENGE_REQUIRED, "Instagram challenge/verification required"
+
             page_text = await self.page.locator("body").inner_text()
-            if "sorry, this page isn't available" in page_text.lower() or "link you followed may be broken" in page_text.lower():
+            page_text_lower = page_text.lower()
+            if "sorry, this page isn't available" in page_text_lower or "link you followed may be broken" in page_text_lower:
                 return False, ResultCode.PROFILE_NOT_FOUND, "Profile page not found"
+
+            if "this account is private" in page_text_lower or "account is private" in page_text_lower:
+                return False, ResultCode.PROFILE_PRIVATE, "Account is private"
+
+            if expected_username:
+                header = self.page.locator(InstagramSelectors.PROFILE_HEADER).first
+                header_text = (await header.inner_text()).lower() if await header.count() > 0 else page_text_lower
+                clean_expected = expected_username.lower().lstrip("@")
+                if clean_expected not in header_text and clean_expected not in current_url.lower():
+                    return False, ResultCode.PROFILE_MISMATCH, f"Expected {expected_username} but found mismatch"
 
             # Check if profile header loaded
             header = self.page.locator(InstagramSelectors.PROFILE_HEADER).first
@@ -171,7 +189,7 @@ class InstagramAdapter:
 
         return False, ResultCode.DM_NOT_AVAILABLE, "Message button not found on profile"
 
-    async def prepare_message(self, text: str) -> Tuple[bool, str]:
+    async def prepare_message(self, text: str) -> Tuple[bool, ResultCode, str]:
         """Click message, wait for composer, type text, and verify text in composer."""
         try:
             # Click message button if on profile
@@ -188,7 +206,7 @@ class InstagramAdapter:
                         break
 
                 if not clicked:
-                    return False, "Could not click message button"
+                    return False, ResultCode.DM_NOT_AVAILABLE, "Could not click message button"
 
                 await asyncio.sleep(2)
                 await self.dismiss_popups()
@@ -207,7 +225,7 @@ class InstagramAdapter:
                 await asyncio.sleep(0.5)
 
             if not composer:
-                return False, "Message composer not found"
+                return False, ResultCode.COMPOSER_UNAVAILABLE, "Message composer not found"
 
             # Focus composer and clear any existing draft
             await composer.click()
@@ -228,9 +246,9 @@ class InstagramAdapter:
                 await self.page.keyboard.insert_text(text)
                 await asyncio.sleep(0.4)
 
-            return True, "Message composer ready"
+            return True, ResultCode.SUCCESS, "Message composer ready"
         except Exception as e:
-            return False, f"Prepare message failed: {str(e)}"
+            return False, ResultCode.SEND_FAILED, f"Prepare message failed: {str(e)}"
 
     async def send_message(self) -> Tuple[bool, str]:
         """Trigger message sending via Send button or Enter key."""

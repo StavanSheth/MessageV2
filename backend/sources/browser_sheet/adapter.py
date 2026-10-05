@@ -221,7 +221,9 @@ class BrowserSpreadsheetSource(SourceAdapter):
         return records
 
     async def update_record(self, record_id: str, data: Dict[str, Any]) -> bool:
-        return True
+        if getattr(self, "local_source", None):
+            return await self.local_source.update_record(record_id, data)
+        return False
 
     async def sync(self) -> Dict[str, Any]:
         records = await self.read_records()

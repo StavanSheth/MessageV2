@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     WORKER_MODE: str = "single"     # single or multi
     MAX_WORKERS: int = 1
     RETRY_LIMIT: int = 3
+    MAX_SEND_RETRIES: int = 3
+    NETWORK_BACKOFF_BASE: float = 2.0
     VERIFICATION_THRESHOLD: float = 0.75
     DEFAULT_MESSAGE: str = "Hey"
 

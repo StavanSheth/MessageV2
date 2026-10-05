@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, update, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database.models import Contact, SourceRecord, Task
+from backend.domain.enums import TaskStatus
 
 class ContactRepository:
     def __init__(self, session: AsyncSession):
@@ -63,10 +64,33 @@ class ContactRepository:
         return result.scalar_one()
 
     async def update_replied(self, contact_id: str, status: str) -> Optional[Contact]:
-        stmt = update(Contact).where(Contact.id == contact_id).values(
-            replied_status=status,
-            updated_at=datetime.now(timezone.utc)
-        ).returning(Contact)
+        now = datetime.now(timezone.utc)
+        values = {
+            "replied_status": status,
+            "updated_at": now
+        }
+        if status in ["YES", "AUTOMATED_MESSAGE"]:
+            values["replied_at"] = now
+            values["reply_detected_at"] = now
+            # Atomically cancel any pending/ready follow-ups for this contact
+            cancel_stmt = (
+                update(Task)
+                .where(
+                    and_(
+                        Task.contact_id == contact_id,
+                        Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]),
+                        Task.status.in_([TaskStatus.READY.value, TaskStatus.CREATED.value, TaskStatus.QUEUED.value])
+                    )
+                )
+                .values(
+                    status=TaskStatus.CANCELLED.value,
+                    manual_review_reason=f"Cancelled: Contact replied {status}",
+                    updated_at=now
+                )
+            )
+            await self.session.execute(cancel_stmt)
+
+        stmt = update(Contact).where(Contact.id == contact_id).values(**values).returning(Contact)
         result = await self.session.execute(stmt)
         await self.session.commit()
         return result.scalar_one_or_none()

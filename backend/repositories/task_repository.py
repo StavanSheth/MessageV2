@@ -1,6 +1,6 @@
 from typing import List, Optional
-from datetime import datetime, timezone
-from sqlalchemy import select, update, and_, func
+from datetime import datetime, timezone, timedelta
+from sqlalchemy import select, update, and_, or_, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database.models import Task, Contact, Message, Error
@@ -13,7 +13,8 @@ class TaskRepository:
 
     async def create(self, contact_id: str, task_type: str = "MESSAGE",
                      sequence: int = 1, priority: int = 1,
-                     scheduled_at: Optional[datetime] = None) -> Task:
+                     scheduled_at: Optional[datetime] = None,
+                     idempotency_key: Optional[str] = None) -> Task:
         if scheduled_at is None:
             scheduled_at = datetime.now(timezone.utc)
         
@@ -23,7 +24,8 @@ class TaskRepository:
             status=TaskStatus.READY.value,
             sequence=sequence,
             priority=priority,
-            scheduled_at=scheduled_at
+            scheduled_at=scheduled_at,
+            idempotency_key=idempotency_key
         )
         self.session.add(task)
         await self.session.flush()
@@ -38,20 +40,27 @@ class TaskRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def claim_next_ready(self, worker_id: str, task_types: Optional[List[str]] = None) -> Optional[Task]:
-        """Atomically find and claim the next ready task."""
+    async def claim_next_ready(self, worker_id: str, task_types: Optional[List[str]] = None,
+                               lease_duration_seconds: int = 300) -> Optional[Task]:
+        """Atomically find and claim the next ready task or expired lease."""
         now = datetime.now(timezone.utc)
-        conditions = [
-            Task.status == TaskStatus.READY.value,
-            Task.scheduled_at <= now
-        ]
-        if task_types:
-            conditions.append(Task.type.in_(task_types))
+        type_cond = [Task.type.in_(task_types)] if task_types else []
 
-        # Select first ready task ordered by priority desc, scheduled_at asc
+        ready_cond = and_(
+            Task.status == TaskStatus.READY.value,
+            Task.scheduled_at <= now,
+            *type_cond
+        )
+        expired_lease_cond = and_(
+            Task.status == TaskStatus.RUNNING.value,
+            Task.lease_expires_at != None,
+            Task.lease_expires_at < now,
+            *type_cond
+        )
+
         stmt = (
             select(Task.id)
-            .where(and_(*conditions))
+            .where(or_(ready_cond, expired_lease_cond))
             .order_by(Task.priority.desc(), Task.scheduled_at.asc())
             .limit(1)
         )
@@ -59,13 +68,24 @@ class TaskRepository:
         if not task_id:
             return None
 
-        # Atomically update status from READY to RUNNING
+        expires_at = now + timedelta(seconds=lease_duration_seconds)
+
         update_stmt = (
             update(Task)
-            .where(and_(Task.id == task_id, Task.status == TaskStatus.READY.value))
+            .where(
+                and_(
+                    Task.id == task_id,
+                    or_(
+                        Task.status == TaskStatus.READY.value,
+                        and_(Task.status == TaskStatus.RUNNING.value, Task.lease_expires_at < now)
+                    )
+                )
+            )
             .values(
                 status=TaskStatus.RUNNING.value,
                 worker_id=worker_id,
+                lease_owner=worker_id,
+                lease_expires_at=expires_at,
                 started_at=now,
                 attempt_count=Task.attempt_count + 1,
                 updated_at=now
@@ -86,6 +106,9 @@ class TaskRepository:
         if not task:
             return None
         
+        if worker_id is not None and task.lease_owner is not None and task.lease_owner != worker_id:
+            raise PermissionError(f"Cannot modify task {task_id} owned by {task.lease_owner}")
+
         current_status = TaskStatus(task.status)
         validate_task_transition(current_status, new_status)
         
@@ -96,10 +119,21 @@ class TaskRepository:
         }
         if new_status == TaskStatus.COMPLETED:
             values["completed_at"] = now
+            values["lease_owner"] = None
+            values["lease_expires_at"] = None
+        elif new_status == TaskStatus.READY:
+            values["lease_owner"] = None
+            values["lease_expires_at"] = None
+
         if last_error_id:
             values["last_error_id"] = last_error_id
-        if "worker_id" in kwargs or worker_id is not None or "worker_id" in values:
+        if worker_id is not None:
             values["worker_id"] = worker_id
+            values["lease_owner"] = worker_id
+
+        for k, v in kwargs.items():
+            if hasattr(Task, k):
+                values[k] = v
 
         stmt = update(Task).where(Task.id == task_id).values(**values)
         await self.session.execute(stmt)

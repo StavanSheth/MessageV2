@@ -147,6 +147,10 @@ class BrowserWorker:
                 self.page = None
                 self.is_running = False
 
+    async def restart(self):
+        await self.stop()
+        return await self.start()
+
     async def health(self) -> Dict[str, Any]:
         if not self.is_running or not self.page or self.page.is_closed():
             return {"status": "DISCONNECTED", "url": None}

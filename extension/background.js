@@ -21,14 +21,16 @@ function connect() {
       data = JSON.parse(event.data);
       console.log("[MessageV2 Extension] Received command:", data.action, data);
       const res = await handleCommand(data);
-      ws.send(JSON.stringify({
-        id: data.id,
-        action: data.action,
-        ...res
-      }));
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          id: data.id,
+          action: data.action,
+          ...res
+        }));
+      }
     } catch (err) {
       console.error("[MessageV2 Extension] Error handling message:", err);
-      if (data && data.id) {
+      if (data && data.id && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ id: data.id, success: false, error: String(err) }));
       }
     }
@@ -64,13 +66,28 @@ try {
 function waitForTabLoaded(tabId, timeoutMs = 15000) {
   return new Promise((resolve) => {
     let resolved = false;
+    const cleanup = () => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      chrome.tabs.onRemoved.removeListener(removeListener);
+    };
+
     const finish = () => {
       if (!resolved) {
         resolved = true;
-        chrome.tabs.onUpdated.removeListener(listener);
+        cleanup();
         setTimeout(resolve, 1500); // 1.5s for DOM hydration
       }
     };
+
+    function removeListener(closedTabId) {
+      if (closedTabId === tabId) {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          resolve();
+        }
+      }
+    }
 
     function listener(id, changeInfo, tab) {
       if (id === tabId && changeInfo.status === "complete") {
@@ -79,6 +96,7 @@ function waitForTabLoaded(tabId, timeoutMs = 15000) {
     }
 
     chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.onRemoved.addListener(removeListener);
 
     chrome.tabs.get(tabId).then((t) => {
       if (t && t.status === "complete") {
@@ -113,6 +131,9 @@ async function ensureScreencastForTab(tabId, workerTag = "outreach") {
     });
     console.log(`[MessageV2 Extension] Live screencast started on ${workerTag} tab:`, tabId);
   } catch (err) {
+    if (String(err?.message || err).includes("Another debugger is already attached")) {
+      attachedDebuggerTabs.add(tabId);
+    }
     console.log(`[MessageV2 Extension] Screencast notice on ${workerTag} tab:`, tabId, err);
   }
 }
@@ -237,7 +258,7 @@ async function getTargetTab(action, payload, msg) {
 }
 
 async function handleCommand(msg) {
-  const { action, payload } = msg;
+  const { action, payload = {} } = msg;
 
   if (action === "PING") {
     return { success: true, pong: true };
@@ -583,7 +604,9 @@ async function handleCommand(msg) {
         // 6. Send message (Single dispatch via Send button or Enter)
         const sendBtn = Array.from(document.querySelectorAll('div[role="button"], button')).find(b => {
           const t = b.innerText.trim().toLowerCase();
-          return (t === "send" || t === "send message") && b.offsetParent !== null;
+          const hasAria = (b.getAttribute('aria-label') || '').toLowerCase().includes('send');
+          const hasSvgSend = Boolean(b.querySelector('svg[aria-label="Send"], svg[aria-label="Direct"]'));
+          return (t === "send" || t === "send message" || hasAria || hasSvgSend) && b.offsetParent !== null;
         });
 
         if (sendBtn) {
@@ -669,7 +692,7 @@ async function handleCommand(msg) {
     const scannerTab = await getScannerTab();
     if (!scannerTab || !scannerTab.id) return { success: false, error: "No Scanner tab found" };
 
-    if (threadUrl && !scannerTab.url.includes(threadUrl)) {
+    if (threadUrl && !(scannerTab.url || '').includes(threadUrl)) {
       const fullUrl = threadUrl.startsWith("http") ? threadUrl : `https://www.instagram.com${threadUrl}`;
       await chrome.tabs.update(scannerTab.id, { url: fullUrl });
       await waitForTabLoaded(scannerTab.id, 12000);

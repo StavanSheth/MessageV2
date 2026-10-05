@@ -567,7 +567,9 @@ class InstagramWorker:
 
             # ── Prepare Message ───────────────────────────────
             await self._set_stage(AutomationStage.OPENING_COMPOSER, contact.name, task_id=task_id)
-            prepared, prep_reason = await adapter.prepare_message(message_body)
+            prep_res = await adapter.prepare_message(message_body)
+            prepared = prep_res[0]
+            prep_reason = prep_res[-1]
             screenshot_url = await take_shot("message_composer_opened")
 
             if not prepared:

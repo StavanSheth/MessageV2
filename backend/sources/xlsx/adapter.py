@@ -51,8 +51,13 @@ class LocalXlsxSource(SourceAdapter):
             username = LocalXlsxSource._extract_username_from_url(url) or ""
             return url, username
         else:
-            username = val.lstrip("@").strip()
-            url = f"https://www.instagram.com/{username}/"
+            clean_user = val.lstrip("@").strip()
+            if clean_user and re.match(r"^[a-zA-Z0-9_\.]+$", clean_user):
+                username = clean_user
+                url = f"https://www.instagram.com/{username}/"
+            else:
+                username = ""
+                url = ""
             return url, username
 
     async def read_records(self) -> List[Dict[str, Any]]:
@@ -168,9 +173,97 @@ class LocalXlsxSource(SourceAdapter):
 
         return records
 
+    async def atomic_write_back(self, updates: Dict[str, Any]) -> Tuple[bool, str]:
+        if self.workbook:
+            try:
+                self.workbook.close()
+            except Exception:
+                pass
+            self.workbook = None
+
+        try:
+            wb = openpyxl.load_workbook(self.file_path)
+            ws = wb.active
+            headers = [cell.value for cell in ws[1]]
+            status_col = None
+            for idx, h in enumerate(headers, start=1):
+                if h and str(h).strip().lower() in ["outreach status", "status"]:
+                    status_col = idx
+                    break
+            if not status_col:
+                status_col = len(headers) + 1
+                ws.cell(row=1, column=status_col, value="Outreach Status")
+
+            for key, data in updates.items():
+                status_val = data.get("status", "")
+                if key.startswith("row_"):
+                    try:
+                        row_num = int(key.split("_")[1])
+                        ws.cell(row=row_num, column=status_col, value=status_val)
+                    except Exception:
+                        pass
+                else:
+                    for r_idx in range(2, ws.max_row + 1):
+                        row_vals = [str(ws.cell(row=r_idx, column=c).value or "").lower() for c in range(1, 4)]
+                        if any(key.lower() in rv for rv in row_vals):
+                            ws.cell(row=r_idx, column=status_col, value=status_val)
+                            break
+
+            tmp_path = f"{self.file_path}.tmp"
+            wb.save(tmp_path)
+            wb.close()
+            os.replace(tmp_path, self.file_path)
+            return True, "Write-back successful"
+        except Exception as e:
+            return False, str(e)
+
     async def update_record(self, record_id: str, data: Dict[str, Any]) -> bool:
-        # Stub for future spreadsheet write-back
-        return True
+        if self.workbook:
+            try:
+                self.workbook.close()
+            except Exception:
+                pass
+            self.workbook = None
+
+        try:
+            wb = openpyxl.load_workbook(self.file_path)
+            ws = wb.active
+            headers = [cell.value for cell in ws[1]]
+            status_col = None
+            for idx, h in enumerate(headers, start=1):
+                if h and str(h).strip().lower() in ["outreach status", "status"]:
+                    status_col = idx
+                    break
+            if not status_col:
+                status_col = len(headers) + 1
+                ws.cell(row=1, column=status_col, value="Outreach Status")
+
+            status_val = data.get("status", "")
+            target_row = None
+
+            if str(record_id).startswith("row_"):
+                try:
+                    target_row = int(str(record_id).split("_")[1])
+                except Exception:
+                    pass
+            else:
+                clean_rec = str(record_id).lower().lstrip("@")
+                for r_idx in range(2, ws.max_row + 1):
+                    row_vals = [str(ws.cell(row=r_idx, column=c).value or "").lower() for c in range(1, 5)]
+                    if any(clean_rec == rv or clean_rec in rv for rv in row_vals):
+                        target_row = r_idx
+                        break
+
+            if target_row and target_row <= ws.max_row:
+                ws.cell(row=target_row, column=status_col, value=status_val)
+                wb.save(self.file_path)
+                wb.close()
+                return True
+
+            wb.close()
+            return False
+        except Exception:
+            return False
 
     async def sync(self) -> Dict[str, Any]:
         records = await self.read_records()

@@ -11,6 +11,10 @@ import {
   openBrowserWindow, 
   triggerReplyScan, 
   fetchReplyScannerStatus,
+  startRepliesWorker,
+  pauseRepliesWorker,
+  resumeRepliesWorker,
+  stopRepliesWorker,
   fetchChromeProfiles,
   startWorker3,
   pauseWorker3,
@@ -133,6 +137,8 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
       no_reply_count: number;
     };
     is_connected: boolean;
+    is_paused?: boolean;
+    is_running?: boolean;
   } | null>(null);
 
   // Worker 3 (Follow-Up Dispatcher) State
@@ -225,6 +231,34 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     await resumeWorker3();
     const updated = await fetchWorker3Status();
     setWorker3Status(updated);
+  };
+
+  const handleStartWorker2 = async () => {
+    try {
+      await startRepliesWorker();
+      const updated = await fetchReplyScannerStatus();
+      setScannerStatus(updated);
+    } catch (e: any) {
+      alert(`Worker 2 Error: ${e.message}`);
+    }
+  };
+
+  const handlePauseWorker2 = async () => {
+    await pauseRepliesWorker();
+    const updated = await fetchReplyScannerStatus();
+    setScannerStatus(updated);
+  };
+
+  const handleResumeWorker2 = async () => {
+    await resumeRepliesWorker();
+    const updated = await fetchReplyScannerStatus();
+    setScannerStatus(updated);
+  };
+
+  const handleStopWorker2 = async () => {
+    await stopRepliesWorker();
+    const updated = await fetchReplyScannerStatus();
+    setScannerStatus(updated);
   };
 
   const handleStopWorker3 = async () => {
@@ -578,12 +612,69 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center space-x-3 text-xs text-gray-400">
-              <span>Processed this session: <strong className="text-white font-mono">{state.batch_sent_count ?? 0}</strong></span>
+            <div className="flex items-center space-x-3 text-xs text-gray-400 flex-wrap gap-y-2">
+              <span>Processed: <strong className="text-white font-mono">{state.batch_sent_count ?? 0}</strong></span>
               {state.current_contact && (
                 <span className="px-2 py-1 rounded bg-gray-800 text-indigo-300 font-mono text-xs font-semibold">
                   @{state.current_contact.username}
                 </span>
+              )}
+
+              {/* Individual Worker 1 Start / Pause Controls */}
+              {state.status === 'RUNNING' && !state.is_paused ? (
+                <div className="flex items-center space-x-1.5 pl-2 border-l border-gray-800">
+                  <button
+                    type="button"
+                    onClick={onPause}
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-gray-950 transition active:scale-95 cursor-pointer shadow"
+                    title="Pause Worker 1 (Outreach)"
+                  >
+                    <Pause className="w-3.5 h-3.5 fill-current" />
+                    <span>Pause W1</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onStop}
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white transition active:scale-95 cursor-pointer shadow"
+                    title="Stop Worker 1 (Outreach)"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-current" />
+                    <span>Stop W1</span>
+                  </button>
+                </div>
+              ) : state.status === 'PAUSED' || state.is_paused ? (
+                <div className="flex items-center space-x-1.5 pl-2 border-l border-gray-800">
+                  <button
+                    type="button"
+                    onClick={onResume}
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition active:scale-95 cursor-pointer shadow"
+                    title="Resume Worker 1 (Outreach)"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    <span>Resume W1</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onStop}
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white transition active:scale-95 cursor-pointer shadow"
+                    title="Stop Worker 1 (Outreach)"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-current" />
+                    <span>Stop W1</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center space-x-1.5 pl-2 border-l border-gray-800">
+                  <button
+                    type="button"
+                    onClick={() => onStart && onStart(batchLimit)}
+                    className="flex items-center space-x-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold shadow hover:scale-105 active:scale-95 cursor-pointer"
+                    title="Start Worker 1 (Outreach)"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    <span>Start W1 (Outreach)</span>
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -981,24 +1072,82 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={handleTriggerScan}
-                disabled={isScanning || scannerStatus?.status === 'SCANNING'}
-                className="flex items-center space-x-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white px-4 py-2 rounded-xl text-xs font-bold transition shadow hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50"
-              >
-                {isScanning || scannerStatus?.status === 'SCANNING' ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Scanning Inbox...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4" />
-                    <span>Scan Inbox Now</span>
-                  </>
-                )}
-              </button>
+            <div className="flex items-center space-x-2 flex-wrap">
+              {/* Individual Worker 2 Start / Pause Controls */}
+              {scannerStatus?.status === 'RUNNING' || (scannerStatus?.status === 'SCANNING' && !scannerStatus?.is_paused) ? (
+                <div className="flex items-center space-x-1.5">
+                  <button
+                    type="button"
+                    onClick={handlePauseWorker2}
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-gray-950 transition active:scale-95 cursor-pointer shadow"
+                    title="Pause Worker 2 (Reply Scanner)"
+                  >
+                    <Pause className="w-3.5 h-3.5 fill-current" />
+                    <span>Pause W2</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleStopWorker2}
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white transition active:scale-95 cursor-pointer shadow"
+                    title="Stop Worker 2 (Reply Scanner)"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-current" />
+                    <span>Stop W2</span>
+                  </button>
+                </div>
+              ) : scannerStatus?.status === 'PAUSED' || scannerStatus?.is_paused ? (
+                <div className="flex items-center space-x-1.5">
+                  <button
+                    type="button"
+                    onClick={handleResumeWorker2}
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-purple-600 hover:bg-purple-500 text-white transition active:scale-95 cursor-pointer shadow"
+                    title="Resume Worker 2 (Reply Scanner)"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    <span>Resume W2</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleStopWorker2}
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white transition active:scale-95 cursor-pointer shadow"
+                    title="Stop Worker 2 (Reply Scanner)"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-current" />
+                    <span>Stop W2</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={handleStartWorker2}
+                    className="flex items-center space-x-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold shadow hover:scale-105 active:scale-95 cursor-pointer"
+                    title="Start continuous Worker 2 inbox auditing"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    <span>Start W2 (Auditor)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleTriggerScan}
+                    disabled={isScanning || scannerStatus?.status === 'SCANNING'}
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                    title="Run a single instant inbox scan"
+                  >
+                    {isScanning || scannerStatus?.status === 'SCANNING' ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Scanning...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                        <span>Scan Once</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1335,10 +1484,68 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-3 flex-wrap gap-y-2">
               <span className="text-xs font-mono text-gray-400">
-                Processed this session: <strong className="text-white font-bold">{worker3Status?.batch_sent_count || 0}</strong>
+                Processed: <strong className="text-white font-bold">{worker3Status?.batch_sent_count || 0}</strong>
               </span>
+
+              {/* Individual Worker 3 Start / Pause Controls in Deck Header */}
+              {worker3Status?.status === 'RUNNING' && !worker3Status?.is_paused ? (
+                <div className="flex items-center space-x-1.5 pl-2 border-l border-gray-800">
+                  <button
+                    type="button"
+                    onClick={handlePauseWorker3}
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-gray-950 transition active:scale-95 cursor-pointer shadow"
+                    title="Pause Worker 3 (Follow-Ups)"
+                  >
+                    <Pause className="w-3.5 h-3.5 fill-current" />
+                    <span>Pause W3</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleStopWorker3}
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white transition active:scale-95 cursor-pointer shadow"
+                    title="Stop Worker 3 (Follow-Ups)"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-current" />
+                    <span>Stop W3</span>
+                  </button>
+                </div>
+              ) : worker3Status?.status === 'PAUSED' || worker3Status?.is_paused ? (
+                <div className="flex items-center space-x-1.5 pl-2 border-l border-gray-800">
+                  <button
+                    type="button"
+                    onClick={handleResumeWorker3}
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white transition active:scale-95 cursor-pointer shadow"
+                    title="Resume Worker 3 (Follow-Ups)"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    <span>Resume W3</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleStopWorker3}
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white transition active:scale-95 cursor-pointer shadow"
+                    title="Stop Worker 3 (Follow-Ups)"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-current" />
+                    <span>Stop W3</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center space-x-1.5 pl-2 border-l border-gray-800">
+                  <button
+                    type="button"
+                    onClick={handleStartWorker3}
+                    disabled={worker3ActionLoading}
+                    className="flex items-center space-x-1.5 bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold shadow hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50"
+                    title="Start Worker 3 (Follow-Ups)"
+                  >
+                    {worker3ActionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                    <span>Start W3 (Follow-Ups)</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 

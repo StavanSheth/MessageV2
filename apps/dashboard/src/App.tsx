@@ -15,6 +15,11 @@ import {
   pauseAutomation,
   resumeAutomation,
   stopAutomation,
+  startAllWorkers,
+  pauseAllWorkers,
+  resumeAllWorkers,
+  stopAllWorkers,
+  fetchAllWorkersStatus,
   fetchContacts,
   fetchTasks,
   fetchSources,
@@ -28,6 +33,7 @@ export function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
   const [events, setEvents] = useState<EventLog[]>([]);
+  const [allWorkersStatus, setAllWorkersStatus] = useState<any>(null);
 
   const [automationState, setAutomationState] = useState<LiveAutomationState>({
     worker_id: 'WORKER-01',
@@ -65,12 +71,13 @@ export function App() {
   // Load backend state
   const loadData = useCallback(async () => {
     try {
-      const [st, cList, tList, sList, eList] = await Promise.all([
+      const [st, cList, tList, sList, eList, allSt] = await Promise.all([
         fetchAutomationStatus().catch(() => null),
         fetchContacts().catch(() => []),
         fetchTasks().catch(() => []),
         fetchSources().catch(() => []),
         fetchEvents(100).catch(() => []),
+        fetchAllWorkersStatus().catch(() => null),
       ]);
 
       if (st) setAutomationState(st);
@@ -78,6 +85,7 @@ export function App() {
       if (tList) setTasks(tList);
       if (sList) setSources(sList);
       if (eList) setEvents(eList);
+      if (allSt) setAllWorkersStatus(allSt);
     } catch (e) {
       console.error('Error fetching dashboard data:', e);
     }
@@ -98,7 +106,7 @@ export function App() {
     return () => clearInterval(interval);
   }, [loadData]);
 
-  // Action handlers
+  // Action handlers - Worker 1
   const handleStart = async (limitOverride?: number | null) => {
     try {
       let activeLimit: number | null = batchLimit;
@@ -142,6 +150,50 @@ export function App() {
     }
   };
 
+  // Master Action Handlers - All Workers
+  const handleStartAll = async (limitOverride?: number | null) => {
+    try {
+      let activeLimit: number | null = batchLimit;
+      if (isCustomBatch) {
+        const parsed = parseInt(customBatchInput, 10);
+        activeLimit = (!isNaN(parsed) && parsed > 0) ? parsed : 5;
+      } else if (limitOverride !== undefined) {
+        activeLimit = limitOverride;
+      }
+      await startAllWorkers({ batch_limit: activeLimit, delay_seconds: 15 });
+      await loadData();
+    } catch (e: any) {
+      alert(`Could not start all workers: ${e.message}`);
+    }
+  };
+
+  const handlePauseAll = async () => {
+    try {
+      await pauseAllWorkers();
+      await loadData();
+    } catch (e: any) {
+      alert(`Could not pause all workers: ${e.message}`);
+    }
+  };
+
+  const handleResumeAll = async () => {
+    try {
+      await resumeAllWorkers();
+      await loadData();
+    } catch (e: any) {
+      alert(`Could not resume all workers: ${e.message}`);
+    }
+  };
+
+  const handleStopAll = async () => {
+    try {
+      await stopAllWorkers();
+      await loadData();
+    } catch (e: any) {
+      alert(`Could not stop all workers: ${e.message}`);
+    }
+  };
+
   const needsAttention =
     automationState.instagram_login_status === 'LOGIN_REQUIRED' ||
     automationState.stage === 'MANUAL_ATTENTION' ||
@@ -167,6 +219,13 @@ export function App() {
         onPause={handlePause}
         onResume={handleResume}
         onStop={handleStop}
+        onStartAll={handleStartAll}
+        onPauseAll={handlePauseAll}
+        onResumeAll={handleResumeAll}
+        onStopAll={handleStopAll}
+        anyRunning={allWorkersStatus?.any_running}
+        anyPaused={allWorkersStatus?.any_paused}
+        activeWorkersCount={allWorkersStatus?.active_count}
         needsAttention={needsAttention}
       />
 

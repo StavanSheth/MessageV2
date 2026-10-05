@@ -166,6 +166,8 @@ export interface LiveAutomationState {
   batch_limit?: number | null;
   batch_sent_count?: number;
   delay_seconds?: number;
+  is_paused?: boolean;
+  is_running?: boolean;
 }
 
 export interface EventLog {

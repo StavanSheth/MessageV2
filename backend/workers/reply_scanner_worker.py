@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class ReplyScannerWorker:
     def __init__(self):
-        self.status = "IDLE"  # IDLE, SCANNING, ERROR
+        self.status = "IDLE"  # IDLE, SCANNING, RUNNING, PAUSED, ERROR
         self.current_stage = "IDLE"  # IDLE, OPENING_INBOX, SCANNING_THREADS, INSPECTING_THREAD, CLASSIFYING_REPLY, EXTRACTING_ENTITIES, UPDATING_RECORDS, COMPLETED
         self.current_target: Optional[Dict[str, Any]] = None
         self.last_scanned_at: Optional[datetime] = None
@@ -31,16 +31,83 @@ class ReplyScannerWorker:
             "no_reply_count": 0
         }
         self._lock = asyncio.Lock()
+        self._paused = False
+        self._stop_requested = False
+        self._periodic_task: Optional[asyncio.Task] = None
 
     def get_status(self) -> Dict[str, Any]:
+        display_status = "PAUSED" if self._paused else self.status
         return {
-            "status": self.status,
+            "worker_id": "WORKER-02",
+            "worker_name": "Reply Scanner & Lead Extractor",
+            "status": display_status,
+            "is_paused": self._paused,
+            "is_running": self.status in ("RUNNING", "SCANNING") and not self._paused,
             "current_stage": self.current_stage,
             "current_target": self.current_target,
             "last_scanned_at": self.last_scanned_at.isoformat() if self.last_scanned_at else None,
             "stats": self.stats,
             "is_connected": extension_bridge.is_connected
         }
+
+    async def start(self, interval_seconds: int = 45) -> Dict[str, Any]:
+        """Start continuous or immediate inbox scanning."""
+        if self._paused:
+            await self.resume()
+            return {"status": "resumed", "worker_id": "WORKER-02"}
+
+        if self._periodic_task and not self._periodic_task.done():
+            return {"status": "already_running", "worker_id": "WORKER-02"}
+
+        self._paused = False
+        self._stop_requested = False
+        self.status = "RUNNING"
+        self._periodic_task = asyncio.create_task(self._run_loop(interval_seconds))
+        return {"status": "started", "worker_id": "WORKER-02"}
+
+    async def _run_loop(self, interval: int):
+        logger.info("[ReplyScanner] Continuous inbox review agent loop started.")
+        try:
+            while not self._stop_requested:
+                if not self._paused:
+                    try:
+                        await self.scan_inbox()
+                    except Exception as e:
+                        logger.error(f"[ReplyScanner] Scan error in loop: {e}")
+
+                for _ in range(interval):
+                    if self._stop_requested:
+                        break
+                    while self._paused and not self._stop_requested:
+                        await asyncio.sleep(0.5)
+                    await asyncio.sleep(1)
+        finally:
+            self.status = "IDLE"
+            self.current_stage = "IDLE"
+
+    async def pause(self):
+        self._paused = True
+        self.status = "PAUSED"
+        logger.info("[ReplyScanner] Worker 2 paused.")
+
+    async def resume(self):
+        self._paused = False
+        self.status = "RUNNING" if (self._periodic_task and not self._periodic_task.done()) else "IDLE"
+        logger.info("[ReplyScanner] Worker 2 resumed.")
+
+    async def stop(self):
+        self._stop_requested = True
+        self._paused = False
+        if self._periodic_task and not self._periodic_task.done():
+            self._periodic_task.cancel()
+            try:
+                await self._periodic_task
+            except asyncio.CancelledError:
+                pass
+            self._periodic_task = None
+        self.status = "IDLE"
+        self.current_stage = "IDLE"
+        logger.info("[ReplyScanner] Worker 2 stopped.")
 
     async def scan_inbox(self) -> Dict[str, Any]:
         """Perform a complete scan of the Instagram Direct Inbox."""
@@ -198,7 +265,10 @@ class ReplyScannerWorker:
                 logger.exception(f"[ReplyScanner] Scan error: {e}")
                 return {"success": False, "error": str(e)}
             finally:
-                self.status = "IDLE"
+                if self._periodic_task and not self._periodic_task.done():
+                    self.status = "PAUSED" if self._paused else "RUNNING"
+                else:
+                    self.status = "PAUSED" if self._paused else "IDLE"
                 self.current_stage = "IDLE"
 
 reply_scanner_worker = ReplyScannerWorker()

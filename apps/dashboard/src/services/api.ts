@@ -281,6 +281,8 @@ export async function fetchReplyScannerStatus(): Promise<{
     no_reply_count: number;
   };
   is_connected: boolean;
+  is_paused?: boolean;
+  is_running?: boolean;
 }> {
   const res = await fetch(`${BASE_URL}/api/automation/replies/status`);
   return res.json();
@@ -377,5 +379,96 @@ export async function setCoordinatorMode(mode: string): Promise<any> {
   });
   return res.json();
 }
+
+// ─────────────────────────────────────────────────────────────
+// Worker 2 (Reply Scanner) Lifecycle Controls
+// ─────────────────────────────────────────────────────────────
+
+export async function startRepliesWorker(intervalSeconds?: number): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/replies/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ interval_seconds: intervalSeconds || 45 }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to start Worker 2');
+  }
+  return res.json();
+}
+
+export async function pauseRepliesWorker(): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/replies/pause`, { method: 'POST' });
+  return res.json();
+}
+
+export async function resumeRepliesWorker(): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/replies/resume`, { method: 'POST' });
+  return res.json();
+}
+
+export async function stopRepliesWorker(): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/replies/stop`, { method: 'POST' });
+  return res.json();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Unified Master Controls (All Workers: Start, Pause, Resume, Stop)
+// ─────────────────────────────────────────────────────────────
+
+export async function startAllWorkers(options?: { batch_limit?: number | null; delay_seconds?: number }): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/all/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options || {}),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to start all workers');
+  }
+  return res.json();
+}
+
+export async function pauseAllWorkers(): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/all/pause`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to pause all workers');
+  }
+  return res.json();
+}
+
+export async function resumeAllWorkers(): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/all/resume`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to resume all workers');
+  }
+  return res.json();
+}
+
+export async function stopAllWorkers(): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/all/stop`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to stop all workers');
+  }
+  return res.json();
+}
+
+export async function fetchAllWorkersStatus(): Promise<{
+  worker1: any;
+  worker2: any;
+  worker3: any;
+  any_running: boolean;
+  any_paused: boolean;
+  all_idle: boolean;
+  active_count: number;
+  paused_count: number;
+}> {
+  const res = await fetch(`${BASE_URL}/api/automation/all/status`);
+  return res.json();
+}
+
 
 

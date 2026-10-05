@@ -22,6 +22,14 @@ interface NavbarProps {
   onPause: () => void;
   onResume: () => void;
   onStop: () => void;
+  // All Workers Master Controls
+  onStartAll?: (limit?: number | null) => void;
+  onPauseAll?: () => void;
+  onResumeAll?: () => void;
+  onStopAll?: () => void;
+  anyRunning?: boolean;
+  anyPaused?: boolean;
+  activeWorkersCount?: number;
   needsAttention: boolean;
 }
 
@@ -42,19 +50,28 @@ export const Navbar: React.FC<NavbarProps> = ({
   onPause,
   onResume,
   onStop,
+  onStartAll,
+  onPauseAll,
+  onResumeAll,
+  onStopAll,
+  anyRunning,
+  anyPaused,
+  activeWorkersCount,
   needsAttention,
 }) => {
-  const isRunning = workerStatus === 'RUNNING';
-  const isPaused = workerStatus === 'PAUSED';
+  const isRunning = anyRunning !== undefined ? anyRunning : workerStatus === 'RUNNING';
+  const isPaused = anyPaused !== undefined ? anyPaused : workerStatus === 'PAUSED';
 
   const PRESET_BATCHES = [1, 3, 5, 10, 25, 50, 100];
   const effectiveIsCustom = isCustomBatch !== undefined
     ? isCustomBatch
     : (batchLimit !== null && !PRESET_BATCHES.includes(batchLimit));
 
+  const activeBatchLimit = effectiveIsCustom ? (parseInt(customBatchInput, 10) || 5) : batchLimit;
+
   return (
     <header className="border-b border-[#123529] bg-[#061d15]/90 backdrop-blur-md sticky top-0 z-50 px-6 py-3.5 shadow-xl">
-      <div className="flex items-center justify-between max-w-7xl mx-auto">
+      <div className="flex items-center justify-between max-w-7xl mx-auto flex-wrap gap-y-3">
         {/* Brand / Title */}
         <div className="flex items-center space-x-6">
           <div className="flex items-center space-x-3">
@@ -102,15 +119,15 @@ export const Navbar: React.FC<NavbarProps> = ({
           </nav>
         </div>
 
-        {/* Status Badges & Automation Controls */}
-        <div className="flex items-center space-x-4">
+        {/* Status Badges & Master Controls */}
+        <div className="flex items-center space-x-3 flex-wrap">
           {/* WebSocket Status */}
           <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-gray-800/60 border border-gray-700/50 text-[11px]">
             <span className={`w-2 h-2 rounded-full ${isWsConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
             <span className="text-gray-300 font-mono">{isWsConnected ? 'WS LIVE' : 'WS OFFLINE'}</span>
           </div>
 
-          {/* Worker Status Badge */}
+          {/* Master Agents Status Badge */}
           <div className="flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider bg-gray-900 border border-gray-700">
             <span
               className={`w-2.5 h-2.5 rounded-full ${
@@ -122,7 +139,11 @@ export const Navbar: React.FC<NavbarProps> = ({
               }`}
             />
             <span className={isRunning ? 'text-emerald-400' : isPaused ? 'text-amber-400' : 'text-gray-400'}>
-              {workerStatus}
+              {isRunning
+                ? (activeWorkersCount ? `${activeWorkersCount} ACTIVE` : 'RUNNING')
+                : isPaused
+                ? 'PAUSED'
+                : 'IDLE'}
             </span>
           </div>
 
@@ -133,122 +154,131 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
           )}
 
-          {/* Action Buttons */}
-          <div className="flex items-center space-x-2 pl-2">
-            {!isRunning && !isPaused && (
-              <div className="flex items-center space-x-1.5 bg-gray-800/80 border border-gray-700/80 rounded-lg px-2.5 py-1.5">
-                <span className="text-[11px] text-gray-400 font-medium">Batch:</span>
-                <select
-                  value={effectiveIsCustom ? 'custom' : batchLimit === null ? 'all' : String(batchLimit)}
+          {/* Batch Selector */}
+          <div className="flex items-center space-x-1.5 bg-gray-900/90 border border-gray-700/80 rounded-xl px-2.5 py-1.5 shadow-inner">
+            <span className="text-[11px] text-gray-400 font-medium">Batch:</span>
+            <select
+              value={effectiveIsCustom ? 'custom' : batchLimit === null ? 'all' : String(batchLimit)}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === 'custom') {
+                  if (onSelectCustom) {
+                    onSelectCustom();
+                  } else {
+                    const parsed = parseInt(customBatchInput, 10) || 5;
+                    setBatchLimit(parsed);
+                  }
+                } else if (val === 'all') {
+                  if (onSetBatchPreset) {
+                    onSetBatchPreset(null);
+                  } else {
+                    setBatchLimit(null);
+                  }
+                } else {
+                  const num = Number(val);
+                  if (onSetBatchPreset) {
+                    onSetBatchPreset(num);
+                  } else {
+                    setBatchLimit(num);
+                  }
+                }
+              }}
+              className="bg-gray-950 border border-gray-700 text-gray-200 text-xs rounded px-1.5 py-0.5 focus:outline-none focus:border-indigo-500 font-semibold cursor-pointer"
+            >
+              <option value="1">1 contact</option>
+              <option value="3">3 contacts</option>
+              <option value="5">5 contacts</option>
+              <option value="10">10 contacts</option>
+              <option value="25">25 contacts</option>
+              <option value="50">50 contacts</option>
+              <option value="100">100 contacts</option>
+              <option value="all">Entire List (All)</option>
+              <option value="custom">Custom No...</option>
+            </select>
+
+            {effectiveIsCustom && (
+              <div className="flex items-center space-x-1 pl-1 border-l border-gray-700">
+                <input
+                  type="number"
+                  min="1"
+                  max="5000"
+                  value={customBatchInput}
                   onChange={(e) => {
-                    const val = e.target.value;
-                    if (val === 'custom') {
-                      if (onSelectCustom) {
-                        onSelectCustom();
-                      } else {
-                        const parsed = parseInt(customBatchInput, 10) || 5;
-                        setBatchLimit(parsed);
-                      }
-                    } else if (val === 'all') {
-                      if (onSetBatchPreset) {
-                        onSetBatchPreset(null);
-                      } else {
-                        setBatchLimit(null);
-                      }
+                    if (onChangeCustom) {
+                      onChangeCustom(e.target.value);
                     } else {
-                      const num = Number(val);
-                      if (onSetBatchPreset) {
-                        onSetBatchPreset(num);
-                      } else {
-                        setBatchLimit(num);
-                      }
+                      const val = parseInt(e.target.value, 10);
+                      if (val > 0) setBatchLimit(val);
                     }
                   }}
-                  className="bg-gray-900 border border-gray-700 text-gray-200 text-xs rounded px-1.5 py-0.5 focus:outline-none focus:border-indigo-500 font-semibold cursor-pointer"
-                >
-                  <option value="1">1 contact</option>
-                  <option value="3">3 contacts</option>
-                  <option value="5">5 contacts</option>
-                  <option value="10">10 contacts</option>
-                  <option value="25">25 contacts</option>
-                  <option value="50">50 contacts</option>
-                  <option value="100">100 contacts</option>
-                  <option value="all">Entire List (All)</option>
-                  <option value="custom">Custom No...</option>
-                </select>
-
-                {effectiveIsCustom && (
-                  <div className="flex items-center space-x-1 pl-1 border-l border-gray-700">
-                    <input
-                      type="number"
-                      min="1"
-                      max="5000"
-                      value={customBatchInput}
-                      onChange={(e) => {
-                        if (onChangeCustom) {
-                          onChangeCustom(e.target.value);
-                        } else {
-                          const val = parseInt(e.target.value, 10);
-                          if (val > 0) setBatchLimit(val);
-                        }
-                      }}
-                      className="w-14 bg-gray-950 border border-indigo-500 text-indigo-200 text-xs font-bold rounded px-1.5 py-0.5 focus:outline-none text-center"
-                      title="Enter custom number of contacts to send in this batch"
-                    />
-                    <span className="text-[10px] text-gray-400">qty</span>
-                  </div>
-                )}
+                  className="w-14 bg-gray-950 border border-indigo-500 text-indigo-200 text-xs font-bold rounded px-1.5 py-0.5 focus:outline-none text-center"
+                  title="Enter custom number of contacts to send in this batch"
+                />
+                <span className="text-[10px] text-gray-400">qty</span>
               </div>
             )}
+          </div>
 
-            {(isRunning || isPaused) && (
-              <div className="flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-[#061d15] border border-[#d49237]/35 text-xs font-mono shadow-inner">
-                <span className="text-[#8fa59c]">Batch:</span>
-                <span className="text-[#3ecf8e] font-bold">{batchSentCount}</span>
-                <span className="text-[#5a776c]">/</span>
-                <span className="text-[#fcfbf7] font-semibold">{batchLimit === null ? 'All' : batchLimit}</span>
-              </div>
-            )}
+          {/* Master Control Buttons: Stop All, Resume All, Pause All */}
+          <div className="flex items-center space-x-1.5 pl-1 bg-gray-950/70 p-1 rounded-2xl border border-gray-800">
+            {/* Resume / Start All Button */}
+            <button
+              type="button"
+              onClick={() => {
+                if (isPaused && onResumeAll) {
+                  onResumeAll();
+                } else if (onStartAll) {
+                  onStartAll(activeBatchLimit);
+                } else if (isPaused) {
+                  onResume();
+                } else {
+                  onStart(activeBatchLimit);
+                }
+              }}
+              className="flex items-center space-x-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold shadow-md shadow-emerald-900/30 transition-all hover:scale-105 active:scale-95 cursor-pointer"
+              title="Start or resume all automation agents"
+            >
+              <Play className="w-3.5 h-3.5 fill-current text-white" />
+              <span>{isPaused ? 'Resume All' : 'Start / Resume All'}</span>
+            </button>
 
-            {!isRunning && !isPaused && (
-              <button
-                onClick={() => onStart(effectiveIsCustom ? (parseInt(customBatchInput, 10) || 5) : batchLimit)}
-                className="flex items-center space-x-2 bg-gradient-to-r from-[#0d3a28] to-[#08231a] hover:from-[#145239] hover:to-[#0d3a28] text-[#fcfbf7] px-4 py-2 rounded-xl text-xs font-bold border border-[#d49237]/60 shadow-lg shadow-[#d49237]/20 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-              >
-                <Play className="w-4 h-4 fill-[#d49237] text-[#d49237]" />
-                <span className="tracking-wide">START RUN</span>
-              </button>
-            )}
+            {/* Pause All Button */}
+            <button
+              type="button"
+              onClick={() => {
+                if (onPauseAll) onPauseAll();
+                else onPause();
+              }}
+              disabled={!isRunning}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer ${
+                isRunning
+                  ? 'bg-amber-500 hover:bg-amber-400 text-gray-950 font-black border border-amber-300 shadow-amber-900/40 hover:scale-105'
+                  : 'bg-gray-800/60 text-gray-500 border border-gray-700/50 cursor-not-allowed opacity-50'
+              }`}
+              title="Pause all active automation agents"
+            >
+              <Pause className="w-3.5 h-3.5 fill-current" />
+              <span>Pause All</span>
+            </button>
 
-            {isRunning && (
-              <button
-                onClick={onPause}
-                className="flex items-center space-x-2 bg-[#c07f2a] hover:bg-[#d49237] text-[#041610] px-3.5 py-2 rounded-xl text-xs font-bold shadow-lg transition-all hover:scale-105 active:scale-95 cursor-pointer"
-              >
-                <Pause className="w-4 h-4 fill-[#041610]" />
-                <span className="tracking-wide">PAUSE</span>
-              </button>
-            )}
-
-            {isPaused && (
-              <button
-                onClick={onResume}
-                className="flex items-center space-x-2 bg-gradient-to-r from-[#d49237] to-[#e5b766] text-[#041610] px-3.5 py-2 rounded-xl text-xs font-bold shadow-lg transition-all hover:scale-105 active:scale-95 cursor-pointer"
-              >
-                <Play className="w-4 h-4 fill-[#041610]" />
-                <span className="tracking-wide">RESUME</span>
-              </button>
-            )}
-
-            {(isRunning || isPaused) && (
-              <button
-                onClick={onStop}
-                className="flex items-center space-x-2 bg-rose-700 hover:bg-rose-600 text-white px-3.5 py-2 rounded-xl text-xs font-bold shadow transition-all hover:scale-105 active:scale-95 cursor-pointer"
-              >
-                <Square className="w-4 h-4 fill-white" />
-                <span className="tracking-wide">STOP</span>
-              </button>
-            )}
+            {/* Stop All Button */}
+            <button
+              type="button"
+              onClick={() => {
+                if (onStopAll) onStopAll();
+                else onStop();
+              }}
+              disabled={!isRunning && !isPaused}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer ${
+                isRunning || isPaused
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white border border-rose-400 shadow-rose-900/40 hover:scale-105'
+                  : 'bg-gray-800/60 text-gray-500 border border-gray-700/50 cursor-not-allowed opacity-50'
+              }`}
+              title="Stop all agents and return to idle"
+            >
+              <Square className="w-3.5 h-3.5 fill-current" />
+              <span>Stop All</span>
+            </button>
           </div>
         </div>
       </div>

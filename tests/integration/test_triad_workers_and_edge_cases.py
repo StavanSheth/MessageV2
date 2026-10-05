@@ -202,3 +202,49 @@ async def test_edge_case_replied_contact_cancels_followup():
         
         updated_task = await t_repo.get_by_id(fu_task.id)
         assert updated_task.status == TaskStatus.CANCELLED.value
+
+
+@pytest.mark.asyncio
+async def test_master_controls_all_workers_and_individual_worker2(client: AsyncClient):
+    """Verify Start All, Pause All, Resume All, Stop All and Worker 2 individual controls."""
+    # 1. Test Worker 2 lifecycle
+    res_w2_start = await client.post("/api/automation/replies/start?interval_seconds=60")
+    assert res_w2_start.status_code == 200
+    assert res_w2_start.json()["status"] in ["started", "already_running"]
+
+    res_w2_pause = await client.post("/api/automation/replies/pause")
+    assert res_w2_pause.status_code == 200
+    assert res_w2_pause.json()["status"] == "paused"
+
+    res_w2_resume = await client.post("/api/automation/replies/resume")
+    assert res_w2_resume.status_code == 200
+    assert res_w2_resume.json()["status"] == "resumed"
+
+    res_w2_stop = await client.post("/api/automation/replies/stop")
+    assert res_w2_stop.status_code == 200
+    assert res_w2_stop.json()["status"] == "stopped"
+
+    # 2. Test Master All Workers controls
+    res_all_start = await client.post("/api/automation/all/start", json={"batch_limit": 2})
+    assert res_all_start.status_code == 200
+    assert res_all_start.json()["status"] == "started_all"
+
+    res_all_status = await client.get("/api/automation/all/status")
+    assert res_all_status.status_code == 200
+    data = res_all_status.json()
+    assert "worker1" in data
+    assert "worker2" in data
+    assert "worker3" in data
+
+    res_all_pause = await client.post("/api/automation/all/pause")
+    assert res_all_pause.status_code == 200
+    assert res_all_pause.json()["status"] == "paused_all"
+
+    res_all_resume = await client.post("/api/automation/all/resume")
+    assert res_all_resume.status_code == 200
+    assert res_all_resume.json()["status"] == "resumed_all"
+
+    res_all_stop = await client.post("/api/automation/all/stop")
+    assert res_all_stop.status_code == 200
+    assert res_all_stop.json()["status"] == "stopped_all"
+

@@ -189,36 +189,67 @@ async def start_all_workers(req: Optional[StartAutomationRequest] = None):
     from backend.workers.reply_scanner_worker import reply_scanner_worker
     from backend.workers.followup_worker import followup_worker
     from backend.automation.coordinator import coordinator
+    from backend.database.session import AsyncSessionLocal
+    from backend.database.models import Task
+    from sqlalchemy import select, and_, func
 
     batch_limit = req.batch_limit if req else None
     delay_seconds = req.delay_seconds if req else 15
 
     results = {}
 
-    # Worker 2: Inbox Reviewer
+    # Worker 2: Inbox Reviewer always runs concurrently on Tab B
     try:
         results["worker2"] = await reply_scanner_worker.start()
     except Exception as e:
         logger.warning(f"[AllWorkers] Worker 2 start warning: {e}")
         results["worker2"] = {"error": str(e)}
 
-    # Worker 1 & 3: Starting DM workers according to coordinator strategy
-    mode = coordinator.mode
-    if mode in ("BALANCED", "COLD_ONLY", "MANUAL"):
-        try:
-            await instagram_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds)
-            results["worker1"] = {"status": "started"}
-        except Exception as e:
-            logger.warning(f"[AllWorkers] Worker 1 start warning: {e}")
-            results["worker1"] = {"error": str(e)}
+    # Check pending due tasks to prioritize properly and avoid mutual preemption thrashing
+    now = datetime.now(timezone.utc)
+    fu_due = 0
+    cold_due = 0
+    try:
+        async with AsyncSessionLocal() as session:
+            fu_stmt = select(func.count(Task.id)).where(
+                and_(Task.status == "READY", Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]), Task.scheduled_at <= now)
+            )
+            cold_stmt = select(func.count(Task.id)).where(
+                and_(Task.status == "READY", Task.type == "MESSAGE", Task.scheduled_at <= now)
+            )
+            fu_due = (await session.execute(fu_stmt)).scalar() or 0
+            cold_due = (await session.execute(cold_stmt)).scalar() or 0
+    except Exception as e:
+        logger.warning(f"[AllWorkers] Error checking due tasks: {e}")
 
-    if mode in ("BALANCED", "FOLLOWUP_ONLY"):
+    mode = coordinator.mode
+    if mode == "FOLLOWUP_ONLY":
         try:
             await followup_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds)
             results["worker3"] = {"status": "started"}
         except Exception as e:
-            logger.warning(f"[AllWorkers] Worker 3 start warning: {e}")
             results["worker3"] = {"error": str(e)}
+    elif mode == "COLD_ONLY":
+        try:
+            await instagram_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds)
+            results["worker1"] = {"status": "started"}
+        except Exception as e:
+            results["worker1"] = {"error": str(e)}
+    else:  # BALANCED or MANUAL
+        if fu_due > 0:
+            logger.info(f"[AllWorkers] Priority: {fu_due} follow-ups are due. Starting Worker 3 first...")
+            try:
+                await followup_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds)
+                results["worker3"] = {"status": "started", "priority": "followup"}
+            except Exception as e:
+                results["worker3"] = {"error": str(e)}
+        else:
+            logger.info(f"[AllWorkers] Priority: No follow-ups due ({cold_due} cold outreach due). Starting Worker 1...")
+            try:
+                await instagram_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds)
+                results["worker1"] = {"status": "started", "priority": "outreach"}
+            except Exception as e:
+                results["worker1"] = {"error": str(e)}
 
     return {"status": "started_all", "results": results}
 
@@ -240,11 +271,45 @@ async def resume_all_workers():
     from backend.workers.instagram_worker import instagram_worker
     from backend.workers.reply_scanner_worker import reply_scanner_worker
     from backend.workers.followup_worker import followup_worker
+    from backend.database.session import AsyncSessionLocal
+    from backend.database.models import Task
+    from sqlalchemy import select, and_, func
 
-    await instagram_worker.resume()
-    await reply_scanner_worker.resume()
-    await followup_worker.resume()
-    return {"status": "resumed_all"}
+    results = {}
+
+    # Worker 2: Always resume
+    try:
+        await reply_scanner_worker.resume()
+        results["worker2"] = {"status": "resumed"}
+    except Exception as e:
+        results["worker2"] = {"error": str(e)}
+
+    # For DM senders (Worker 1 vs Worker 3), determine which one has due tasks or was paused
+    now = datetime.now(timezone.utc)
+    fu_due = 0
+    try:
+        async with AsyncSessionLocal() as session:
+            fu_stmt = select(func.count(Task.id)).where(
+                and_(Task.status == "READY", Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]), Task.scheduled_at <= now)
+            )
+            fu_due = (await session.execute(fu_stmt)).scalar() or 0
+    except Exception:
+        pass
+
+    if followup_worker.is_paused and fu_due > 0:
+        try:
+            await followup_worker.resume()
+            results["worker3"] = {"status": "resumed"}
+        except Exception as e:
+            results["worker3"] = {"error": str(e)}
+    else:
+        try:
+            await instagram_worker.resume()
+            results["worker1"] = {"status": "resumed"}
+        except Exception as e:
+            results["worker1"] = {"error": str(e)}
+
+    return {"status": "resumed_all", "results": results}
 
 
 @router.post("/all/stop")

@@ -60,16 +60,22 @@ class FollowUpWorker:
         return self._paused
 
     async def start(self, batch_limit: Optional[int] = None, delay_seconds: Optional[int] = None) -> None:
+        if self._paused or self.status == WorkerStatus.PAUSED:
+            if batch_limit is not None and batch_limit > 0:
+                self.batch_limit = batch_limit
+            if delay_seconds is not None and delay_seconds >= 5:
+                self.delay_between_messages = delay_seconds
+            await self.resume()
+            return
+
         if self._task and self._task.done():
             self._task = None
 
+        if self._task and not self._task.done():
+            return
+
         # Mutual exclusion: Acquire DM lock before starting
         await coordinator.acquire_dm_lock(WORKER_ID)
-
-        if self._task and not self._task.done():
-            if self._paused:
-                await self.resume()
-            return
 
         self.batch_limit = batch_limit if (batch_limit is not None and batch_limit > 0) else None
         self.batch_sent_count = 0
@@ -102,8 +108,11 @@ class FollowUpWorker:
 
     async def resume(self) -> None:
         await coordinator.acquire_dm_lock(WORKER_ID)
+        self._stop_requested = False
         self._paused = False
         self.status = WorkerStatus.RUNNING
+        if not self._task or self._task.done():
+            self._task = asyncio.create_task(self._run_loop())
         await self._update_worker_db(status="RUNNING")
         await event_bus.publish(EventCode.WORKER_RESUMED, worker_id=WORKER_ID)
         await event_bus.publish_state(await self.health())

@@ -55,9 +55,43 @@ async def browser_stream_replies():
     """MJPEG continuous live video stream for Worker 2 (Reply Scanner Tab)."""
     return await _stream_worker(worker="scanner")
 
+def _get_fallback_frame(worker: str = "outreach") -> bytes:
+    """Return latest screenshot on disk or synthesize a clean placeholder frame."""
+    target_pattern = f"*{worker}*.jpg" if worker in ("scanner", "outreach") else "*.jpg"
+    matched = list(SCREENSHOTS_DIR.glob(target_pattern))
+    if not matched:
+        matched = list(SCREENSHOTS_DIR.glob("*.jpg")) + list(SCREENSHOTS_DIR.glob("*.png"))
+    if matched:
+        sorted_files = sorted(matched, key=os.path.getmtime, reverse=True)
+        for s in sorted_files:
+            try:
+                b = s.read_bytes()
+                if len(b) > 100:
+                    return b
+            except Exception:
+                pass
+
+    # Synthesize lightweight dark banner frame with Pillow
+    import io
+    try:
+        from PIL import Image, ImageDraw
+        img = Image.new("RGB", (640, 360), color=(10, 16, 26))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([(10, 10), (630, 350)], outline=(30, 41, 59), width=2)
+        worker_label = "Tab A (Outreach)" if worker == "outreach" else "Tab B (Inbox Reviewer)"
+        draw.text((30, 150), f"MessageV2 Live View: {worker_label}", fill=(241, 245, 249))
+        draw.text((30, 180), "Live Chrome Stream Connecting...", fill=(100, 116, 139))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=75)
+        return buf.getvalue()
+    except Exception:
+        # Minimal 1x1 black JPEG fallback
+        return b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00H\x00H\x00\x00\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c\x1c $.' \",#\x1c\x1c(7),01444\x1f'9=82<.342\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xbf\x00\xff\xd9"
+
 async def _stream_worker(worker: str = "outreach"):
     from backend.automation.extension_bridge import extension_bridge
     import asyncio
+    import time
 
     if extension_bridge.is_connected:
         try:
@@ -66,35 +100,52 @@ async def _stream_worker(worker: str = "outreach"):
             pass
 
     async def frame_generator():
-        last_sent = None
-        while True:
-            # 1. First priority: live frame from extension screencast for this worker
-            frame = await extension_bridge.wait_for_next_frame(worker=worker, timeout=0.6)
-            if not frame:
-                # 2. Secondary priority: active capture screenshot for this worker tab
-                frame = await extension_bridge.capture_screenshot(worker=worker)
-            if not frame and worker == "outreach":
-                # 3. Third priority: Playwright/CDP screenshot if available
-                bw = instagram_worker.browser_worker
-                target_url = instagram_worker.current_instagram if instagram_worker.status.value == "RUNNING" else None
-                frame = await bw.capture_live_screenshot(target_url=target_url)
+        # 1. Immediately yield an initial frame so browser <img> connects with zero latency
+        last_sent = _get_fallback_frame(worker)
+        last_sent_time = time.time()
+        yield (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n"
+            b"Content-Length: " + str(len(last_sent)).encode() + b"\r\n\r\n" +
+            last_sent + b"\r\n"
+        )
 
-            if frame:
+        last_capture_try = 0.0
+        while True:
+            # 2. Priority: wait for live screencast frame from extension
+            frame = await extension_bridge.wait_for_next_frame(worker=worker, timeout=0.8)
+            now = time.time()
+
+            # 3. Secondary priority: if no screencast frame arrived and 2s elapsed, trigger active snapshot
+            if not frame and (now - last_capture_try > 2.0):
+                last_capture_try = now
+                frame = await extension_bridge.capture_screenshot(worker=worker)
+
+            # 4. Fallback to CDP browser worker if outreach
+            if not frame and worker == "outreach" and instagram_worker.browser_worker.is_running:
+                target_url = instagram_worker.current_instagram if instagram_worker.status.value == "RUNNING" else None
+                frame = await instagram_worker.browser_worker.capture_live_screenshot(target_url=target_url)
+
+            if frame and frame != last_sent:
                 last_sent = frame
+                last_sent_time = now
                 yield (
                     b"--frame\r\n"
                     b"Content-Type: image/jpeg\r\n"
                     b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n" +
                     frame + b"\r\n"
                 )
-            elif last_sent:
+            elif (now - last_sent_time >= 2.0) and last_sent:
+                # Keep-alive heartbeat frame to maintain multipart stream
+                last_sent_time = now
                 yield (
                     b"--frame\r\n"
                     b"Content-Type: image/jpeg\r\n"
                     b"Content-Length: " + str(len(last_sent)).encode() + b"\r\n\r\n" +
                     last_sent + b"\r\n"
                 )
-            await asyncio.sleep(0.04)
+
+            await asyncio.sleep(0.06)
 
     return StreamingResponse(
         frame_generator(),
@@ -121,25 +172,23 @@ async def get_browser_live_feed(worker: str = "outreach"):
 
     if worker == "outreach":
         bw = instagram_worker.browser_worker
-        target_url = instagram_worker.current_instagram if instagram_worker.status.value == "RUNNING" else None
-        img_bytes = await bw.capture_live_screenshot(target_url=target_url)
-        if img_bytes:
-            return Response(
-                content=img_bytes,
-                media_type="image/jpeg",
-                headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
-            )
-    # If no live page, return latest file from screenshots dir if available
-    target_pattern = f"*{worker}*.jpg" if worker in ("scanner", "outreach") else "*.jpg"
-    matched_shots = list(SCREENSHOTS_DIR.glob(target_pattern))
-    if not matched_shots:
-        matched_shots = list(SCREENSHOTS_DIR.glob("*.jpg")) + list(SCREENSHOTS_DIR.glob("*.png"))
-    screenshots = sorted(matched_shots, key=os.path.getmtime, reverse=True)
-    if screenshots:
-        ext = screenshots[0].suffix.lower()
-        media_type = "image/jpeg" if ext in [".jpg", ".jpeg"] else "image/png"
-        return FileResponse(str(screenshots[0]), media_type=media_type)
-    return Response(status_code=204)
+        if bw.is_running:
+            target_url = instagram_worker.current_instagram if instagram_worker.status.value == "RUNNING" else None
+            img_bytes = await bw.capture_live_screenshot(target_url=target_url)
+            if img_bytes:
+                return Response(
+                    content=img_bytes,
+                    media_type="image/jpeg",
+                    headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+                )
+
+    # Always return a valid image frame (never 204)
+    fallback = _get_fallback_frame(worker)
+    return Response(
+        content=fallback,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+    )
 
 @router.get("/api/browser/capture_test")
 async def test_browser_capture():

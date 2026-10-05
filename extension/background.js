@@ -173,6 +173,22 @@ async function ensureScreencastForTab(tabId, workerTag = "outreach") {
       everyNthFrame: 1
     });
     console.log(`[MessageV2 Extension] Live screencast started on ${workerTag} tab:`, tabId);
+
+    // Immediately push initial screenshot frame so backend stream is populated without waiting for page invalidation
+    try {
+      const shot = await chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", {
+        format: "jpeg",
+        quality: 60
+      });
+      if (shot && shot.data && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: "LIVE_FRAME",
+          worker: workerTag,
+          tabId: tabId,
+          data: shot.data
+        }));
+      }
+    } catch (e) {}
   } catch (err) {
     if (String(err?.message || err).includes("Another debugger is already attached")) {
       attachedDebuggerTabs.add(tabId);
@@ -180,6 +196,28 @@ async function ensureScreencastForTab(tabId, workerTag = "outreach") {
     console.log(`[MessageV2 Extension] Screencast notice on ${workerTag} tab:`, tabId, err);
   }
 }
+
+// Periodic keep-alive screenshot probe for idle tabs so live feed never freezes when static
+setInterval(async () => {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !chrome.debugger) return;
+  for (const tabId of Array.from(attachedDebuggerTabs)) {
+    try {
+      const workerTag = (tabId === scannerTabId) ? "scanner" : "outreach";
+      const shot = await chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", {
+        format: "jpeg",
+        quality: 55
+      });
+      if (shot && shot.data && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: "LIVE_FRAME",
+          worker: workerTag,
+          tabId: tabId,
+          data: shot.data
+        }));
+      }
+    } catch (e) {}
+  }
+}, 3000);
 
 if (chrome.debugger) {
   chrome.debugger.onEvent.addListener((source, method, params) => {
@@ -316,14 +354,21 @@ async function handleCommand(msg) {
   }
 
   if (action === "START_SCREENCAST") {
-    const tabA = await getOutreachTab();
-    if (tabA && tabA.id) {
-      await ensureScreencastForTab(tabA.id, "outreach");
-    }
-    const tabB = await getScannerTab();
-    if (tabB && tabB.id) {
-      await ensureScreencastForTab(tabB.id, "scanner");
-    }
+    // Non-blocking attachment so backend doesn't time out waiting for tab network loads
+    (async () => {
+      try {
+        const tabA = await getOutreachTab();
+        if (tabA && tabA.id) {
+          await ensureScreencastForTab(tabA.id, "outreach");
+        }
+      } catch (e) {}
+      try {
+        const tabB = await getScannerTab();
+        if (tabB && tabB.id) {
+          await ensureScreencastForTab(tabB.id, "scanner");
+        }
+      } catch (e) {}
+    })();
     return { success: true, screencasting: true, outreachTabId, scannerTabId };
   }
 

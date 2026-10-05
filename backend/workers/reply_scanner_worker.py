@@ -91,8 +91,11 @@ class ReplyScannerWorker:
         logger.info("[ReplyScanner] Worker 2 paused.")
 
     async def resume(self):
+        self._stop_requested = False
         self._paused = False
-        self.status = "RUNNING" if (self._periodic_task and not self._periodic_task.done()) else "IDLE"
+        if not self._periodic_task or self._periodic_task.done():
+            self._periodic_task = asyncio.create_task(self._run_loop(45))
+        self.status = "RUNNING"
         logger.info("[ReplyScanner] Worker 2 resumed.")
 
     async def stop(self):

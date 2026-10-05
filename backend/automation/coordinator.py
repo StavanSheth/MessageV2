@@ -19,6 +19,7 @@ class DMCoordinator:
         self.active_sender: Optional[str] = None  # "WORKER-01", "WORKER-03", or None
         self.mode: str = "BALANCED"  # "MANUAL", "COLD_ONLY", "FOLLOWUP_ONLY", "BALANCED"
         self.lock_acquired_at: Optional[datetime] = None
+        self.preempted_worker: Optional[str] = None
 
     async def acquire_dm_lock(self, worker_id: str) -> bool:
         """
@@ -30,6 +31,7 @@ class DMCoordinator:
 
         if self.active_sender and self.active_sender != worker_id:
             logger.info(f"[Coordinator] Worker {worker_id} requested DM lock, currently held by {self.active_sender}. Preempting active worker...")
+            self.preempted_worker = self.active_sender
             await self._preempt_worker(self.active_sender)
 
         self.active_sender = worker_id
@@ -43,6 +45,30 @@ class DMCoordinator:
             logger.info(f"[Coordinator] DM Lock released by {worker_id}")
             self.active_sender = None
             self.lock_acquired_at = None
+
+            # If another worker was previously preempted, auto-resume it cleanly
+            if self.preempted_worker and self.preempted_worker != worker_id:
+                next_worker = self.preempted_worker
+                self.preempted_worker = None
+                logger.info(f"[Coordinator] Auto-resuming preempted worker: {next_worker}")
+                asyncio.create_task(self._auto_resume_worker(next_worker))
+
+    async def _auto_resume_worker(self, worker_id: str) -> None:
+        """Safely resume a previously preempted worker in the background."""
+        try:
+            await asyncio.sleep(0.5)
+            if worker_id == "WORKER-01":
+                from backend.workers.instagram_worker import instagram_worker
+                if instagram_worker.is_paused or instagram_worker.status.value == "PAUSED":
+                    logger.info("[Coordinator] Waking up Worker 1 (Outreach)...")
+                    await instagram_worker.resume()
+            elif worker_id == "WORKER-03":
+                from backend.workers.followup_worker import followup_worker
+                if followup_worker.is_paused or followup_worker.status.value == "PAUSED":
+                    logger.info("[Coordinator] Waking up Worker 3 (Follow-Ups)...")
+                    await followup_worker.resume()
+        except Exception as e:
+            logger.warning(f"[Coordinator] Error auto-resuming {worker_id}: {e}")
 
     async def _preempt_worker(self, worker_id: str) -> None:
         """Pause the currently sending worker safely so the requested worker can take over."""

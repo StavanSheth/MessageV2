@@ -248,3 +248,39 @@ async def test_master_controls_all_workers_and_individual_worker2(client: AsyncC
     assert res_all_stop.status_code == 200
     assert res_all_stop.json()["status"] == "stopped_all"
 
+
+@pytest.mark.asyncio
+async def test_coordinator_preemption_and_auto_resume():
+    """Verify that when Worker 3 preempts Worker 1, releasing Worker 3's lock auto-resumes Worker 1."""
+    from backend.automation.coordinator import coordinator
+    from backend.workers.instagram_worker import instagram_worker
+
+    # Worker 1 acquires lock
+    await coordinator.acquire_dm_lock("WORKER-01")
+    assert coordinator.active_sender == "WORKER-01"
+
+    # Worker 3 acquires lock -> preempts Worker 1
+    await coordinator.acquire_dm_lock("WORKER-03")
+    assert coordinator.active_sender == "WORKER-03"
+    assert coordinator.preempted_worker == "WORKER-01"
+
+    # Worker 3 releases lock -> coordinator clears lock and auto-resumes preempted worker
+    await coordinator.release_dm_lock("WORKER-03")
+    assert coordinator.active_sender is None
+    assert coordinator.preempted_worker is None
+
+
+@pytest.mark.asyncio
+async def test_browser_live_feed_endpoints_always_return_images(client: AsyncClient):
+    """Verify that /api/browser/live_feed returns HTTP 200 with image/jpeg, never 204."""
+    res_outreach = await client.get("/api/browser/live_feed?worker=outreach")
+    assert res_outreach.status_code == 200
+    assert res_outreach.headers["content-type"].startswith("image/")
+    assert len(res_outreach.content) > 100
+
+    res_scanner = await client.get("/api/browser/live_feed?worker=scanner")
+    assert res_scanner.status_code == 200
+    assert res_scanner.headers["content-type"].startswith("image/")
+    assert len(res_scanner.content) > 100
+
+

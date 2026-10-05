@@ -225,12 +225,20 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     await pauseWorker3();
     const updated = await fetchWorker3Status();
     setWorker3Status(updated);
+    try {
+      const coord = await fetchCoordinatorStatus();
+      setCoordinatorStatus(coord);
+    } catch (e) {}
   };
 
   const handleResumeWorker3 = async () => {
     await resumeWorker3();
     const updated = await fetchWorker3Status();
     setWorker3Status(updated);
+    try {
+      const coord = await fetchCoordinatorStatus();
+      setCoordinatorStatus(coord);
+    } catch (e) {}
   };
 
   const handleStartWorker2 = async () => {
@@ -265,6 +273,10 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     await stopWorker3();
     const updated = await fetchWorker3Status();
     setWorker3Status(updated);
+    try {
+      const coord = await fetchCoordinatorStatus();
+      setCoordinatorStatus(coord);
+    } catch (e) {}
   };
 
   const handleSetMode = async (mode: string) => {
@@ -319,9 +331,25 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     const timer = setInterval(() => {
       setOutreachTick(Date.now());
       setScannerTick(Date.now());
-    }, 2500);
+    }, 2000);
     return () => clearInterval(timer);
   }, []);
+
+  // Periodic auto-recovery for live stream reconnection
+  useEffect(() => {
+    if (!outreachStreamError && !scannerStreamError) return;
+    const retryTimer = setTimeout(() => {
+      if (outreachStreamError) {
+        setOutreachStreamError(false);
+        setOutreachFeedError(false);
+      }
+      if (scannerStreamError) {
+        setScannerStreamError(false);
+        setScannerFeedError(false);
+      }
+    }, 4000);
+    return () => clearTimeout(retryTimer);
+  }, [outreachStreamError, scannerStreamError]);
 
   const handleOpenChrome = async () => {
     setIsOpeningBrowser(true);

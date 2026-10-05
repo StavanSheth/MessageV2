@@ -16,8 +16,9 @@ function connect() {
   };
 
   ws.onmessage = async (event) => {
+    let data = null;
     try {
-      const data = JSON.parse(event.data);
+      data = JSON.parse(event.data);
       console.log("[MessageV2 Extension] Received command:", data.action, data);
       const res = await handleCommand(data);
       ws.send(JSON.stringify({
@@ -133,16 +134,58 @@ async function handleCommand(msg) {
     return { success: true, pong: true };
   }
 
+  if (action === "RELOAD_EXTENSION") {
+    console.log("[MessageV2 Extension] Reloading extension...");
+    setTimeout(() => {
+      chrome.runtime.reload();
+    }, 200);
+    return { success: true, reloaded: true };
+  }
+
   if (action === "CAPTURE_SCREENSHOT") {
     try {
-      const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      const winId = (activeTabs.length > 0 && activeTabs[0].windowId) ? activeTabs[0].windowId : null;
+      // 1. Locate Instagram tab and its window
+      const igTabs = await chrome.tabs.query({ url: ["*://*.instagram.com/*", "*://instagram.com/*"] });
+      let targetWinId = null;
+      if (igTabs.length > 0) {
+        targetWinId = igTabs[0].windowId;
+        try {
+          await chrome.tabs.update(igTabs[0].id, { active: true });
+        } catch (e) {}
+      }
+
+      // 2. Fallback to active tab in current/last focused window
+      if (!targetWinId) {
+        const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        if (activeTabs.length > 0 && activeTabs[0].windowId) {
+          targetWinId = activeTabs[0].windowId;
+        } else {
+          const allWins = await chrome.windows.getAll({ windowTypes: ["normal"] });
+          if (allWins.length > 0) {
+            targetWinId = allWins[0].id;
+          }
+        }
+      }
+
+      // 3. Ensure window is not minimized
+      if (targetWinId) {
+        try {
+          const win = await chrome.windows.get(targetWinId);
+          if (win && win.state === "minimized") {
+            await chrome.windows.update(targetWinId, { state: "normal" });
+          }
+        } catch (e) {}
+      }
+
+      const captureOptions = { format: "jpeg", quality: 65 };
       const dataUrl = await new Promise((resolve, reject) => {
-        chrome.tabs.captureVisibleTab(winId, { format: "jpeg", quality: 65 }, (result) => {
-          if (chrome.runtime.lastError) {
-            chrome.tabs.captureVisibleTab(null, { format: "jpeg", quality: 65 }, (res2) => {
-              if (chrome.runtime.lastError) {
-                reject(new Error(chrome.runtime.lastError.message));
+        chrome.tabs.captureVisibleTab(targetWinId, captureOptions, (result) => {
+          if (chrome.runtime.lastError || !result) {
+            // Fallback to null (captures whatever window Chrome considers active)
+            chrome.tabs.captureVisibleTab(null, captureOptions, (res2) => {
+              if (chrome.runtime.lastError || !res2) {
+                const msg = chrome.runtime.lastError ? chrome.runtime.lastError.message : "Empty capture buffer";
+                reject(new Error(msg));
               } else {
                 resolve(res2);
               }

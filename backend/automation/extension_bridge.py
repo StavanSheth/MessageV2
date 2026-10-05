@@ -9,6 +9,8 @@ from fastapi import WebSocket
 from backend.domain.enums import ResultCode
 from backend.config.settings import SCREENSHOTS_DIR
 
+import time
+
 logger = logging.getLogger("extension_bridge")
 
 class ExtensionBridgeManager:
@@ -16,6 +18,8 @@ class ExtensionBridgeManager:
         self.ws: Optional[WebSocket] = None
         self._pending_requests: Dict[str, asyncio.Future] = {}
         self._latest_screenshot_data: Optional[bytes] = None
+        self._latest_screenshot_time: float = 0.0
+        self._capture_lock: asyncio.Lock = asyncio.Lock()
 
     @property
     def is_connected(self) -> bool:
@@ -110,25 +114,44 @@ class ExtensionBridgeManager:
         except Exception as e:
             return False, ResultCode.DM_NOT_AVAILABLE, str(e)
 
+    async def reload_extension(self) -> Dict[str, Any]:
+        if not self.is_connected:
+            return {"success": False, "error": "Extension not connected"}
+        return await self.send_command("RELOAD_EXTENSION", timeout=3.0)
+
     async def capture_screenshot(self) -> Optional[bytes]:
         if not self.is_connected:
             return self._latest_screenshot_data
-        try:
-            res = await self.send_command("CAPTURE_SCREENSHOT", timeout=5.0)
-            if res.get("success") and res.get("dataUrl"):
-                data_url = res["dataUrl"]
-                if "," in data_url:
-                    b64_data = data_url.split(",", 1)[1]
-                    raw_bytes = base64.b64decode(b64_data)
-                    self._latest_screenshot_data = raw_bytes
-                    try:
-                        latest_path = SCREENSHOTS_DIR / "latest_live.jpg"
-                        latest_path.write_bytes(raw_bytes)
-                    except Exception:
-                        pass
-                    return raw_bytes
-        except Exception as e:
-            logger.debug(f"[ExtensionBridge] Screenshot capture error: {e}")
+
+        now = time.time()
+        # Fast return cached frame if fresh (< 0.8s)
+        if self._latest_screenshot_data and (now - self._latest_screenshot_time < 0.8):
+            return self._latest_screenshot_data
+
+        async with self._capture_lock:
+            # Re-check after acquiring lock in case another task just refreshed it
+            if self._latest_screenshot_data and (time.time() - self._latest_screenshot_time < 0.8):
+                return self._latest_screenshot_data
+
+            try:
+                res = await self.send_command("CAPTURE_SCREENSHOT", timeout=3.0)
+                if not res.get("success"):
+                    logger.warning(f"[ExtensionBridge] CAPTURE_SCREENSHOT failed: {res.get('error')}")
+                elif res.get("dataUrl"):
+                    data_url = res["dataUrl"]
+                    if "," in data_url:
+                        b64_data = data_url.split(",", 1)[1]
+                        raw_bytes = base64.b64decode(b64_data)
+                        self._latest_screenshot_data = raw_bytes
+                        self._latest_screenshot_time = time.time()
+                        try:
+                            latest_path = SCREENSHOTS_DIR / "latest_live.jpg"
+                            latest_path.write_bytes(raw_bytes)
+                        except Exception:
+                            pass
+                        return raw_bytes
+            except Exception as e:
+                logger.warning(f"[ExtensionBridge] Screenshot capture exception: {e}")
         return self._latest_screenshot_data
 
     async def prepare_and_send(self, message: str) -> Tuple[bool, ResultCode, str]:

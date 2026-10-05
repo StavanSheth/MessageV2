@@ -59,6 +59,26 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   const [liveTick, setLiveTick] = useState(Date.now());
   const [feedError, setFeedError] = useState(false);
   const [isOpeningBrowser, setIsOpeningBrowser] = useState(false);
+  const [extensionNeedsReload, setExtensionNeedsReload] = useState(false);
+
+  useEffect(() => {
+    const checkCapture = async () => {
+      try {
+        const res = await fetch('/api/browser/capture_test');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.error && data.error.includes('Unknown action CAPTURE_SCREENSHOT')) {
+            setExtensionNeedsReload(true);
+          } else if (data.success || data.has_data) {
+            setExtensionNeedsReload(false);
+          }
+        }
+      } catch (e) {}
+    };
+    checkCapture();
+    const testTimer = setInterval(checkCapture, 4000);
+    return () => clearInterval(testTimer);
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -548,6 +568,16 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
             </div>
 
             <div className="mt-5 flex-1 flex flex-col justify-center">
+              {extensionNeedsReload && (
+                <div className="p-3 mb-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <RefreshCw className="w-4 h-4 text-amber-400 shrink-0 animate-spin" />
+                    <span>
+                      Extension update ready: In your Chrome browser, go to <strong className="text-white underline">chrome://extensions</strong> and click <strong>🔄 Reload</strong> on <em>MessageV2 Automation Bridge</em> to stream your live window.
+                    </span>
+                  </div>
+                </div>
+              )}
               <div className="space-y-3">
                 <div className="relative rounded-xl overflow-hidden border border-gray-700/80 bg-gray-950 aspect-video flex items-center justify-center shadow-inner">
                   <img

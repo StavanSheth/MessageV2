@@ -73,6 +73,30 @@ async def get_browser_live_feed():
         return FileResponse(str(screenshots[0]), media_type=media_type)
     return Response(status_code=204)
 
+@router.get("/api/browser/capture_test")
+async def test_browser_capture():
+    from backend.automation.extension_bridge import extension_bridge
+    if not extension_bridge.is_connected:
+        return {"connected": False, "error": "Extension bridge not connected"}
+    try:
+        res = await extension_bridge.send_command("CAPTURE_SCREENSHOT", timeout=5.0)
+        has_data = bool(res.get("dataUrl"))
+        data_len = len(res.get("dataUrl", ""))
+        return {"connected": True, "res_keys": list(res.keys()), "success": res.get("success"), "error": res.get("error"), "has_data": has_data, "data_len": data_len}
+    except Exception as e:
+        return {"connected": True, "error": str(e)}
+
+@router.post("/api/browser/reload_extension")
+async def reload_extension_endpoint():
+    from backend.automation.extension_bridge import extension_bridge
+    if not extension_bridge.is_connected:
+        return {"success": False, "error": "Extension bridge not connected"}
+    try:
+        res = await extension_bridge.reload_extension()
+        return res
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @router.post("/api/browser/open")
 async def open_visible_browser():
     """Forces open or foregrounds the native Chrome browser window on the user desktop."""

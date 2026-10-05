@@ -3,9 +3,10 @@ import {
   Search, ExternalLink, Check, Download, Edit3, X, Save, Clock, 
   CheckCircle2, Calendar, Send, Sliders, RefreshCw, Users, 
   Sparkles, MessageSquare, ChevronLeft, ChevronRight, ArrowUpRight, Trash2,
-  Bot, Phone, Mail, Link2, ShieldAlert, Eye, MessageCircle
+  Bot, Phone, Mail, Link2, ShieldAlert, Eye, MessageCircle,
+  Zap, CheckCheck, ListOrdered, ArrowUpDown, Filter, Play
 } from 'lucide-react';
-import { Contact } from '../types';
+import { Contact, Task, LiveAutomationState } from '../types';
 import { 
   toggleReplied, 
   updateContactMessages, 
@@ -18,7 +19,40 @@ import {
 
 interface ContactsProps {
   contacts: Contact[];
+  tasks?: Task[];
+  automationState?: LiveAutomationState | null;
   onRefresh: () => void;
+}
+
+type RunFilterMode = 'ALL' | 'NEXT_IN_RUN' | 'DONE_IN_RUN';
+type DateFilterMode = 'ALL' | 'TODAY' | 'YESTERDAY' | 'WEEK';
+type TimeSortMode = 'DEFAULT' | 'SCHEDULED_ASC' | 'SCHEDULED_DESC' | 'COMPLETED_DESC' | 'NAME_ASC';
+type StageFilterMode = 'ALL' | 'MESSAGE' | 'FOLLOW_UP_1' | 'FOLLOW_UP_2';
+
+function matchesDateFilter(dateStr: string | null | undefined, filter: DateFilterMode): boolean {
+  if (filter === 'ALL' || !dateStr) return filter === 'ALL';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return false;
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const targetTime = d.getTime();
+
+    if (filter === 'TODAY') {
+      return targetTime >= todayStart;
+    }
+    if (filter === 'YESTERDAY') {
+      const yesterdayStart = todayStart - 86400000;
+      return targetTime >= yesterdayStart && targetTime < todayStart;
+    }
+    if (filter === 'WEEK') {
+      const weekStart = todayStart - 7 * 86400000;
+      return targetTime >= weekStart;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function toDatetimeLocalValue(dateStr?: string | null): string {
@@ -60,10 +94,14 @@ function formatDisplayDate(dateStr?: string | null): string {
   }
 }
 
-export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
+export const Contacts: React.FC<ContactsProps> = ({ contacts, tasks = [], automationState, onRefresh }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [repliedFilter, setRepliedFilter] = useState<'all' | 'replied' | 'automated' | 'unreplied'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'sent' | 'scheduled' | 'pending' | 'restricted'>('all');
+  const [runFilter, setRunFilter] = useState<RunFilterMode>('ALL');
+  const [dateFilter, setDateFilter] = useState<DateFilterMode>('ALL');
+  const [timeSort, setTimeSort] = useState<TimeSortMode>('DEFAULT');
+  const [stageFilter, setStageFilter] = useState<StageFilterMode>('ALL');
   const [loadingContactId, setLoadingContactId] = useState<string | null>(null);
 
   // Reply Scanner State
@@ -238,40 +276,175 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
     }
   };
 
-  // Filter contacts
+  // Run Tracking Logic (Harmonized with Queue)
+  const currentRunId = automationState?.current_run_id;
+  const batchLimit = automationState?.batch_limit;
+  const batchSentCount = automationState?.batch_sent_count ?? 0;
+  const isWorkerRunning = automationState?.status === 'RUNNING';
+
+  const runCompletedContactIds = useMemo(() => {
+    return new Set(automationState?.run_completed_contact_ids || []);
+  }, [automationState]);
+
+  const activeBatchQuota = batchLimit ? batchLimit : 10;
+  const remainingInRunQuota = isWorkerRunning 
+    ? Math.max(0, activeBatchQuota - batchSentCount) 
+    : activeBatchQuota;
+
+  // Upcoming tasks sorted strictly in operational dispatch order
+  const upcomingSortedTasks = useMemo(() => {
+    return (tasks || [])
+      .filter((t) => ['READY', 'QUEUED', 'RUNNING'].includes(t.status))
+      .sort((a, b) => {
+        if (a.status === 'RUNNING' && b.status !== 'RUNNING') return -1;
+        if (b.status === 'RUNNING' && a.status !== 'RUNNING') return 1;
+        const pDiff = (b.priority ?? 1) - (a.priority ?? 1);
+        if (pDiff !== 0) return pDiff;
+        const timeA = a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0;
+        const timeB = b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0;
+        return timeA - timeB;
+      });
+  }, [tasks]);
+
+  // Map contact ID or username to Next in Run details
+  const nextInRunContactMap = useMemo(() => {
+    const map = new Map<string, { position: number; taskType: string; taskId: string }>();
+    upcomingSortedTasks.slice(0, remainingInRunQuota).forEach((t, i) => {
+      if (t.contact_id && !map.has(t.contact_id)) {
+        map.set(t.contact_id, { position: i + 1, taskType: t.type || 'MESSAGE', taskId: t.id });
+      }
+      if (t.username && !map.has(t.username.toLowerCase())) {
+        map.set(t.username.toLowerCase(), { position: i + 1, taskType: t.type || 'MESSAGE', taskId: t.id });
+      }
+    });
+    return map;
+  }, [upcomingSortedTasks, remainingInRunQuota]);
+
+  const isContactDoneInRun = (c: Contact) => {
+    if (runCompletedContactIds.has(c.id)) return true;
+    if (c.username && runCompletedContactIds.has(c.username.toLowerCase())) return true;
+    if (currentRunId && c.last_run_id === currentRunId) return true;
+    return false;
+  };
+
+  const getContactNextInRun = (c: Contact) => {
+    return nextInRunContactMap.get(c.id) || (c.username ? nextInRunContactMap.get(c.username.toLowerCase()) : undefined);
+  };
+
+  const doneInRunCount = useMemo(() => {
+    return contacts.filter(isContactDoneInRun).length;
+  }, [contacts, runCompletedContactIds, currentRunId]);
+
+  const nextInRunCount = useMemo(() => {
+    return contacts.filter((c) => !!getContactNextInRun(c)).length;
+  }, [contacts, nextInRunContactMap]);
+
+  // Filter and sort contacts
   const filteredContacts = useMemo(() => {
-    return contacts.filter((c) => {
+    let result = contacts.filter((c) => {
+      // 1. Search filter
       const term = searchTerm.toLowerCase();
-      const matchesSearch =
-        (c.name || '').toLowerCase().includes(term) ||
-        (c.username || '').toLowerCase().includes(term) ||
-        (c.message || '').toLowerCase().includes(term) ||
-        (c.custom_message || '').toLowerCase().includes(term) ||
-        (c.auto_reply_message || '').toLowerCase().includes(term) ||
-        (c.extracted_phone || '').toLowerCase().includes(term) ||
-        (c.extracted_email || '').toLowerCase().includes(term);
+      if (term) {
+        const matchesSearch =
+          (c.name || '').toLowerCase().includes(term) ||
+          (c.username || '').toLowerCase().includes(term) ||
+          (c.message || '').toLowerCase().includes(term) ||
+          (c.custom_message || '').toLowerCase().includes(term) ||
+          (c.auto_reply_message || '').toLowerCase().includes(term) ||
+          (c.extracted_phone || '').toLowerCase().includes(term) ||
+          (c.extracted_email || '').toLowerCase().includes(term);
+        if (!matchesSearch) return false;
+      }
 
-      if (!matchesSearch) return false;
-
-      // Replies Filter
+      // 2. Replies Filter
       if (repliedFilter === 'replied' && !(c.has_replied || c.replied_status === 'YES')) return false;
       if (repliedFilter === 'automated' && c.replied_status !== 'AUTOMATED_MESSAGE') return false;
       if (repliedFilter === 'unreplied' && (c.has_replied || c.replied_status === 'YES' || c.replied_status === 'AUTOMATED_MESSAGE')) return false;
 
-      // Status Filter
+      // 3. Status Filter
       if (statusFilter === 'sent' && c.first_message_status !== 'SENT') return false;
       if (statusFilter === 'scheduled' && c.followup_1_status !== 'SCHEDULED' && c.followup_2_status !== 'SCHEDULED') return false;
       if (statusFilter === 'pending' && c.first_message_status === 'SENT') return false;
       if (statusFilter === 'restricted' && c.replied_status !== 'DM_RESTRICTED') return false;
 
+      // 4. Stage Filter
+      if (stageFilter === 'MESSAGE') {
+        if (c.first_message_status !== 'SENT' && c.first_message_status !== 'READY') return false;
+      } else if (stageFilter === 'FOLLOW_UP_1') {
+        if (c.followup_1_status !== 'SENT' && c.followup_1_status !== 'SCHEDULED' && c.followup_1_status !== 'READY') return false;
+      } else if (stageFilter === 'FOLLOW_UP_2') {
+        if (c.followup_2_status !== 'SENT' && c.followup_2_status !== 'SCHEDULED' && c.followup_2_status !== 'READY') return false;
+      }
+
+      // 5. Run Filter
+      if (runFilter === 'NEXT_IN_RUN') {
+        if (!getContactNextInRun(c)) return false;
+      } else if (runFilter === 'DONE_IN_RUN') {
+        if (!isContactDoneInRun(c)) return false;
+      }
+
+      // 6. Date Filter
+      if (dateFilter !== 'ALL') {
+        let relevantDates: (string | null | undefined)[] = [];
+        if (stageFilter === 'MESSAGE') {
+          relevantDates = [c.first_message_sent_at, c.first_message_scheduled_at, c.created_at];
+        } else if (stageFilter === 'FOLLOW_UP_1') {
+          relevantDates = [c.followup_1_sent_at, c.followup_1_scheduled_at];
+        } else if (stageFilter === 'FOLLOW_UP_2') {
+          relevantDates = [c.followup_2_sent_at, c.followup_2_scheduled_at];
+        } else {
+          relevantDates = [
+            c.first_message_sent_at,
+            c.followup_1_sent_at,
+            c.followup_2_sent_at,
+            c.followup_1_scheduled_at,
+            c.followup_2_scheduled_at,
+            c.first_message_scheduled_at,
+            c.created_at,
+          ];
+        }
+        const hasMatchingDate = relevantDates.some((d) => matchesDateFilter(d, dateFilter));
+        if (!hasMatchingDate) return false;
+      }
+
       return true;
     });
-  }, [contacts, searchTerm, repliedFilter, statusFilter]);
+
+    // 7. Time Sorting
+    result = [...result].sort((a, b) => {
+      if (timeSort === 'SCHEDULED_ASC') {
+        const dateA = a.followup_1_scheduled_at || a.followup_2_scheduled_at || a.first_message_scheduled_at;
+        const dateB = b.followup_1_scheduled_at || b.followup_2_scheduled_at || b.first_message_scheduled_at;
+        const timeA = dateA ? new Date(dateA).getTime() : Infinity;
+        const timeB = dateB ? new Date(dateB).getTime() : Infinity;
+        return timeA - timeB;
+      } else if (timeSort === 'SCHEDULED_DESC') {
+        const dateA = a.followup_1_scheduled_at || a.followup_2_scheduled_at || a.first_message_scheduled_at;
+        const dateB = b.followup_1_scheduled_at || b.followup_2_scheduled_at || b.first_message_scheduled_at;
+        const timeA = dateA ? new Date(dateA).getTime() : 0;
+        const timeB = dateB ? new Date(dateB).getTime() : 0;
+        return timeB - timeA;
+      } else if (timeSort === 'COMPLETED_DESC') {
+        const dateA = a.followup_2_sent_at || a.followup_1_sent_at || a.first_message_sent_at;
+        const dateB = b.followup_2_sent_at || b.followup_1_sent_at || b.first_message_sent_at;
+        const timeA = dateA ? new Date(dateA).getTime() : 0;
+        const timeB = dateB ? new Date(dateB).getTime() : 0;
+        return timeB - timeA;
+      } else if (timeSort === 'NAME_ASC') {
+        const nameA = (a.name || a.username || '').toLowerCase();
+        const nameB = (b.name || b.username || '').toLowerCase();
+        return nameA.localeCompare(nameB);
+      }
+      return 0;
+    });
+
+    return result;
+  }, [contacts, searchTerm, repliedFilter, statusFilter, stageFilter, runFilter, dateFilter, timeSort, nextInRunContactMap, runCompletedContactIds, currentRunId]);
 
   // Handle page resets on filter/search change
   React.useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, repliedFilter, statusFilter, pageSize]);
+  }, [searchTerm, repliedFilter, statusFilter, stageFilter, runFilter, dateFilter, timeSort, pageSize]);
 
   // Pagination calculation
   const totalContacts = contacts.length;
@@ -447,13 +620,78 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
         </div>
       </div>
 
-      {/* Filter and Search Bar */}
+      {/* Run Tracker Banner & Active Session Telemetry (Matching Queue) */}
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-gradient-to-r from-gray-950/90 via-indigo-950/20 to-gray-950/90 p-3.5 rounded-2xl border border-indigo-500/30 shadow-lg backdrop-blur-md">
+        <div className="flex items-center space-x-3">
+          <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center shrink-0">
+            <Zap className={`w-4 h-4 text-indigo-400 ${isWorkerRunning ? 'animate-bounce' : ''}`} />
+          </div>
+          <div>
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-bold text-white tracking-wide">
+                Automation Session Run:
+              </span>
+              <span className="font-mono text-xs px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold">
+                {currentRunId || 'Latest Session'}
+              </span>
+              {batchLimit && (
+                <span className="font-mono text-xs px-2 py-0.5 rounded-md bg-gray-800 text-gray-300 border border-gray-700">
+                  Batch: {batchSentCount} / {batchLimit} Sent
+                </span>
+              )}
+            </div>
+            <div className="text-[11px] text-gray-400 mt-0.5">
+              <span>{nextInRunCount} recipients staged next in this run</span>
+              {doneInRunCount > 0 && <span> • {doneInRunCount} completed during this active session</span>}
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Run Filter Toggles */}
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => setRunFilter(runFilter === 'NEXT_IN_RUN' ? 'ALL' : 'NEXT_IN_RUN')}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              runFilter === 'NEXT_IN_RUN'
+                ? 'bg-amber-500 text-gray-950 shadow-md shadow-amber-500/30 ring-2 ring-amber-400'
+                : 'bg-amber-500/10 text-amber-300 border border-amber-500/30 hover:bg-amber-500/20'
+            }`}
+          >
+            <Zap className="w-3.5 h-3.5" />
+            <span>Next in This Run ({nextInRunCount})</span>
+          </button>
+
+          <button
+            onClick={() => setRunFilter(runFilter === 'DONE_IN_RUN' ? 'ALL' : 'DONE_IN_RUN')}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              runFilter === 'DONE_IN_RUN'
+                ? 'bg-emerald-500 text-gray-950 shadow-md shadow-emerald-500/30 ring-2 ring-emerald-400'
+                : 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/20'
+            }`}
+          >
+            <CheckCheck className="w-3.5 h-3.5" />
+            <span>Done in This Run ({doneInRunCount})</span>
+          </button>
+
+          {runFilter !== 'ALL' && (
+            <button
+              onClick={() => setRunFilter('ALL')}
+              className="p-1 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800 transition cursor-pointer"
+              title="Clear Run filter"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Filter, Search, Date & Time Sorting Bar */}
       <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-[#08231a]/80 p-3 rounded-2xl border border-gray-800 backdrop-blur-sm">
-        <div className="relative flex-1 max-w-md">
+        <div className="relative flex-1 max-w-xs">
           <Search className="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Search by name, @handle, message, phone, or email..."
+            placeholder="Search name, @handle, copy, phone, email..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full bg-gray-950/90 border border-gray-800 rounded-xl pl-9 pr-8 py-2 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500 transition"
@@ -461,14 +699,60 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
           {searchTerm && (
             <button
               onClick={() => setSearchTerm('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 p-0.5"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 p-0.5 cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Date Filter (Harmonized with Queue) */}
+          <div className="flex items-center rounded-xl bg-gray-950/90 border border-gray-800 p-1">
+            <span className="text-[10px] text-gray-500 uppercase font-bold px-2 hidden sm:inline">Date:</span>
+            {[
+              { id: 'ALL', label: 'All Dates' },
+              { id: 'TODAY', label: 'Today' },
+              { id: 'YESTERDAY', label: 'Yesterday' },
+              { id: 'WEEK', label: '7 Days' },
+            ].map((opt) => (
+              <button
+                key={opt.id}
+                onClick={() => setDateFilter(opt.id as DateFilterMode)}
+                className={`px-2 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                  dateFilter === opt.id
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Stage Filter */}
+          <div className="flex items-center rounded-xl bg-gray-950/90 border border-gray-800 p-1">
+            <span className="text-[10px] text-gray-500 uppercase font-bold px-2 hidden sm:inline">Stage:</span>
+            {[
+              { id: 'ALL', label: 'All' },
+              { id: 'MESSAGE', label: '1st DM' },
+              { id: 'FOLLOW_UP_1', label: 'FU 1' },
+              { id: 'FOLLOW_UP_2', label: 'FU 2' },
+            ].map((opt) => (
+              <button
+                key={opt.id}
+                onClick={() => setStageFilter(opt.id as StageFilterMode)}
+                className={`px-2 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                  stageFilter === opt.id
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
           {/* Status Filter */}
           <div className="flex items-center rounded-xl bg-gray-950/90 border border-gray-800 p-1">
             <span className="text-[10px] text-gray-500 uppercase font-bold px-2 hidden sm:inline">Status:</span>
@@ -476,7 +760,7 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
               <button
                 key={mode}
                 onClick={() => setStatusFilter(mode)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize transition cursor-pointer ${
+                className={`px-2 py-1 rounded-lg text-xs font-semibold capitalize transition cursor-pointer ${
                   statusFilter === mode
                     ? 'bg-indigo-600 text-white shadow-sm'
                     : 'text-gray-400 hover:text-gray-200'
@@ -494,7 +778,7 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
               <button
                 key={mode}
                 onClick={() => setRepliedFilter(mode)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize transition cursor-pointer ${
+                className={`px-2 py-1 rounded-lg text-xs font-semibold capitalize transition cursor-pointer ${
                   repliedFilter === mode
                     ? mode === 'automated'
                       ? 'bg-amber-600 text-white shadow-sm'
@@ -502,9 +786,25 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                     : 'text-gray-400 hover:text-gray-200'
                 }`}
               >
-                {mode === 'all' ? 'All' : mode === 'replied' ? '💬 Human' : mode === 'automated' ? '🤖 Auto-Reply' : '⏳ No Reply'}
+                {mode === 'all' ? 'All' : mode === 'replied' ? '💬 Human' : mode === 'automated' ? '🤖 Auto' : '⏳ None'}
               </button>
             ))}
+          </div>
+
+          {/* Time & Name Sorting Dropdown */}
+          <div className="flex items-center rounded-xl bg-gray-950/90 border border-gray-800 px-2.5 py-1 space-x-1.5">
+            <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />
+            <select
+              value={timeSort}
+              onChange={(e) => setTimeSort(e.target.value as TimeSortMode)}
+              className="bg-transparent text-xs text-gray-300 font-semibold focus:outline-none cursor-pointer"
+            >
+              <option value="DEFAULT" className="bg-gray-900 text-white">Sort: Default</option>
+              <option value="SCHEDULED_ASC" className="bg-gray-900 text-white">Scheduled (Earliest First)</option>
+              <option value="SCHEDULED_DESC" className="bg-gray-900 text-white">Scheduled (Latest First)</option>
+              <option value="COMPLETED_DESC" className="bg-gray-900 text-white">Recently Sent First</option>
+              <option value="NAME_ASC" className="bg-gray-900 text-white">Name / Handle (A-Z)</option>
+            </select>
           </div>
 
           {/* Page Size Selector */}
@@ -518,6 +818,7 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
               <option value={10} className="bg-gray-900 text-white">10</option>
               <option value={25} className="bg-gray-900 text-white">25</option>
               <option value={50} className="bg-gray-900 text-white">50</option>
+              <option value={100} className="bg-gray-900 text-white">100</option>
             </select>
           </div>
         </div>
@@ -529,37 +830,37 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
           <table className="w-full text-left border-collapse min-w-[960px]">
             <thead>
               <tr className="border-b border-gray-800 bg-gray-950/90 text-[11px] font-bold uppercase tracking-wider">
-                <th className="py-3.5 px-4 text-gray-400 w-[20%]">
+                <th className="py-3.5 px-4 text-gray-400 w-[22%]">
                   <span className="flex items-center space-x-1.5">
                     <Users className="w-3.5 h-3.5 text-gray-400" />
-                    <span>Contact Profile</span>
+                    <span>Contact Profile & Run Tracking</span>
                   </span>
                 </th>
-                <th className="py-3.5 px-4 text-emerald-400/90 w-[23%]">
+                <th className="py-3.5 px-4 text-emerald-400/90 w-[22%]">
                   <span className="flex items-center space-x-1.5">
                     <Send className="w-3.5 h-3.5 text-emerald-400" />
                     <span>1. Initial Outreach</span>
                   </span>
                 </th>
-                <th className="py-3.5 px-4 text-indigo-400/90 w-[23%]">
+                <th className="py-3.5 px-4 text-indigo-400/90 w-[22%]">
                   <span className="flex items-center space-x-1.5">
                     <Clock className="w-3.5 h-3.5 text-indigo-400" />
                     <span>2. Follow-Up 1 (+3d)</span>
                   </span>
                 </th>
-                <th className="py-3.5 px-4 text-purple-400/90 w-[23%]">
+                <th className="py-3.5 px-4 text-purple-400/90 w-[22%]">
                   <span className="flex items-center space-x-1.5">
                     <Calendar className="w-3.5 h-3.5 text-purple-400" />
                     <span>3. Follow-Up 2 (+5d)</span>
                   </span>
                 </th>
-                <th className="py-3.5 px-3 text-rose-400/90 text-center w-[11%]">
+                <th className="py-3.5 px-3 text-rose-400/90 text-center w-[6%]">
                   <span className="flex items-center justify-center space-x-1">
                     <Sparkles className="w-3.5 h-3.5 text-rose-400" />
                     <span>Reply</span>
                   </span>
                 </th>
-                <th className="py-3.5 px-4 text-gray-400 text-right w-[10%]">Action</th>
+                <th className="py-3.5 px-4 text-gray-400 text-right w-[6%]">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800/70 text-xs">
@@ -575,9 +876,12 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                     .substring(0, 2)
                     .toUpperCase();
 
+                  const nextInfo = getContactNextInRun(c);
+                  const isDone = isContactDoneInRun(c);
+
                   return (
                     <tr key={c.id} className="hover:bg-gray-800/35 transition-colors group">
-                      {/* Name & Username & IG Link */}
+                      {/* Name & Username & IG Link & Run Tracking */}
                       <td className="py-4 px-4 align-top">
                         <div className="flex items-start space-x-3">
                           {/* Instagram Gradient Avatar Circle */}
@@ -594,15 +898,38 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                             <div className="text-gray-400 font-mono text-xs truncate">
                               @{c.username}
                             </div>
-                            <a
-                              href={c.instagram_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex items-center space-x-1 text-indigo-400 hover:text-indigo-300 font-medium text-[11px] mt-1.5 transition group-hover:underline"
-                            >
-                              <span>View Profile</span>
-                              <ArrowUpRight className="w-3 h-3 shrink-0" />
-                            </a>
+                            <div className="flex items-center space-x-2 mt-1">
+                              <a
+                                href={c.instagram_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center space-x-1 text-indigo-400 hover:text-indigo-300 font-medium text-[11px] transition group-hover:underline"
+                              >
+                                <span>View Profile</span>
+                                <ArrowUpRight className="w-3 h-3 shrink-0" />
+                              </a>
+                            </div>
+
+                            {/* Run Tracking Badges (Matching Queue) */}
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                              {nextInfo && (
+                                <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded font-mono text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-400/40 animate-pulse">
+                                  <Zap className="w-2.5 h-2.5" />
+                                  <span>#{nextInfo.position} Next in Run</span>
+                                </span>
+                              )}
+                              {isDone && (
+                                <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded font-mono text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/40">
+                                  <CheckCheck className="w-2.5 h-2.5" />
+                                  <span>Done in Run</span>
+                                </span>
+                              )}
+                              {c.last_run_id && !isDone && (
+                                <span className="font-mono text-[9px] text-gray-500" title={`Run ID: ${c.last_run_id}`}>
+                                  {c.last_run_id.replace(/^run_/, 'R#')}
+                                </span>
+                              )}
+                            </div>
 
                             {/* Status Badges for Auto Reply / DM Restricted */}
                             {c.replied_status === 'AUTOMATED_MESSAGE' && (
@@ -685,7 +1012,7 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
 
                       {/* 1st Message Tracking */}
                       <td className="py-4 px-4 align-top space-y-2">
-                        <div className="flex items-center space-x-1.5">
+                        <div className="flex items-center space-x-1.5 flex-wrap gap-1">
                           <span
                             className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                               is1stSent
@@ -700,6 +1027,13 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                             {is1stSent ? <CheckCircle2 className="w-3 h-3 text-emerald-400" /> : <Clock className="w-3 h-3 text-sky-400" />}
                             <span>{c.first_message_status || 'READY'}</span>
                           </span>
+
+                          {nextInfo && nextInfo.taskType === 'MESSAGE' && (
+                            <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/25 text-amber-300 border border-amber-400/50 animate-pulse">
+                              <Zap className="w-2.5 h-2.5" />
+                              <span>Next Up</span>
+                            </span>
+                          )}
                         </div>
 
                         {/* Sent Timestamp */}
@@ -726,7 +1060,7 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
 
                       {/* Follow-Up 1 Tracking */}
                       <td className="py-4 px-4 align-top space-y-2">
-                        <div className="flex items-center space-x-1.5">
+                        <div className="flex items-center space-x-1.5 flex-wrap gap-1">
                           <span
                             className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                               isFu1Sent
@@ -739,6 +1073,13 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                             {isFu1Sent ? <CheckCircle2 className="w-3 h-3 text-emerald-400" /> : <Calendar className="w-3 h-3 text-indigo-400" />}
                             <span>{c.followup_1_status || 'NOT_SCHEDULED'}</span>
                           </span>
+
+                          {nextInfo && nextInfo.taskType === 'FOLLOW_UP_1' && (
+                            <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/25 text-amber-300 border border-amber-400/50 animate-pulse">
+                              <Zap className="w-2.5 h-2.5" />
+                              <span>Next Up</span>
+                            </span>
+                          )}
                         </div>
 
                         {/* Follow-up 1 Timestamps */}
@@ -769,7 +1110,7 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
 
                       {/* Follow-Up 2 Tracking */}
                       <td className="py-4 px-4 align-top space-y-2">
-                        <div className="flex items-center space-x-1.5">
+                        <div className="flex items-center space-x-1.5 flex-wrap gap-1">
                           <span
                             className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                               isFu2Sent
@@ -782,6 +1123,13 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                             {isFu2Sent ? <CheckCircle2 className="w-3 h-3 text-emerald-400" /> : <Calendar className="w-3 h-3 text-purple-400" />}
                             <span>{c.followup_2_status || 'NOT_SCHEDULED'}</span>
                           </span>
+
+                          {nextInfo && nextInfo.taskType === 'FOLLOW_UP_2' && (
+                            <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/25 text-amber-300 border border-amber-400/50 animate-pulse">
+                              <Zap className="w-2.5 h-2.5" />
+                              <span>Next Up</span>
+                            </span>
+                          )}
                         </div>
 
                         {/* Follow-up 2 Timestamps */}

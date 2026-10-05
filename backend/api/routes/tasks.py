@@ -44,6 +44,7 @@ async def list_tasks(status: str = None, limit: int = 2000, offset: int = 0, db:
         "status": t.status,
         "sequence": t.sequence,
         "priority": t.priority,
+        "run_id": t.run_id,
         "attempt_count": t.attempt_count,
         "retry_count": t.attempt_count,
         "max_retries": 3,

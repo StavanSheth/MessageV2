@@ -61,6 +61,16 @@ async def init_db():
                 cols = [c["name"] for c in inspector.get_columns("contacts")]
                 if "is_archived" not in cols:
                     sync_conn.execute(text("ALTER TABLE contacts ADD COLUMN is_archived BOOLEAN DEFAULT 0"))
+                if "last_run_id" not in cols:
+                    sync_conn.execute(text("ALTER TABLE contacts ADD COLUMN last_run_id TEXT"))
+            if "tasks" in inspector.get_table_names():
+                cols = [c["name"] for c in inspector.get_columns("tasks")]
+                if "run_id" not in cols:
+                    sync_conn.execute(text("ALTER TABLE tasks ADD COLUMN run_id TEXT"))
+            if "outreach_history" in inspector.get_table_names():
+                cols = [c["name"] for c in inspector.get_columns("outreach_history")]
+                if "run_id" not in cols:
+                    sync_conn.execute(text("ALTER TABLE outreach_history ADD COLUMN run_id TEXT"))
         await conn.run_sync(_check_columns)
 
 def init_db_sync():
@@ -73,6 +83,16 @@ def init_db_sync():
             cols = [c["name"] for c in inspector.get_columns("contacts")]
             if "is_archived" not in cols:
                 conn.execute(text("ALTER TABLE contacts ADD COLUMN is_archived BOOLEAN DEFAULT 0"))
+            if "last_run_id" not in cols:
+                conn.execute(text("ALTER TABLE contacts ADD COLUMN last_run_id TEXT"))
+        if "tasks" in inspector.get_table_names():
+            cols = [c["name"] for c in inspector.get_columns("tasks")]
+            if "run_id" not in cols:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN run_id TEXT"))
+        if "outreach_history" in inspector.get_table_names():
+            cols = [c["name"] for c in inspector.get_columns("outreach_history")]
+            if "run_id" not in cols:
+                conn.execute(text("ALTER TABLE outreach_history ADD COLUMN run_id TEXT"))
 
 @asynccontextmanager
 async def get_async_db():

@@ -80,6 +80,7 @@ class Contact(Base):
     replied_at = Column(DateTime, nullable=True)
     notes = Column(Text, nullable=True)
     is_archived = Column(Boolean, default=False, index=True)
+    last_run_id = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -111,6 +112,7 @@ class Task(Base):
     source_sync_status = Column(String(32), nullable=True)
     source_sync_error = Column(Text, nullable=True)
     last_error_id = Column(String(64), nullable=True)
+    run_id = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -276,5 +278,6 @@ class OutreachHistory(Base):
     contact_name = Column(String(255), nullable=True)
     action = Column(String(64), nullable=False)  # MESSAGED, REPLIED, FOLLOW_UP_1, FOLLOW_UP_2, ARCHIVED
     details = Column(Text, nullable=True)
+    run_id = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, default=utcnow)
 

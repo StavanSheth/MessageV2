@@ -44,6 +44,10 @@ class InstagramWorker:
         self.batch_limit: Optional[int] = None
         self.batch_sent_count: int = 0
         self.delay_between_messages: int = 15
+        self.current_run_id: Optional[str] = None
+        self.run_completed_task_ids: List[str] = []
+        self.run_completed_contact_ids: List[str] = []
+        self.run_sent_records: List[Dict[str, Any]] = []
         self._paused = False
         self._stop_requested = False
         self.is_dispatching_dm = False
@@ -82,6 +86,10 @@ class InstagramWorker:
 
         self.batch_limit = batch_limit if (batch_limit is not None and batch_limit > 0) else None
         self.batch_sent_count = 0
+        self.current_run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        self.run_completed_task_ids = []
+        self.run_completed_contact_ids = []
+        self.run_sent_records = []
         if delay_seconds is not None and delay_seconds >= 5:
             self.delay_between_messages = delay_seconds
         self._stop_requested = False
@@ -179,6 +187,10 @@ class InstagramWorker:
             "current_instagram": self.current_instagram,
             "batch_limit": self.batch_limit,
             "batch_sent_count": self.batch_sent_count,
+            "current_run_id": self.current_run_id,
+            "run_completed_task_ids": self.run_completed_task_ids,
+            "run_completed_contact_ids": self.run_completed_contact_ids,
+            "run_sent_records": self.run_sent_records,
             "delay_seconds": self.delay_between_messages,
             "elapsed_seconds": (datetime.now(timezone.utc) - self._start_time).seconds if self._start_time else 0
         }
@@ -696,12 +708,29 @@ class InstagramWorker:
 
             if result == ResultCode.SUCCESS:
                 self.batch_sent_count += 1
+                if self.current_run_id:
+                    self.run_completed_task_ids.append(task_id)
+                    self.run_completed_contact_ids.append(contact.id)
+                    self.run_sent_records.append({
+                        "task_id": task_id,
+                        "contact_id": contact.id,
+                        "contact_name": contact.name,
+                        "username": contact.username,
+                        "action": task.type,
+                        "run_id": self.current_run_id,
+                        "completed_at": datetime.now(timezone.utc).isoformat()
+                    })
+
                 async with AsyncSessionLocal() as session:
                     msg_repo = MessageRepository(session)
                     await msg_repo.update_result(msg_id, "SENT", "SUCCESS")
                 async with AsyncSessionLocal() as session:
                     task_repo = TaskRepository(session)
-                    await task_repo.update_status(task_id, TaskStatus.COMPLETED)
+                    await task_repo.update_status(task_id, TaskStatus.COMPLETED, run_id=self.current_run_id)
+
+                    chk_c = await session.get(Contact, contact.id)
+                    if chk_c and self.current_run_id:
+                        chk_c.last_run_id = self.current_run_id
 
                     # Automatically schedule Follow-Up 1 or 2 if contact has not replied
                     if contact.replied_status not in ["YES", "AUTOMATED_MESSAGE"]:
@@ -752,7 +781,8 @@ class InstagramWorker:
                             instagram_url=contact.instagram_url,
                             contact_name=contact.name,
                             action="MESSAGED" if task.type == "MESSAGE" else task.type,
-                            details=f"Sent {task.type} successfully"
+                            details=f"Sent {task.type} successfully",
+                            run_id=self.current_run_id
                         )
                         session.add(history_entry)
                         await session.commit()

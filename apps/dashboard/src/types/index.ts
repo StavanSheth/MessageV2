@@ -75,6 +75,9 @@ export interface Contact {
   last_checked_reply_at?: string | null;
   reply_detected_at?: string | null;
   notes?: string;
+  last_run_id?: string | null;
+  task_id?: string | null;
+  first_message_scheduled_at?: string | null;
   // Outreach & Follow-up Tracking
   first_message_status?: string;
   first_message_sent_at?: string | null;
@@ -99,6 +102,7 @@ export interface Task {
   status: TaskStatus;
   sequence?: number;
   priority: number;
+  run_id?: string | null;
   retry_count: number;
   attempt_count?: number;
   max_retries: number;
@@ -151,7 +155,22 @@ export interface LiveAutomationState {
   instagram_login_status: string;
   current_task_id?: string;
   current_contact?: Contact;
+  current_contact_name?: string;
+  current_instagram?: string;
   current_url?: string;
+  current_run_id?: string | null;
+  run_completed_task_ids?: string[];
+  run_completed_contact_ids?: string[];
+  run_sent_records?: Array<{
+    task_id: string;
+    contact_id: string;
+    contact_name?: string;
+    username?: string;
+    action?: string;
+    completed_at?: string;
+  }>;
+  batch_limit?: number | null;
+  batch_sent_count?: number;
   latest_screenshot?: string;
   verification?: VerificationOutput;
   last_event?: string;
@@ -163,8 +182,6 @@ export interface LiveAutomationState {
     skipped: number;
   };
   task_counts?: Record<string, number>;
-  batch_limit?: number | null;
-  batch_sent_count?: number;
   delay_seconds?: number;
   is_paused?: boolean;
   is_running?: boolean;

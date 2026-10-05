@@ -264,8 +264,8 @@ export function App() {
             onNavigate={setCurrentTab}
           />
         )}
-        {currentTab === 'contacts' && <Contacts contacts={contacts} onRefresh={loadData} />}
-        {currentTab === 'queue' && <Queue tasks={tasks} onRefresh={loadData} />}
+        {currentTab === 'contacts' && <Contacts contacts={contacts} tasks={tasks} automationState={automationState} onRefresh={loadData} />}
+        {currentTab === 'queue' && <Queue tasks={tasks} automationState={automationState} onRefresh={loadData} />}
         {currentTab === 'sources' && (
           <Sources sources={sources} onImportSuccess={loadData} onNavigate={setCurrentTab} />
         )}

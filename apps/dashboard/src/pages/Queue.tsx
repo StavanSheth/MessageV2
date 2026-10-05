@@ -3,17 +3,21 @@ import {
   RefreshCw, XCircle, AlertCircle, CheckCircle2, Clock, 
   Search, ListOrdered, Calendar, Play, ChevronLeft, ChevronRight,
   ArrowUpRight, Users, MessageSquare, AlertTriangle, Send, Sparkles, X, Trash2,
-  CheckCheck, ShieldAlert
+  CheckCheck, ShieldAlert, Zap, Filter, ArrowUpDown
 } from 'lucide-react';
-import { Task, TaskStatus } from '../types';
+import { Task, TaskStatus, LiveAutomationState } from '../types';
 import { retryTask, cancelTask, retryAllTasks, deleteTask } from '../services/api';
 
 interface QueueProps {
   tasks: Task[];
+  automationState?: LiveAutomationState | null;
   onRefresh: () => void;
 }
 
 type QueueViewMode = 'UPCOMING' | 'DONE' | 'ISSUES' | 'ALL';
+type RunFilterMode = 'ALL' | 'NEXT_IN_RUN' | 'DONE_IN_RUN';
+type DateFilterMode = 'ALL' | 'TODAY' | 'YESTERDAY' | 'WEEK';
+type TimeSortMode = 'DEFAULT' | 'SCHEDULED_ASC' | 'SCHEDULED_DESC' | 'COMPLETED_DESC' | 'COMPLETED_ASC';
 
 function formatDisplayDate(dateStr?: string | null): string {
   if (!dateStr) return '';
@@ -34,8 +38,37 @@ function formatDisplayDate(dateStr?: string | null): string {
   }
 }
 
-export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
+function matchesDateFilter(dateStr: string | null | undefined, filter: DateFilterMode): boolean {
+  if (filter === 'ALL' || !dateStr) return filter === 'ALL';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return false;
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const targetTime = d.getTime();
+
+    if (filter === 'TODAY') {
+      return targetTime >= todayStart;
+    }
+    if (filter === 'YESTERDAY') {
+      const yesterdayStart = todayStart - 86400000;
+      return targetTime >= yesterdayStart && targetTime < todayStart;
+    }
+    if (filter === 'WEEK') {
+      const weekStart = todayStart - 7 * 86400000;
+      return targetTime >= weekStart;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh }) => {
   const [viewMode, setViewMode] = useState<QueueViewMode>('UPCOMING');
+  const [runFilter, setRunFilter] = useState<RunFilterMode>('ALL');
+  const [dateFilter, setDateFilter] = useState<DateFilterMode>('ALL');
+  const [timeSort, setTimeSort] = useState<TimeSortMode>('DEFAULT');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [filterStage, setFilterStage] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -46,6 +79,51 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
   // Pagination state
   const [pageSize, setPageSize] = useState<number>(25);
   const [currentPage, setCurrentPage] = useState<number>(1);
+
+  // Run Tracking Logic
+  const currentRunId = automationState?.current_run_id;
+  const batchLimit = automationState?.batch_limit;
+  const batchSentCount = automationState?.batch_sent_count ?? 0;
+  const isWorkerRunning = automationState?.status === 'RUNNING';
+
+  const runCompletedTaskIds = useMemo(() => {
+    return new Set(automationState?.run_completed_task_ids || []);
+  }, [automationState]);
+
+  // Determine remaining quota in the current/upcoming batch run
+  const activeBatchQuota = batchLimit ? batchLimit : 10;
+  const remainingInRunQuota = isWorkerRunning 
+    ? Math.max(0, activeBatchQuota - batchSentCount) 
+    : activeBatchQuota;
+
+  // Upcoming tasks sorted strictly in operational dispatch order
+  const upcomingSortedTasks = useMemo(() => {
+    return tasks
+      .filter((t) => ['READY', 'QUEUED', 'RUNNING'].includes(t.status))
+      .sort((a, b) => {
+        if (a.status === 'RUNNING' && b.status !== 'RUNNING') return -1;
+        if (b.status === 'RUNNING' && a.status !== 'RUNNING') return 1;
+        const pDiff = (b.priority ?? 1) - (a.priority ?? 1);
+        if (pDiff !== 0) return pDiff;
+        const timeA = a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0;
+        const timeB = b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0;
+        return timeA - timeB;
+      });
+  }, [tasks]);
+
+  // Set of task IDs that are "Next in this run"
+  const nextInRunTaskIds = useMemo(() => {
+    return new Set(upcomingSortedTasks.slice(0, remainingInRunQuota).map((t) => t.id));
+  }, [upcomingSortedTasks, remainingInRunQuota]);
+
+  // Map of task ID to run position
+  const nextInRunPositionMap = useMemo(() => {
+    const map = new Map<string, number>();
+    upcomingSortedTasks.slice(0, remainingInRunQuota).forEach((t, i) => {
+      map.set(t.id, i + 1);
+    });
+    return map;
+  }, [upcomingSortedTasks, remainingInRunQuota]);
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
@@ -116,6 +194,12 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
   const completedCount = useMemo(() => tasks.filter((t) => t.status === 'COMPLETED').length, [tasks]);
   const issueCount = useMemo(() => tasks.filter((t) => issueStatuses.includes(t.status)).length, [tasks]);
 
+  const doneInRunCount = useMemo(() => {
+    return tasks.filter((t) => runCompletedTaskIds.has(t.id) || (currentRunId && t.run_id === currentRunId)).length;
+  }, [tasks, runCompletedTaskIds, currentRunId]);
+
+  const nextInRunCount = useMemo(() => nextInRunTaskIds.size, [nextInRunTaskIds]);
+
   // Filtered and Sorted Tasks
   const filteredAndSortedTasks = useMemo(() => {
     let result = tasks.filter((t) => {
@@ -136,7 +220,21 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
       if (filterStage === 'FOLLOW_UP_1' && t.type !== 'FOLLOW_UP_1') return false;
       if (filterStage === 'FOLLOW_UP_2' && t.type !== 'FOLLOW_UP_2') return false;
 
-      // 3. View Mode filter
+      // 3. Run Filter
+      if (runFilter === 'NEXT_IN_RUN') {
+        if (!nextInRunTaskIds.has(t.id)) return false;
+      } else if (runFilter === 'DONE_IN_RUN') {
+        const isDoneInRun = runCompletedTaskIds.has(t.id) || (currentRunId && t.run_id === currentRunId);
+        if (!isDoneInRun) return false;
+      }
+
+      // 4. Date filter
+      if (dateFilter !== 'ALL') {
+        const relevantDate = t.status === 'COMPLETED' ? (t.completed_at || t.updated_at) : (t.scheduled_at || t.created_at);
+        if (!matchesDateFilter(relevantDate, dateFilter)) return false;
+      }
+
+      // 5. View Mode filter
       if (viewMode === 'UPCOMING') {
         return upcomingStatuses.includes(t.status);
       } else if (viewMode === 'DONE') {
@@ -154,39 +252,46 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
       }
     });
 
-    // 4. Mode-specific intelligent sorting
+    // 6. Mode-specific & custom time sorting
     result = [...result].sort((a, b) => {
+      if (timeSort === 'SCHEDULED_ASC') {
+        const timeA = a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0;
+        const timeB = b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0;
+        return timeA - timeB;
+      } else if (timeSort === 'SCHEDULED_DESC') {
+        const timeA = a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0;
+        const timeB = b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0;
+        return timeB - timeA;
+      } else if (timeSort === 'COMPLETED_DESC') {
+        const timeA = a.completed_at ? new Date(a.completed_at).getTime() : 0;
+        const timeB = b.completed_at ? new Date(b.completed_at).getTime() : 0;
+        return timeB - timeA;
+      } else if (timeSort === 'COMPLETED_ASC') {
+        const timeA = a.completed_at ? new Date(a.completed_at).getTime() : 0;
+        const timeB = b.completed_at ? new Date(b.completed_at).getTime() : 0;
+        return timeA - timeB;
+      }
+
+      // Default sorting per view mode
       if (viewMode === 'UPCOMING') {
-        // Running tasks always on top
         if (a.status === 'RUNNING' && b.status !== 'RUNNING') return -1;
         if (b.status === 'RUNNING' && a.status !== 'RUNNING') return 1;
-
-        // Higher priority first
         const pA = a.priority ?? 1;
         const pB = b.priority ?? 1;
         if (pA !== pB) return pB - pA;
-
-        // Earliest scheduled_at first
         const timeA = a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0;
         const timeB = b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0;
         if (timeA && timeB && timeA !== timeB) return timeA - timeB;
-
-        // Fallback: created_at asc
-        const crA = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const crB = b.created_at ? new Date(b.created_at).getTime() : 0;
-        return crA - crB;
+        return 0;
       } else if (viewMode === 'DONE') {
-        // Most recently completed first
-        const compA = a.completed_at ? new Date(a.completed_at).getTime() : (a.updated_at ? new Date(a.updated_at).getTime() : 0);
-        const compB = b.completed_at ? new Date(b.completed_at).getTime() : (b.updated_at ? new Date(b.updated_at).getTime() : 0);
+        const compA = a.completed_at ? new Date(a.completed_at).getTime() : 0;
+        const compB = b.completed_at ? new Date(b.completed_at).getTime() : 0;
         return compB - compA;
       } else if (viewMode === 'ISSUES') {
-        // Most recently updated issues first
         const upA = a.updated_at ? new Date(a.updated_at).getTime() : 0;
         const upB = b.updated_at ? new Date(b.updated_at).getTime() : 0;
         return upB - upA;
       } else {
-        // ALL: Active/Running first, then Ready, then Issues, then Completed, then Cancelled
         const getRank = (st: string) => {
           if (st === 'RUNNING') return 0;
           if (st === 'READY' || st === 'QUEUED') return 1;
@@ -204,12 +309,12 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
     });
 
     return result;
-  }, [tasks, viewMode, searchTerm, filterStage, filterStatus]);
+  }, [tasks, viewMode, searchTerm, filterStage, filterStatus, runFilter, dateFilter, timeSort, nextInRunTaskIds, runCompletedTaskIds, currentRunId]);
 
   // Reset pagination when mode or filters change
   React.useEffect(() => {
     setCurrentPage(1);
-  }, [viewMode, filterStage, filterStatus, searchTerm, pageSize]);
+  }, [viewMode, filterStage, filterStatus, runFilter, dateFilter, timeSort, searchTerm, pageSize]);
 
   // Pagination calculation
   const totalFiltered = filteredAndSortedTasks.length;
@@ -323,7 +428,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
         {/* 1. Upcoming in Queue */}
         <div 
-          onClick={() => { setViewMode('UPCOMING'); }}
+          onClick={() => { setViewMode('UPCOMING'); setRunFilter('ALL'); }}
           className={`border rounded-xl p-3.5 flex items-center justify-between shadow-sm transition cursor-pointer ${
             viewMode === 'UPCOMING' 
               ? 'bg-sky-950/50 border-sky-400 ring-2 ring-sky-400/40 shadow-lg shadow-sky-950/50' 
@@ -348,7 +453,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
 
         {/* 2. Done / Sent Already */}
         <div 
-          onClick={() => { setViewMode('DONE'); }}
+          onClick={() => { setViewMode('DONE'); setRunFilter('ALL'); }}
           className={`border rounded-xl p-3.5 flex items-center justify-between shadow-sm transition cursor-pointer ${
             viewMode === 'DONE' 
               ? 'bg-emerald-950/50 border-emerald-400 ring-2 ring-emerald-400/40 shadow-lg shadow-emerald-950/50' 
@@ -367,7 +472,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
 
         {/* 3. Needs Attention / Issues */}
         <div 
-          onClick={() => { setViewMode('ISSUES'); }}
+          onClick={() => { setViewMode('ISSUES'); setRunFilter('ALL'); }}
           className={`border rounded-xl p-3.5 flex items-center justify-between shadow-sm transition cursor-pointer ${
             viewMode === 'ISSUES' 
               ? 'bg-amber-950/50 border-amber-400 ring-2 ring-amber-400/40 shadow-lg shadow-amber-950/50' 
@@ -388,7 +493,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
 
         {/* 4. Total Pipeline */}
         <div 
-          onClick={() => { setViewMode('ALL'); setFilterStatus('ALL'); setFilterStage('ALL'); }}
+          onClick={() => { setViewMode('ALL'); setFilterStatus('ALL'); setFilterStage('ALL'); setRunFilter('ALL'); }}
           className={`border rounded-xl p-3.5 flex items-center justify-between shadow-sm transition cursor-pointer ${
             viewMode === 'ALL' 
               ? 'bg-indigo-950/50 border-indigo-400 ring-2 ring-indigo-400/40 shadow-lg shadow-indigo-950/50' 
@@ -406,12 +511,77 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
         </div>
       </div>
 
+      {/* Run Tracker Banner & Active Session Telemetry */}
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-gradient-to-r from-gray-950/90 via-indigo-950/20 to-gray-950/90 p-3.5 rounded-2xl border border-indigo-500/30 shadow-lg backdrop-blur-md">
+        <div className="flex items-center space-x-3">
+          <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center shrink-0">
+            <Zap className={`w-4 h-4 text-indigo-400 ${isWorkerRunning ? 'animate-bounce' : ''}`} />
+          </div>
+          <div>
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-bold text-white tracking-wide">
+                Automation Session Run:
+              </span>
+              <span className="font-mono text-xs px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold">
+                {currentRunId || 'Latest Session'}
+              </span>
+              {batchLimit && (
+                <span className="font-mono text-xs px-2 py-0.5 rounded-md bg-gray-800 text-gray-300 border border-gray-700">
+                  Batch: {batchSentCount} / {batchLimit} Sent
+                </span>
+              )}
+            </div>
+            <div className="text-[11px] text-gray-400 mt-0.5">
+              <span>{nextInRunCount} leads assigned to next dispatch batch</span>
+              {doneInRunCount > 0 && <span> • {doneInRunCount} sent during this active run</span>}
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Run Filter Toggles */}
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => setRunFilter(runFilter === 'NEXT_IN_RUN' ? 'ALL' : 'NEXT_IN_RUN')}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              runFilter === 'NEXT_IN_RUN'
+                ? 'bg-amber-500 text-gray-950 shadow-md shadow-amber-500/30 ring-2 ring-amber-400'
+                : 'bg-amber-500/10 text-amber-300 border border-amber-500/30 hover:bg-amber-500/20'
+            }`}
+          >
+            <Zap className="w-3.5 h-3.5" />
+            <span>Next in This Run ({nextInRunCount})</span>
+          </button>
+
+          <button
+            onClick={() => setRunFilter(runFilter === 'DONE_IN_RUN' ? 'ALL' : 'DONE_IN_RUN')}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              runFilter === 'DONE_IN_RUN'
+                ? 'bg-emerald-500 text-gray-950 shadow-md shadow-emerald-500/30 ring-2 ring-emerald-400'
+                : 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/20'
+            }`}
+          >
+            <CheckCheck className="w-3.5 h-3.5" />
+            <span>Done in This Run ({doneInRunCount})</span>
+          </button>
+
+          {runFilter !== 'ALL' && (
+            <button
+              onClick={() => setRunFilter('ALL')}
+              className="p-1 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800 transition cursor-pointer"
+              title="Clear Run filter"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Primary Category Segmented Switcher */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-950/80 p-2 rounded-2xl border border-gray-800/90 shadow-lg backdrop-blur-md">
         <div className="flex flex-wrap items-center gap-1.5">
           {/* Upcoming Tab */}
           <button
-            onClick={() => setViewMode('UPCOMING')}
+            onClick={() => { setViewMode('UPCOMING'); setRunFilter('ALL'); }}
             className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
               viewMode === 'UPCOMING'
                 ? 'bg-gradient-to-r from-sky-600 to-indigo-600 text-white shadow-md shadow-sky-500/25 scale-[1.02]'
@@ -429,7 +599,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
 
           {/* Done Tab */}
           <button
-            onClick={() => setViewMode('DONE')}
+            onClick={() => { setViewMode('DONE'); setRunFilter('ALL'); }}
             className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
               viewMode === 'DONE'
                 ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-500/25 scale-[1.02]'
@@ -447,7 +617,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
 
           {/* Issues Tab */}
           <button
-            onClick={() => setViewMode('ISSUES')}
+            onClick={() => { setViewMode('ISSUES'); setRunFilter('ALL'); }}
             className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
               viewMode === 'ISSUES'
                 ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-md shadow-amber-500/25 scale-[1.02]'
@@ -467,7 +637,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
 
           {/* All Tab */}
           <button
-            onClick={() => setViewMode('ALL')}
+            onClick={() => { setViewMode('ALL'); setRunFilter('ALL'); }}
             className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
               viewMode === 'ALL'
                 ? 'bg-gray-800 text-white shadow-md scale-[1.02]'
@@ -532,6 +702,29 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
+          {/* Date Filter */}
+          <div className="flex items-center rounded-xl bg-gray-950/90 border border-gray-800 p-1">
+            <span className="text-[10px] text-gray-500 uppercase font-bold px-2 hidden sm:inline">Date:</span>
+            {[
+              { id: 'ALL', label: 'All Dates' },
+              { id: 'TODAY', label: 'Today' },
+              { id: 'YESTERDAY', label: 'Yesterday' },
+              { id: 'WEEK', label: '7 Days' },
+            ].map((opt) => (
+              <button
+                key={opt.id}
+                onClick={() => setDateFilter(opt.id as DateFilterMode)}
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                  dateFilter === opt.id
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
           {/* Stage Filter */}
           <div className="flex items-center rounded-xl bg-gray-950/90 border border-gray-800 p-1">
             <span className="text-[10px] text-gray-500 uppercase font-bold px-2 hidden sm:inline">Stage:</span>
@@ -582,6 +775,22 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
             </div>
           )}
 
+          {/* Time Sort Selector */}
+          <div className="flex items-center rounded-xl bg-gray-950/90 border border-gray-800 px-2.5 py-1 space-x-1.5">
+            <ArrowUpDown className="w-3 h-3 text-gray-500" />
+            <select
+              value={timeSort}
+              onChange={(e) => setTimeSort(e.target.value as TimeSortMode)}
+              className="bg-transparent text-xs text-gray-300 font-semibold focus:outline-none cursor-pointer"
+            >
+              <option value="DEFAULT" className="bg-gray-900 text-white">Default Dispatch Order</option>
+              <option value="SCHEDULED_ASC" className="bg-gray-900 text-white">Scheduled (Earliest First)</option>
+              <option value="SCHEDULED_DESC" className="bg-gray-900 text-white">Scheduled (Latest First)</option>
+              <option value="COMPLETED_DESC" className="bg-gray-900 text-white">Delivered (Recent First)</option>
+              <option value="COMPLETED_ASC" className="bg-gray-900 text-white">Delivered (Oldest First)</option>
+            </select>
+          </div>
+
           {/* Page Size Selector */}
           <div className="flex items-center rounded-xl bg-gray-950/90 border border-gray-800 px-2.5 py-1 space-x-1.5">
             <span className="text-[10px] text-gray-500 font-bold uppercase">Rows:</span>
@@ -605,13 +814,13 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
           <table className="w-full text-left border-collapse min-w-[960px]">
             <thead>
               <tr className="border-b border-gray-800 bg-gray-950/90 text-[11px] font-bold uppercase tracking-wider text-gray-400">
-                <th className="py-3.5 px-4 w-[6%] text-center">
-                  {viewMode === 'UPCOMING' ? 'Queue #' : '#'}
+                <th className="py-3.5 px-4 w-[8%] text-center">
+                  <span>Queue #</span>
                 </th>
-                <th className="py-3.5 px-4 w-[22%]">
+                <th className="py-3.5 px-4 w-[24%]">
                   <span className="flex items-center space-x-1.5">
                     <Users className="w-3.5 h-3.5 text-gray-400" />
-                    <span>Recipient & Task ID</span>
+                    <span>Contact Profile & Run Tracking</span>
                   </span>
                 </th>
                 <th className="py-3.5 px-4 w-[16%]">
@@ -620,13 +829,13 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
                     <span>Outreach Stage</span>
                   </span>
                 </th>
-                <th className="py-3.5 px-4 w-[24%]">
+                <th className="py-3.5 px-4 w-[22%]">
                   <span className="flex items-center space-x-1.5">
                     <MessageSquare className="w-3.5 h-3.5 text-sky-400" />
                     <span>{viewMode === 'DONE' ? 'Sent Message Copy' : 'Queued Message Body'}</span>
                   </span>
                 </th>
-                <th className="py-3.5 px-4 w-[14%]">
+                <th className="py-3.5 px-4 w-[12%]">
                   {viewMode === 'UPCOMING' ? 'Priority & Status' : 'Status & Retries'}
                 </th>
                 <th className="py-3.5 px-4 w-[12%]">
@@ -648,6 +857,11 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
                   const canCancel = t.status !== 'COMPLETED' && t.status !== 'CANCELLED';
                   const overallRank = (currentPage - 1) * pageSize + idx + 1;
 
+                  // Run tracking checks
+                  const isNextInRun = nextInRunTaskIds.has(t.id);
+                  const runPosition = nextInRunPositionMap.get(t.id);
+                  const isDoneInRun = runCompletedTaskIds.has(t.id) || (currentRunId && t.run_id === currentRunId);
+
                   return (
                     <tr key={t.id} className="hover:bg-gray-800/35 transition-colors group">
                       {/* Queue Position */}
@@ -656,14 +870,15 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
                           <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-indigo-500/20 text-indigo-300 font-mono text-xs font-black border border-indigo-400 animate-pulse">
                             <Play className="w-3 h-3 fill-indigo-400" />
                           </span>
+                        ) : isNextInRun ? (
+                          <div className="flex flex-col items-center">
+                            <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-md font-mono text-[10px] font-black bg-amber-500/25 text-amber-300 border border-amber-400/60 shadow-sm shadow-amber-500/10">
+                              #{runPosition} Next
+                            </span>
+                            <span className="text-[9px] text-amber-400/80 font-semibold mt-0.5">This Run</span>
+                          </div>
                         ) : viewMode === 'UPCOMING' ? (
-                          <span className={`inline-flex items-center justify-center px-2 py-1 rounded-lg font-mono text-[10px] font-bold ${
-                            overallRank === 1 
-                              ? 'bg-amber-500/20 text-amber-300 border border-amber-400/50' 
-                              : overallRank <= 5 
-                              ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40' 
-                              : 'bg-gray-900 text-gray-400 border border-gray-800'
-                          }`}>
+                          <span className="inline-flex items-center justify-center px-2 py-1 rounded-lg font-mono text-[10px] font-bold bg-gray-900 text-gray-400 border border-gray-800">
                             #{overallRank}
                           </span>
                         ) : (
@@ -676,7 +891,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
                       {/* Contact & Task ID */}
                       <td className="py-4 px-4 align-top">
                         <div className="flex items-start space-x-3">
-                          {/* Instagram Gradient Avatar Circle */}
+                          {/* Instagram Gradient Avatar Circle (matching Contacts) */}
                           <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-amber-500 via-rose-500 to-purple-600 p-[1.5px] shrink-0 shadow-sm">
                             <div className="w-full h-full rounded-full bg-gray-950 flex items-center justify-center text-[11px] font-black text-white">
                               {initials}
@@ -693,17 +908,38 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
                               <span className="text-indigo-400 font-semibold">#{t.id.slice(0, 8)}</span>
                             </div>
 
-                            {t.contact_instagram && (
-                              <a
-                                href={t.contact_instagram}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center space-x-1 text-indigo-400 hover:text-indigo-300 font-medium text-[11px] mt-1 transition group-hover:underline"
-                              >
-                                <span>View Profile</span>
-                                <ArrowUpRight className="w-3 h-3 shrink-0" />
-                              </a>
-                            )}
+                            <div className="flex items-center space-x-2 mt-1">
+                              {t.contact_instagram && (
+                                <a
+                                  href={t.contact_instagram}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-center space-x-1 text-indigo-400 hover:text-indigo-300 font-medium text-[11px] transition group-hover:underline"
+                                >
+                                  <span>View Profile</span>
+                                  <ArrowUpRight className="w-3 h-3 shrink-0" />
+                                </a>
+                              )}
+
+                              {/* Run Tracking Tag */}
+                              {isNextInRun && (
+                                <span className="inline-flex items-center space-x-1 px-1.5 py-0.2 rounded font-mono text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-400/40 animate-pulse">
+                                  <Zap className="w-2.5 h-2.5" />
+                                  <span>Next in Run</span>
+                                </span>
+                              )}
+                              {isDoneInRun && (
+                                <span className="inline-flex items-center space-x-1 px-1.5 py-0.2 rounded font-mono text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/40">
+                                  <CheckCheck className="w-2.5 h-2.5" />
+                                  <span>Done in Run</span>
+                                </span>
+                              )}
+                              {t.run_id && !isDoneInRun && (
+                                <span className="font-mono text-[9px] text-gray-500">
+                                  {t.run_id.replace(/^run_/, 'R#')}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -829,14 +1065,20 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
                     <div className="max-w-sm mx-auto space-y-2">
                       <ListOrdered className="w-8 h-8 text-gray-600 mx-auto" />
                       <div className="font-bold text-white text-sm">
-                        {viewMode === 'UPCOMING' ? 'No Upcoming Tasks in Queue' : viewMode === 'DONE' ? 'No Completed Tasks Yet' : 'No Tasks Found'}
+                        {runFilter === 'NEXT_IN_RUN'
+                          ? 'No Upcoming Tasks in Current Run'
+                          : runFilter === 'DONE_IN_RUN'
+                          ? 'No Tasks Completed in Current Run Yet'
+                          : viewMode === 'UPCOMING'
+                          ? 'No Upcoming Tasks in Queue'
+                          : viewMode === 'DONE'
+                          ? 'No Completed Tasks Yet'
+                          : 'No Tasks Found'}
                       </div>
                       <p className="text-xs text-gray-500">
-                        {viewMode === 'UPCOMING'
-                          ? 'All queued outreach has been dispatched or there are no tasks in READY status.'
-                          : viewMode === 'DONE'
-                          ? 'Dispatched messages will show here with their timestamps and delivery status.'
-                          : 'No tasks match the active filters. Adjust your search or tab selection.'}
+                        {runFilter === 'NEXT_IN_RUN'
+                          ? 'All leads allocated for this run have been executed or queue is empty.'
+                          : 'Adjust your run filters, date range, or search above.'}
                       </p>
                     </div>
                   </td>

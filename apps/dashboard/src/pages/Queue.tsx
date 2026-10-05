@@ -3,10 +3,11 @@ import {
   RefreshCw, XCircle, AlertCircle, CheckCircle2, Clock, 
   Search, ListOrdered, Calendar, Play, ChevronLeft, ChevronRight,
   ArrowUpRight, Users, MessageSquare, AlertTriangle, Send, Sparkles, X, Trash2,
-  CheckCheck, ShieldAlert, Zap, Filter, ArrowUpDown
+  CheckCheck, ShieldAlert, Zap, Filter, ArrowUpDown,
+  ThumbsUp, ThumbsDown, CheckSquare, Square
 } from 'lucide-react';
 import { Task, TaskStatus, LiveAutomationState } from '../types';
-import { retryTask, cancelTask, retryAllTasks, deleteTask } from '../services/api';
+import { retryTask, cancelTask, retryAllTasks, deleteTask, confirmFollowups, cancelFollowups } from '../services/api';
 
 interface QueueProps {
   tasks: Task[];
@@ -18,6 +19,120 @@ type QueueViewMode = 'UPCOMING' | 'DONE' | 'ISSUES' | 'ALL';
 type RunFilterMode = 'ALL' | 'NEXT_IN_RUN' | 'DONE_IN_RUN';
 type DateFilterMode = 'ALL' | 'TODAY' | 'YESTERDAY' | 'WEEK';
 type TimeSortMode = 'DEFAULT' | 'SCHEDULED_ASC' | 'SCHEDULED_DESC' | 'COMPLETED_DESC' | 'COMPLETED_ASC';
+
+export interface ErrorCategoryInfo {
+  tag: string;
+  label: string;
+  badgeClass: string;
+  description: string;
+}
+
+export function parseTaskError(task: Task): ErrorCategoryInfo | null {
+  const rawCat = (task.error_category || task.error_code || '').toUpperCase();
+  const rawMsg = (task.error_message || task.last_error || task.manual_review_reason || '');
+  
+  if (!rawCat && !rawMsg && task.status !== 'MANUAL_REVIEW' && task.status !== 'RETRY_WAIT') {
+    return null;
+  }
+
+  // Check prefix [TAG] in message
+  const tagMatch = rawMsg.match(/^\[([A-Z0-9_]+)\]\s*(.*)/i);
+  const matchedTag = tagMatch ? tagMatch[1].toUpperCase() : rawCat;
+  const cleanMsg = tagMatch ? tagMatch[2].trim() : rawMsg.trim();
+
+  if (matchedTag.includes('PAGE_NOT_FOUND') || cleanMsg.toLowerCase().includes('page not found') || cleanMsg.toLowerCase().includes('404')) {
+    return {
+      tag: 'PAGE_NOT_FOUND',
+      label: 'Page Not Found (404)',
+      badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+      description: cleanMsg || 'Target Instagram profile handle does not exist or was renamed/deleted.'
+    };
+  }
+
+  if (
+    matchedTag.includes('DM_RESTRICTED') ||
+    cleanMsg.toLowerCase().includes('does not accept') ||
+    cleanMsg.toLowerCase().includes('message button not available') ||
+    cleanMsg.toLowerCase().includes('no message button')
+  ) {
+    return {
+      tag: 'DM_RESTRICTED',
+      label: 'DMs Restricted / Closed',
+      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+      description: cleanMsg || 'Account has closed direct messages to non-followers or restricts receiving messages.'
+    };
+  }
+
+  if (
+    matchedTag.includes('REPLY_RECEIVED') ||
+    cleanMsg.toLowerCase().includes('reply received') ||
+    cleanMsg.toLowerCase().includes('already replied') ||
+    task.contact?.has_replied
+  ) {
+    return {
+      tag: 'REPLY_RECEIVED',
+      label: 'Replied by Lead',
+      badgeClass: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+      description: cleanMsg || 'Contact replied on Instagram. Pending manual review before continuing follow-up.'
+    };
+  }
+
+  if (matchedTag.includes('RATE_LIMITED') || cleanMsg.toLowerCase().includes('rate limit') || cleanMsg.toLowerCase().includes('action blocked')) {
+    return {
+      tag: 'RATE_LIMITED',
+      label: 'Rate Limited / Cooling Down',
+      badgeClass: 'bg-orange-500/20 text-orange-300 border-orange-500/40',
+      description: cleanMsg || 'Instagram rate limit threshold reached. Automatic backoff delay in effect.'
+    };
+  }
+
+  if (matchedTag.includes('PROFILE_MISMATCH') || cleanMsg.toLowerCase().includes('mismatch')) {
+    return {
+      tag: 'PROFILE_MISMATCH',
+      label: 'Profile Mismatch',
+      badgeClass: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40',
+      description: cleanMsg || 'Extracted profile details do not match expected contact username/handle.'
+    };
+  }
+
+  if (matchedTag.includes('COMPOSER_UNAVAILABLE') || cleanMsg.toLowerCase().includes('composer') || cleanMsg.toLowerCase().includes('typing')) {
+    return {
+      tag: 'COMPOSER_UNAVAILABLE',
+      label: 'DM Composer Unavailable',
+      badgeClass: 'bg-red-500/20 text-red-300 border-red-500/40',
+      description: cleanMsg || 'Instagram message input field could not be focused or typed into.'
+    };
+  }
+
+  if (matchedTag.includes('CHALLENGE_REQUIRED') || cleanMsg.toLowerCase().includes('challenge') || cleanMsg.toLowerCase().includes('checkpoint')) {
+    return {
+      tag: 'CHALLENGE_REQUIRED',
+      label: 'Security Checkpoint',
+      badgeClass: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+      description: cleanMsg || 'Instagram requested a security checkpoint or captcha challenge.'
+    };
+  }
+
+  if (matchedTag.includes('AUTH') || cleanMsg.toLowerCase().includes('login') || cleanMsg.toLowerCase().includes('not logged in')) {
+    return {
+      tag: 'AUTHENTICATION_REQUIRED',
+      label: 'Login Required',
+      badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+      description: cleanMsg || 'Instagram session expired or not authenticated in Chrome.'
+    };
+  }
+
+  if (cleanMsg) {
+    return {
+      tag: matchedTag || 'EXECUTION_ISSUE',
+      label: matchedTag ? matchedTag.replace(/_/g, ' ') : 'Execution Issue',
+      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+      description: cleanMsg
+    };
+  }
+
+  return null;
+}
 
 function formatDisplayDate(dateStr?: string | null): string {
   if (!dateStr) return '';
@@ -71,6 +186,9 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
   const [timeSort, setTimeSort] = useState<TimeSortMode>('DEFAULT');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [filterStage, setFilterStage] = useState<string>('ALL');
+  const [issueCategoryFilter, setIssueCategoryFilter] = useState<string>('ALL');
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
+  const [isConfirmingFollowups, setIsConfirmingFollowups] = useState(false);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [isRetryingAll, setIsRetryingAll] = useState(false);
@@ -184,6 +302,62 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
     }
   };
 
+  const handleToggleSelect = (taskId: string) => {
+    setSelectedTaskIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) {
+        next.delete(taskId);
+      } else {
+        next.add(taskId);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAll = (idsOnPage: string[]) => {
+    if (idsOnPage.length === 0) return;
+    const allSelected = idsOnPage.every((id) => selectedTaskIds.has(id));
+    setSelectedTaskIds((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        idsOnPage.forEach((id) => next.delete(id));
+      } else {
+        idsOnPage.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const handleConfirmFollowups = async (taskIds?: string[]) => {
+    try {
+      setIsConfirmingFollowups(true);
+      const res = await confirmFollowups(taskIds);
+      setSelectedTaskIds(new Set());
+      await onRefresh();
+      alert(`Successfully confirmed ${res.updated_count} follow-up task(s) for dispatch.`);
+    } catch (e: any) {
+      alert(`Failed to confirm follow-ups: ${e.message}`);
+    } finally {
+      setIsConfirmingFollowups(false);
+    }
+  };
+
+  const handleCancelFollowups = async (taskIds?: string[]) => {
+    const countDesc = taskIds ? `${taskIds.length}` : 'all eligible';
+    if (!window.confirm(`Are you sure you want to cancel ${countDesc} follow-up task(s)?`)) return;
+    try {
+      setIsConfirmingFollowups(true);
+      const res = await cancelFollowups(taskIds);
+      setSelectedTaskIds(new Set());
+      await onRefresh();
+      alert(`Successfully cancelled ${res.cancelled_count} follow-up task(s).`);
+    } catch (e: any) {
+      alert(`Failed to cancel follow-ups: ${e.message}`);
+    } finally {
+      setIsConfirmingFollowups(false);
+    }
+  };
+
   // Status and view metrics
   const issueStatuses = ['RETRY_WAIT', 'MANUAL_REVIEW', 'FAILED', 'INTERRUPTED', 'SKIPPED'];
   const upcomingStatuses = ['READY', 'QUEUED', 'RUNNING'];
@@ -240,7 +414,12 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
       } else if (viewMode === 'DONE') {
         return t.status === 'COMPLETED';
       } else if (viewMode === 'ISSUES') {
-        return issueStatuses.includes(t.status);
+        if (!issueStatuses.includes(t.status)) return false;
+        if (issueCategoryFilter !== 'ALL') {
+          const err = parseTaskError(t);
+          if (!err || err.tag !== issueCategoryFilter) return false;
+        }
+        return true;
       } else {
         // 'ALL' Mode - allow sub-status filter
         if (filterStatus === 'ISSUES') {
@@ -748,6 +927,32 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
             ))}
           </div>
 
+          {/* Issue Category Filter for ISSUES mode */}
+          {viewMode === 'ISSUES' && (
+            <div className="flex items-center rounded-xl bg-gray-950/90 border border-amber-500/30 p-1">
+              <span className="text-[10px] text-amber-400 uppercase font-bold px-2 hidden sm:inline">Issue Type:</span>
+              {[
+                { id: 'ALL', label: 'All Issues' },
+                { id: 'REPLY_RECEIVED', label: 'Replied' },
+                { id: 'DM_RESTRICTED', label: 'No DMs' },
+                { id: 'PAGE_NOT_FOUND', label: '404' },
+                { id: 'RATE_LIMITED', label: 'Cooldown' },
+              ].map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => setIssueCategoryFilter(opt.id)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                    issueCategoryFilter === opt.id
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Sub Status Filter for ALL mode */}
           {viewMode === 'ALL' && (
             <div className="flex items-center rounded-xl bg-gray-950/90 border border-gray-800 p-1">
@@ -808,12 +1013,89 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
         </div>
       </div>
 
+      {/* Issues & Follow-Up Review Control Panel */}
+      {viewMode === 'ISSUES' && (
+        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 bg-gradient-to-r from-amber-950/40 via-[#08231a] to-amber-950/30 border border-amber-500/40 p-4 rounded-2xl shadow-xl backdrop-blur-md">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center shrink-0">
+              <ShieldAlert className="w-5 h-5 text-amber-400" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-white flex items-center space-x-2">
+                <span>Follow-up & Error Review Control</span>
+                <span className="text-xs font-mono font-normal px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  {selectedTaskIds.size} of {paginatedTasks.length} selected on page
+                </span>
+              </div>
+              <p className="text-xs text-gray-300 mt-0.5">
+                Target leads that replied or had delivery issues (restricted DMs, 404s). Confirm all follow-ups at once or select/deselect individual contacts.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => handleConfirmFollowups()}
+              disabled={isConfirmingFollowups || issueCount === 0}
+              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-lg shadow-emerald-500/20 transition cursor-pointer disabled:opacity-50"
+              title="Confirm all follow-ups to proceed"
+            >
+              <ThumbsUp className="w-3.5 h-3.5" />
+              <span>Confirm All Follow-ups ({issueCount})</span>
+            </button>
+
+            {selectedTaskIds.size > 0 && (
+              <>
+                <button
+                  onClick={() => handleConfirmFollowups(Array.from(selectedTaskIds))}
+                  disabled={isConfirmingFollowups}
+                  className="flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-emerald-700/80 hover:bg-emerald-600 text-white border border-emerald-500/40 transition cursor-pointer disabled:opacity-50"
+                  title="Confirm only selected follow-ups"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Confirm Selected ({selectedTaskIds.size})</span>
+                </button>
+
+                <button
+                  onClick={() => handleCancelFollowups(Array.from(selectedTaskIds))}
+                  disabled={isConfirmingFollowups}
+                  className="flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-rose-900/60 hover:bg-rose-800 text-rose-200 border border-rose-600/40 transition cursor-pointer disabled:opacity-50"
+                  title="Cancel selected follow-ups"
+                >
+                  <ThumbsDown className="w-3.5 h-3.5" />
+                  <span>Cancel Selected ({selectedTaskIds.size})</span>
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Main Queue Table */}
       <div className="bg-[#08231a]/70 border border-gray-800/90 rounded-2xl shadow-2xl overflow-hidden backdrop-blur-md">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse min-w-[960px]">
             <thead>
               <tr className="border-b border-gray-800 bg-gray-950/90 text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                {viewMode === 'ISSUES' && (
+                  <th className="py-3.5 px-3 w-[4%] text-center">
+                    <button
+                      onClick={() => handleSelectAll(paginatedTasks.map((t) => t.id))}
+                      className="text-gray-400 hover:text-white transition cursor-pointer"
+                      title={
+                        paginatedTasks.length > 0 && paginatedTasks.every((t) => selectedTaskIds.has(t.id))
+                          ? 'Deselect All on Page'
+                          : 'Select All on Page'
+                      }
+                    >
+                      {paginatedTasks.length > 0 && paginatedTasks.every((t) => selectedTaskIds.has(t.id)) ? (
+                        <CheckSquare className="w-4 h-4 text-amber-400" />
+                      ) : (
+                        <Square className="w-4 h-4 text-gray-500" />
+                      )}
+                    </button>
+                  </th>
+                )}
                 <th className="py-3.5 px-4 w-[8%] text-center">
                   <span>Queue #</span>
                 </th>
@@ -835,8 +1117,8 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                     <span>{viewMode === 'DONE' ? 'Sent Message Copy' : 'Queued Message Body'}</span>
                   </span>
                 </th>
-                <th className="py-3.5 px-4 w-[12%]">
-                  {viewMode === 'UPCOMING' ? 'Priority & Status' : 'Status & Retries'}
+                <th className="py-3.5 px-4 w-[14%]">
+                  {viewMode === 'UPCOMING' ? 'Priority & Status' : 'Status & Issues'}
                 </th>
                 <th className="py-3.5 px-4 w-[12%]">
                   {viewMode === 'DONE' ? 'Delivered At' : 'Scheduled / ETA'}
@@ -864,6 +1146,22 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
 
                   return (
                     <tr key={t.id} className="hover:bg-gray-800/35 transition-colors group">
+                      {/* Selection Checkbox in ISSUES mode */}
+                      {viewMode === 'ISSUES' && (
+                        <td className="py-4 px-3 align-top text-center">
+                          <button
+                            onClick={() => handleToggleSelect(t.id)}
+                            className="text-gray-400 hover:text-white transition cursor-pointer pt-0.5"
+                          >
+                            {selectedTaskIds.has(t.id) ? (
+                              <CheckSquare className="w-4 h-4 text-amber-400" />
+                            ) : (
+                              <Square className="w-4 h-4 text-gray-600 hover:text-gray-400" />
+                            )}
+                          </button>
+                        </td>
+                      )}
+
                       {/* Queue Position */}
                       <td className="py-4 px-4 align-top text-center">
                         {t.status === 'RUNNING' ? (
@@ -967,7 +1265,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                         </div>
                       </td>
 
-                      {/* Status & Retries */}
+                      {/* Status & Retries / Error Categorization */}
                       <td className="py-4 px-4 align-top space-y-1.5">
                         <span
                           className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${getStatusBadge(
@@ -995,6 +1293,23 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                             </>
                           )}
                         </div>
+
+                        {/* Categorized Issue & Explanation Pill */}
+                        {(() => {
+                          const err = parseTaskError(t);
+                          if (!err) return null;
+                          return (
+                            <div className="mt-1 space-y-1">
+                              <span className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[9px] font-bold border font-mono ${err.badgeClass}`}>
+                                <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
+                                <span>[{err.tag}] {err.label}</span>
+                              </span>
+                              <div className="text-[10px] text-gray-300 font-sans leading-tight bg-gray-950/90 p-1.5 rounded-lg border border-gray-800/80 shadow-inner">
+                                {err.description}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       {/* Scheduled / Completed */}
@@ -1021,39 +1336,64 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
 
                       {/* Actions */}
                       <td className="py-4 px-4 align-top text-right">
-                        <div className="flex items-center justify-end space-x-1">
-                          {canRetry && (
-                            <button
-                              onClick={() => handleRetry(t.id)}
-                              disabled={actionLoadingId === t.id}
-                              className="inline-flex items-center space-x-1 px-2 py-1 bg-indigo-600/20 hover:bg-indigo-600/35 text-indigo-300 border border-indigo-500/40 rounded-lg text-xs font-semibold transition cursor-pointer disabled:opacity-50"
-                              title="Retry this task"
-                            >
-                              <RefreshCw className={`w-3 h-3 ${actionLoadingId === t.id ? 'animate-spin' : ''}`} />
-                              <span>Retry</span>
-                            </button>
+                        <div className="flex flex-col items-end space-y-1.5">
+                          {/* Inline Follow-up approval controls if in review */}
+                          {(t.status === 'MANUAL_REVIEW' || t.type?.startsWith('FOLLOW_UP')) && (
+                            <div className="flex items-center space-x-1">
+                              <button
+                                onClick={() => handleConfirmFollowups([t.id])}
+                                disabled={actionLoadingId === t.id || isConfirmingFollowups}
+                                className="inline-flex items-center space-x-1 px-2 py-1 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/40 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                title="Approve and send follow-up"
+                              >
+                                <ThumbsUp className="w-2.5 h-2.5" />
+                                <span>Approve</span>
+                              </button>
+                              <button
+                                onClick={() => handleCancelFollowups([t.id])}
+                                disabled={actionLoadingId === t.id || isConfirmingFollowups}
+                                className="inline-flex items-center space-x-1 px-1.5 py-1 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-700/40 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                title="Cancel follow-up"
+                              >
+                                <ThumbsDown className="w-2.5 h-2.5" />
+                              </button>
+                            </div>
                           )}
 
-                          {canCancel && (
-                            <button
-                              onClick={() => handleCancel(t.id)}
-                              disabled={actionLoadingId === t.id}
-                              className="inline-flex items-center space-x-1 px-2 py-1 bg-gray-900 hover:bg-rose-950/50 text-gray-400 hover:text-rose-300 border border-gray-800 hover:border-rose-700/50 rounded-lg text-xs font-semibold transition cursor-pointer disabled:opacity-50"
-                              title="Cancel this task"
-                            >
-                              <XCircle className="w-3 h-3" />
-                              <span>Cancel</span>
-                            </button>
-                          )}
+                          <div className="flex items-center justify-end space-x-1">
+                            {canRetry && (
+                              <button
+                                onClick={() => handleRetry(t.id)}
+                                disabled={actionLoadingId === t.id}
+                                className="inline-flex items-center space-x-1 px-2 py-1 bg-indigo-600/20 hover:bg-indigo-600/35 text-indigo-300 border border-indigo-500/40 rounded-lg text-xs font-semibold transition cursor-pointer disabled:opacity-50"
+                                title="Retry this task"
+                              >
+                                <RefreshCw className={`w-3 h-3 ${actionLoadingId === t.id ? 'animate-spin' : ''}`} />
+                                <span>Retry</span>
+                              </button>
+                            )}
 
-                          <button
-                            onClick={() => handleDeleteTask(t.id)}
-                            disabled={actionLoadingId === t.id}
-                            className="inline-flex items-center p-1 bg-rose-500/10 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 rounded-lg text-xs font-semibold transition cursor-pointer disabled:opacity-50"
-                            title="Delete this task permanently"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                            {canCancel && (
+                              <button
+                                onClick={() => handleCancel(t.id)}
+                                disabled={actionLoadingId === t.id}
+                                className="inline-flex items-center space-x-1 px-2 py-1 bg-gray-900 hover:bg-rose-950/50 text-gray-400 hover:text-rose-300 border border-gray-800 hover:border-rose-700/50 rounded-lg text-xs font-semibold transition cursor-pointer disabled:opacity-50"
+                                title="Cancel this task"
+                              >
+                                <XCircle className="w-3 h-3" />
+                                <span>Cancel</span>
+                              </button>
+                            )}
+
+                            <button
+                              onClick={() => handleDeleteTask(t.id)}
+                              disabled={actionLoadingId === t.id}
+                              className="inline-flex items-center p-1 bg-rose-500/10 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 rounded-lg text-xs font-semibold transition cursor-pointer disabled:opacity-50"
+                              title="Delete this task permanently"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
                       </td>
                     </tr>
@@ -1061,7 +1401,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                 })
               ) : (
                 <tr>
-                  <td colSpan={7} className="py-16 text-center text-gray-400">
+                  <td colSpan={viewMode === 'ISSUES' ? 8 : 7} className="py-16 text-center text-gray-400">
                     <div className="max-w-sm mx-auto space-y-2">
                       <ListOrdered className="w-8 h-8 text-gray-600 mx-auto" />
                       <div className="font-bold text-white text-sm">

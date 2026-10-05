@@ -424,7 +424,7 @@ class FollowUpWorker:
                 logger.warning(f"[Worker 3] Contact {contact.name} has DM restrictions: {send_reason}. Marking DM_RESTRICTED.")
                 async with AsyncSessionLocal() as session:
                     t_repo = TaskRepository(session)
-                    await t_repo.update_status(task_id, TaskStatus.SKIPPED)
+                    await t_repo.update_status(task_id, TaskStatus.SKIPPED, manual_review_reason=f"[DM_RESTRICTED] {send_reason}")
                     c_repo = ContactRepository(session)
                     await c_repo.update(contact.id, {"replied_status": "DM_RESTRICTED", "notes": f"DM Restricted: {send_reason}"})
                     m_repo = MessageRepository(session)
@@ -508,7 +508,7 @@ class FollowUpWorker:
                 logger.warning(f"[Worker 3] Rate limit detected on {task_id}. Auto-pausing Worker 3.")
                 async with AsyncSessionLocal() as session:
                     t_repo = TaskRepository(session)
-                    await t_repo.update_status(task_id, TaskStatus.MANUAL_REVIEW)
+                    await t_repo.update_status(task_id, TaskStatus.MANUAL_REVIEW, manual_review_reason="[RATE_LIMITED] Instagram action temporarily restricted. Pacing delay required.")
                 await self.pause()
 
             self.current_task_id = None
@@ -517,7 +517,7 @@ class FollowUpWorker:
             logger.error(f"[Worker 3] Error processing task {task_id}: {e}")
             async with AsyncSessionLocal() as session:
                 t_repo = TaskRepository(session)
-                await t_repo.update_status(task_id, TaskStatus.RETRY_WAIT)
+                await t_repo.update_status(task_id, TaskStatus.RETRY_WAIT, manual_review_reason=f"[ERROR] {str(e)}")
             self.current_task_id = None
 
 followup_worker = FollowUpWorker()

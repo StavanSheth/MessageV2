@@ -510,7 +510,11 @@ async function handleCommand(msg) {
   }
 
   if (action === "OPEN_PROFILE") {
-    const targetUrl = payload.url;
+    let targetUrl = (payload.url || "").trim();
+    if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+      const cleanUser = targetUrl.replace(/^@/, "").replace(/^\/+/, "").replace(/\/+$/, "").trim();
+      targetUrl = `https://www.instagram.com/${cleanUser}/`;
+    }
     // Quiet background navigation: do NOT set active: true!
     await chrome.tabs.update(tab.id, { url: targetUrl });
     await waitForTabLoaded(tab.id, 20000);
@@ -548,13 +552,17 @@ async function handleCommand(msg) {
   if (action === "CHECK_MESSAGE_AVAILABILITY") {
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: () => {
-        const buttons = Array.from(document.querySelectorAll('div[role="button"], button'));
-        const msgBtn = buttons.find(b => {
-          const t = b.innerText.trim().toLowerCase();
-          return t === "message" || t === "send message";
-        });
-        return { available: Boolean(msgBtn) };
+      func: async () => {
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const buttons = Array.from(document.querySelectorAll('div[role="button"], button, a[role="button"]'));
+          const msgBtn = buttons.find(b => {
+            const t = (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase();
+            return t === "message" || t === "send message" || t.startsWith("message") || Boolean(b.querySelector('svg[aria-label="Direct"], svg[aria-label="Message"]'));
+          });
+          if (msgBtn) return { available: true };
+          await new Promise(r => setTimeout(r, 400));
+        }
+        return { available: false };
       }
     });
 
@@ -572,13 +580,21 @@ async function handleCommand(msg) {
       func: async (textToSend, shouldCheckHistory, currentTaskType) => {
         // 1. Click message button if not in DM thread
         if (!window.location.href.includes("/direct/t/")) {
-          const buttons = Array.from(document.querySelectorAll('div[role="button"], button'));
-          const msgBtn = buttons.find(b => {
-            const t = b.innerText.trim().toLowerCase();
-            return t === "message" || t === "send message";
-          });
-          if (msgBtn) {
-            msgBtn.click();
+          let clicked = false;
+          for (let attempt = 0; attempt < 10; attempt++) {
+            const buttons = Array.from(document.querySelectorAll('div[role="button"], button, a[role="button"]'));
+            const msgBtn = buttons.find(b => {
+              const t = (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase();
+              return t === "message" || t === "send message" || t.startsWith("message") || Boolean(b.querySelector('svg[aria-label="Direct"], svg[aria-label="Message"]'));
+            });
+            if (msgBtn) {
+              msgBtn.click();
+              clicked = true;
+              break;
+            }
+            await new Promise(r => setTimeout(r, 300));
+          }
+          if (clicked) {
             await new Promise(r => setTimeout(r, 2000));
           }
         }
@@ -594,8 +610,8 @@ async function handleCommand(msg) {
 
         // 2. Find message composer (contenteditable or textarea)
         let composer = null;
-        for (let i = 0; i < 20; i++) {
-          composer = document.querySelector('div[contenteditable="true"][role="textbox"], textarea[placeholder*="Message"], div[aria-label="Message"]');
+        for (let i = 0; i < 25; i++) {
+          composer = document.querySelector('div[contenteditable="true"][role="textbox"], div[contenteditable="true"][aria-label*="Message"], div[contenteditable="true"][data-lexical-editor="true"], textarea[placeholder*="Message"], div[aria-label="Message"]');
           if (composer) break;
           await new Promise(r => setTimeout(r, 350));
         }
@@ -608,7 +624,7 @@ async function handleCommand(msg) {
           "you can't message this account",
           "cannot be messaged"
         ];
-        const pageText = document.body.innerText.toLowerCase();
+        const pageText = document.body ? document.body.innerText.toLowerCase() : "";
         const foundRestricted = restrictionPatterns.find(p => pageText.includes(p));
         if (foundRestricted) {
           const restrictionElem = Array.from(document.querySelectorAll('div, span, p')).find(el => {
@@ -628,19 +644,28 @@ async function handleCommand(msg) {
         }
 
         // 3. Detect existing conversation history (Anti-Duplicate Contact Guard)
+        // Must exclude the profile header card (which contains username, name, followers, 'View profile')
         if (shouldCheckHistory) {
-          // Identify the active DM thread container
           const chatPane = composer.closest('div[role="main"]') || document.querySelector('div[role="main"]') || document.body;
           
-          // Check for message rows in Instagram's virtualized thread grid
-          const msgRows = Array.from(chatPane.querySelectorAll('div[role="row"], div[role="listitem"]'));
+          // Check for message rows in Instagram's virtualized thread grid (excluding profile card)
+          const msgRows = Array.from(chatPane.querySelectorAll('div[role="row"], div[role="listitem"]')).filter(r => {
+            const t = (r.innerText || '').trim();
+            if (!t || t === 'Message...' || t === 'View Profile' || t === 'View profile') return false;
+            if (t.includes('followers') || t.includes('posts') || t.includes("You don't follow") || t.includes('You follow each other')) return false;
+            return true;
+          });
           
-          // Check for existing message bubbles inside active thread
+          // Check for existing real message bubbles inside active thread
           const threadBubbles = Array.from(chatPane.querySelectorAll('div[dir="auto"], span[dir="auto"]')).filter(el => {
             if (composer.contains(el)) return false;
             if (el.closest('header') || el.closest('nav') || el.closest('[role="navigation"]')) return false;
-            const txt = el.innerText?.trim();
-            if (!txt || txt === "Message..." || txt === "View Profile" || txt === "Search" || txt === "Primary" || txt === "General" || txt === "Requests") return false;
+            const txt = (el.innerText || '').trim();
+            if (!txt || txt === "Message..." || txt === "View Profile" || txt === "View profile" || txt === "Search" || txt === "Primary" || txt === "General" || txt === "Requests") return false;
+            if (txt.includes("followers") || txt.includes("posts") || txt.includes("You follow each other") || txt.includes("You don't follow each other") || txt.includes("Instagram") || txt.includes("Followed by")) return false;
+            // Exclude profile header elements
+            const topHeader = chatPane.querySelector('h2, span[style*="font-weight: 600"]');
+            if (topHeader && (txt === topHeader.innerText?.trim() || txt.toLowerCase() === topHeader.innerText?.trim().toLowerCase())) return false;
             return txt.length > 1;
           });
 
@@ -653,19 +678,30 @@ async function handleCommand(msg) {
           }
         }
 
-        // 4. Focus & Clean Composer (Ensure no stale drafts or duplicates)
+        // 4. Focus & Clean Composer (Ensure no stale drafts)
         composer.focus();
+        await new Promise(r => setTimeout(r, 100));
         try {
-          document.execCommand('selectAll', false, null);
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(composer);
+          sel.removeAllRanges();
+          sel.addRange(range);
           document.execCommand('delete', false, null);
         } catch (e) {}
 
-        if (composer.innerText && composer.innerText.trim() !== '') {
-          composer.innerText = '';
-          composer.dispatchEvent(new Event('input', { bubbles: true }));
-        }
+        // 5. Insert text for Meta Lexical contenteditable
+        // Dispatch InputEvent beforeinput -> execCommand -> InputEvent input
+        try {
+          const beforeEvt = new InputEvent('beforeinput', {
+            bubbles: true,
+            cancelable: true,
+            inputType: 'insertText',
+            data: textToSend
+          });
+          composer.dispatchEvent(beforeEvt);
+        } catch (e) {}
 
-        // 5. Insert text ONCE (Never fire beforeinput and execCommand sequentially)
         let inserted = false;
         try {
           inserted = document.execCommand('insertText', false, textToSend);
@@ -673,39 +709,43 @@ async function handleCommand(msg) {
           inserted = false;
         }
 
+        try {
+          const inputEvt = new InputEvent('input', {
+            bubbles: true,
+            cancelable: true,
+            inputType: 'insertText',
+            data: textToSend
+          });
+          composer.dispatchEvent(inputEvt);
+        } catch (e) {}
+
         let currentText = (composer.innerText || composer.textContent || '').trim();
         if (!inserted || currentText !== textToSend.trim()) {
-          composer.innerText = textToSend;
+          const p = composer.querySelector('p') || composer;
+          p.textContent = textToSend;
           composer.dispatchEvent(new Event('input', { bubbles: true }));
           composer.dispatchEvent(new Event('change', { bubbles: true }));
         }
 
-        // Sanity Check: Truncate if text was duplicated by browser
-        currentText = (composer.innerText || composer.textContent || '').trim();
-        if (currentText.length > textToSend.trim().length && currentText.startsWith(textToSend.trim())) {
-          composer.innerText = textToSend;
-          composer.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-
         await new Promise(r => setTimeout(r, 600));
 
-        // 6. Send message (Single dispatch via Send button or Enter)
+        // 6. Send message (Single dispatch via Send button or Enter key)
         const sendBtn = Array.from(document.querySelectorAll('div[role="button"], button')).find(b => {
-          const t = b.innerText.trim().toLowerCase();
-          const hasAria = (b.getAttribute('aria-label') || '').toLowerCase().includes('send');
+          const t = (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase();
           const hasSvgSend = Boolean(b.querySelector('svg[aria-label="Send"], svg[aria-label="Direct"]'));
-          return (t === "send" || t === "send message" || hasAria || hasSvgSend) && b.offsetParent !== null;
+          return (t === "send" || t === "send message" || hasSvgSend || t.includes("send")) && b.offsetParent !== null;
         });
 
         if (sendBtn) {
           sendBtn.click();
         } else {
           composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+          composer.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
         }
 
         // Wait and confirm composer was cleared by Instagram
         let cleared = false;
-        for (let i = 0; i < 10; i++) {
+        for (let i = 0; i < 12; i++) {
           await new Promise(r => setTimeout(r, 200));
           const afterText = (composer.innerText || composer.textContent || '').trim();
           if (afterText === '' || afterText === 'Message...') {

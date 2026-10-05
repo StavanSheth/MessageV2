@@ -127,6 +127,9 @@ class ExtensionBridgeManager:
         if not self.is_connected:
             return False, ResultCode.NETWORK_ERROR, "Extension not connected"
         try:
+            if not profile_url.startswith("http://") and not profile_url.startswith("https://"):
+                clean_user = profile_url.lstrip("@").strip("/").strip()
+                profile_url = f"https://www.instagram.com/{clean_user}/"
             res = await self.send_command("OPEN_PROFILE", {"url": profile_url}, timeout=25.0)
             if res.get("success"):
                 return True, ResultCode.SUCCESS, "Profile opened"

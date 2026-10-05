@@ -108,6 +108,9 @@ export interface Task {
   max_retries: number;
   last_error?: string;
   error_code?: string;
+  error_category?: string;
+  error_message?: string;
+  manual_review_reason?: string;
   scheduled_at?: string;
   started_at?: string;
   completed_at?: string;

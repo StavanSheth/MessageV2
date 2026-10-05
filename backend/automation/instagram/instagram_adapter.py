@@ -89,6 +89,9 @@ class InstagramAdapter:
     async def open_profile(self, profile_url: str, expected_username: Optional[str] = None) -> Tuple[bool, ResultCode, str]:
         """Navigate to target profile and verify page validity."""
         try:
+            if not profile_url.startswith("http://") and not profile_url.startswith("https://"):
+                clean_user = profile_url.lstrip("@").strip("/").strip()
+                profile_url = f"https://www.instagram.com/{clean_user}/"
             try:
                 await self.page.bring_to_front()
             except Exception:

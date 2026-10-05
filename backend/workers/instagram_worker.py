@@ -863,11 +863,26 @@ class InstagramWorker:
 
     async def _fail_task(self, task_id: str, result_code: ResultCode, reason: str,
                          new_status: TaskStatus = TaskStatus.RETRY_WAIT, retryable: bool = True) -> None:
+        full_reason = f"[{result_code.value}] {reason}"
         async with AsyncSessionLocal() as session:
             task_repo = TaskRepository(session)
             current_task = await task_repo.get_by_id(task_id)
             if current_task and current_task.status == TaskStatus.RUNNING.value:
-                await task_repo.update_status(task_id, new_status)
+                await task_repo.update_status(task_id, new_status, manual_review_reason=full_reason)
+                try:
+                    err = Error(
+                        task_id=task_id,
+                        worker_id=WORKER_ID,
+                        code=result_code.value,
+                        message=reason,
+                        severity="WARNING" if retryable else "ERROR",
+                        retryable=retryable,
+                        attempt=current_task.attempt_count or 1
+                    )
+                    session.add(err)
+                    await session.commit()
+                except Exception as e:
+                    logger.warning(f"[Worker] Could not record error entity: {e}")
         await event_bus.publish(EventCode.TASK_FAILED, task_id=task_id, worker_id=WORKER_ID,
                                 payload={"code": result_code.value, "reason": reason, "retryable": retryable})
         logger.warning(f"[Worker] Task {task_id} failed: {result_code.value} — {reason}")

@@ -226,7 +226,7 @@ class ReplyScannerWorker:
                                 matched_contact.reply_detected_at = now
                                 matched_contact.notes = (matched_contact.notes or "") + f" [Auto-Reply: {inbound_text[:80]}...]"
 
-                                # Cancel all pending/ready follow-ups for this contact
+                                # Hold pending/ready follow-ups in MANUAL_REVIEW pending user confirmation
                                 fu_stmt = select(Task).where(
                                     and_(
                                         Task.contact_id == matched_contact.id,
@@ -235,8 +235,8 @@ class ReplyScannerWorker:
                                 )
                                 pending_tasks = (await session.execute(fu_stmt)).scalars().all()
                                 for pt in pending_tasks:
-                                    pt.status = TaskStatus.CANCELLED.value
-                                    pt.manual_review_reason = "Cancelled: Contact automated reply detected"
+                                    pt.status = TaskStatus.MANUAL_REVIEW.value
+                                    pt.manual_review_reason = f"[REPLY_RECEIVED] Automated reply detected: '{inbound_text[:70]}...'. User confirmation required to proceed with follow-up."
                                     pt.updated_at = now
 
                                 logger.info(f"[ReplyScanner] Automated message detected from {matched_contact.name}: Phone={extracted['phone']}, Email={extracted['email']}")
@@ -249,7 +249,7 @@ class ReplyScannerWorker:
                                 matched_contact.extracted_link = extracted["link"]
                                 matched_contact.reply_detected_at = now
 
-                                # Cancel all pending/ready follow-ups for this contact
+                                # Hold pending/ready follow-ups in MANUAL_REVIEW pending user confirmation
                                 fu_stmt = select(Task).where(
                                     and_(
                                         Task.contact_id == matched_contact.id,
@@ -258,8 +258,8 @@ class ReplyScannerWorker:
                                 )
                                 pending_tasks = (await session.execute(fu_stmt)).scalars().all()
                                 for pt in pending_tasks:
-                                    pt.status = TaskStatus.CANCELLED.value
-                                    pt.manual_review_reason = "Cancelled: Contact human reply detected"
+                                    pt.status = TaskStatus.MANUAL_REVIEW.value
+                                    pt.manual_review_reason = f"[REPLY_RECEIVED] Human reply detected: '{inbound_text[:70]}...'. User confirmation required to proceed with follow-up."
                                     pt.updated_at = now
 
                                 logger.info(f"[ReplyScanner] Human reply detected from {matched_contact.name}: {inbound_text[:80]}")

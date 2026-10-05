@@ -256,6 +256,33 @@ export async function cancelTask(taskId: string): Promise<Task> {
   return res.json();
 }
 
+export async function confirmFollowups(taskIds?: string[], contactIds?: string[]): Promise<{ status: string; updated_count: number }> {
+  const res = await fetch(`${BASE_URL}/api/tasks/confirm-followups`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_ids: taskIds, contact_ids: contactIds }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to confirm follow-ups');
+  }
+  return res.json();
+}
+
+export async function cancelFollowups(taskIds?: string[], contactIds?: string[]): Promise<{ status: string; cancelled_count: number }> {
+  const res = await fetch(`${BASE_URL}/api/tasks/cancel-followups`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_ids: taskIds, contact_ids: contactIds }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to cancel follow-ups');
+  }
+  return res.json();
+}
+
+
 export async function fetchSources(): Promise<Source[]> {
   const res = await fetch(`${BASE_URL}/api/sources`);
   return res.json();

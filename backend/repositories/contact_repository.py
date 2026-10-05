@@ -15,6 +15,19 @@ class ContactRepository:
                      followup_1_message: Optional[str] = None, followup_1_delay_days: int = 3,
                      followup_2_message: Optional[str] = None, followup_2_delay_days: int = 5,
                      replied_status: str = "UNKNOWN") -> Contact:
+        if instagram_url:
+            clean_val = str(instagram_url).strip()
+            if not clean_val.startswith("http://") and not clean_val.startswith("https://"):
+                clean_user = clean_val.lstrip("@").strip("/").strip()
+                instagram_url = f"https://www.instagram.com/{clean_user}/"
+                if not username:
+                    username = clean_user
+        if not username and instagram_url:
+            import re
+            m = re.search(r"instagram\.com/([a-zA-Z0-9_\.\-]+)", instagram_url)
+            if m and m.group(1).lower() not in ["p", "reel", "stories", "direct", "explore"]:
+                username = m.group(1).strip()
+
         contact = Contact(
             name=name,
             instagram_url=instagram_url,
@@ -64,7 +77,14 @@ class ContactRepository:
         if username is not None:
             contact.username = username.lstrip("@").strip()
         if instagram_url is not None:
-            contact.instagram_url = instagram_url.strip()
+            clean_val = instagram_url.strip()
+            if not clean_val.startswith("http://") and not clean_val.startswith("https://"):
+                clean_user = clean_val.lstrip("@").strip("/").strip()
+                contact.instagram_url = f"https://www.instagram.com/{clean_user}/"
+                if not username:
+                    contact.username = clean_user
+            else:
+                contact.instagram_url = clean_val
         if notes is not None:
             contact.notes = notes
         if expected_followers is not None:

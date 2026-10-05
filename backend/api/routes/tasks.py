@@ -33,6 +33,16 @@ async def list_tasks(status: str = None, limit: int = 2000, offset: int = 0, db:
             return t.contact.followup_2_message or "Hey! One final quick check-in before I close this thread."
         return t.contact.message or "Hey"
 
+    def parse_error_info(t):
+        reason = t.manual_review_reason or ""
+        cat = None
+        msg = reason
+        if reason.startswith("[") and "]" in reason:
+            parts = reason[1:].split("]", 1)
+            cat = parts[0].strip()
+            msg = parts[1].strip() if len(parts) > 1 else ""
+        return cat, msg, reason
+
     return [{
         "id": t.id,
         "contact_id": t.contact_id,
@@ -48,6 +58,10 @@ async def list_tasks(status: str = None, limit: int = 2000, offset: int = 0, db:
         "attempt_count": t.attempt_count,
         "retry_count": t.attempt_count,
         "max_retries": 3,
+        "manual_review_reason": t.manual_review_reason,
+        "error_category": parse_error_info(t)[0],
+        "error_message": parse_error_info(t)[1],
+        "replied_status": t.contact.replied_status if t.contact else None,
         "scheduled_at": format_datetime_readable(t.scheduled_at),
         "started_at": format_datetime_readable(t.started_at),
         "completed_at": format_datetime_readable(t.completed_at),
@@ -115,4 +129,64 @@ async def delete_task(task_id: str, db: AsyncSession = Depends(get_db)):
     if not deleted:
         raise HTTPException(500, "Failed to delete task")
     return {"id": task_id, "status": "deleted"}
+
+from pydantic import BaseModel
+from typing import List
+
+class FollowUpReviewRequest(BaseModel):
+    task_ids: Optional[List[str]] = None
+    contact_ids: Optional[List[str]] = None
+
+@router.post("/confirm-followups")
+async def confirm_followups(req: FollowUpReviewRequest, db: AsyncSession = Depends(get_db)):
+    """Approve and re-queue follow-up tasks for replied contacts or tasks in review."""
+    from backend.database.models import Task
+    from sqlalchemy import select, and_, or_
+    stmt = select(Task).where(Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]))
+    conds = []
+    if req.task_ids:
+        conds.append(Task.id.in_(req.task_ids))
+    if req.contact_ids:
+        conds.append(Task.contact_id.in_(req.contact_ids))
+    if conds:
+        stmt = stmt.where(or_(*conds))
+    else:
+        # If no specific IDs provided, approve all tasks waiting in MANUAL_REVIEW with REPLY_RECEIVED
+        stmt = stmt.where(and_(Task.status == TaskStatus.MANUAL_REVIEW.value, Task.manual_review_reason.like("%REPLY_RECEIVED%")))
+    
+    tasks = (await db.execute(stmt)).scalars().all()
+    repo = TaskRepository(db)
+    confirmed_count = 0
+    now = datetime.now(timezone.utc)
+    for t in tasks:
+        await repo.update_status(t.id, TaskStatus.READY, manual_review_reason=f"Approved by user for follow-up dispatch at {now.strftime('%b %d, %H:%M')}")
+        confirmed_count += 1
+    
+    return {"confirmed_count": confirmed_count}
+
+@router.post("/cancel-followups")
+async def cancel_followups(req: FollowUpReviewRequest, db: AsyncSession = Depends(get_db)):
+    """Cancel follow-up tasks for replied contacts so no further message is sent."""
+    from backend.database.models import Task
+    from sqlalchemy import select, and_, or_
+    stmt = select(Task).where(Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]))
+    conds = []
+    if req.task_ids:
+        conds.append(Task.id.in_(req.task_ids))
+    if req.contact_ids:
+        conds.append(Task.contact_id.in_(req.contact_ids))
+    if conds:
+        stmt = stmt.where(or_(*conds))
+    else:
+        stmt = stmt.where(and_(Task.status == TaskStatus.MANUAL_REVIEW.value, Task.manual_review_reason.like("%REPLY_RECEIVED%")))
+    
+    tasks = (await db.execute(stmt)).scalars().all()
+    repo = TaskRepository(db)
+    cancelled_count = 0
+    for t in tasks:
+        await repo.update_status(t.id, TaskStatus.CANCELLED, manual_review_reason="Follow-up cancelled by user review")
+        cancelled_count += 1
+    
+    return {"cancelled_count": cancelled_count}
+
 

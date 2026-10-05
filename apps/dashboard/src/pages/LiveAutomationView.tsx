@@ -102,6 +102,8 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   const [outreachStreamError, setOutreachStreamError] = useState(false);
   const [outreachFeedError, setOutreachFeedError] = useState(false);
   const [captureModeTabA, setCaptureModeTabA] = useState<'feed' | 'stream'>('feed');
+  const [loadedTabASrc, setLoadedTabASrc] = useState<string>('/api/browser/live_feed?worker=outreach');
+  const [isFeedPausedTabA, setIsFeedPausedTabA] = useState<boolean>(false);
   const [selectedTargetTaskId, setSelectedTargetTaskId] = useState<string | null>(null);
   const [isRefreshingTabA, setIsRefreshingTabA] = useState(false);
 
@@ -361,12 +363,36 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     return () => clearInterval(timer);
   }, []);
 
+  // Seamless double-buffered offscreen preload for Tab A to completely prevent blanking/blinking
+  useEffect(() => {
+    if (captureModeTabA !== 'feed' || isFeedPausedTabA) return;
+    const nextUrl = `/api/browser/live_feed?worker=outreach&t=${outreachTick}`;
+    const img = new Image();
+    img.onload = () => {
+      setLoadedTabASrc(nextUrl);
+      setOutreachFeedError(false);
+    };
+    img.onerror = () => {
+      setOutreachFeedError(true);
+    };
+    img.src = nextUrl;
+  }, [outreachTick, captureModeTabA, isFeedPausedTabA]);
+
   const handleRefreshTabA = () => {
     setIsRefreshingTabA(true);
     setOutreachStreamError(false);
     setOutreachFeedError(false);
-    setOutreachTick(Date.now());
-    setTimeout(() => setIsRefreshingTabA(false), 500);
+    const forceUrl = `/api/browser/live_feed?worker=outreach&t=${Date.now()}`;
+    const img = new Image();
+    img.onload = () => {
+      setLoadedTabASrc(forceUrl);
+      setOutreachFeedError(false);
+      setIsRefreshingTabA(false);
+    };
+    img.onerror = () => {
+      setIsRefreshingTabA(false);
+    };
+    img.src = forceUrl;
   };
 
   const handleOpenChrome = async () => {
@@ -1120,12 +1146,24 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                           >
                             MJPEG
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsFeedPausedTabA(!isFeedPausedTabA)}
+                            title={isFeedPausedTabA ? "Resume 1s auto-refresh" : "Pause auto-refresh (freeze frame)"}
+                            className={`px-2 py-0.5 rounded font-bold transition cursor-pointer ${
+                              isFeedPausedTabA
+                                ? 'bg-amber-500/30 text-amber-300 border border-amber-500/40'
+                                : 'text-gray-400 hover:text-white'
+                            }`}
+                          >
+                            {isFeedPausedTabA ? 'Freeze' : 'Live'}
+                          </button>
                         </div>
 
                         <button
                           type="button"
                           onClick={handleRefreshTabA}
-                          title="Instant refresh Tab A capture"
+                          title="Instant snap / refresh Tab A capture"
                           className="p-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition cursor-pointer"
                         >
                           <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingTabA ? 'animate-spin text-emerald-400' : ''}`} />
@@ -1135,16 +1173,15 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
 
                     <div className="relative rounded-xl overflow-hidden border border-gray-800 bg-black aspect-video flex items-center justify-center shadow-inner">
                       <img
-                        key={captureModeTabA === 'feed' ? `feed-${outreachTick}` : 'stream'}
                         src={
                           captureModeTabA === 'feed'
-                            ? `/api/browser/live_feed?worker=outreach&t=${outreachTick}`
+                            ? loadedTabASrc
                             : (outreachStreamError
-                                ? `/api/browser/live_feed?worker=outreach&t=${outreachTick}`
+                                ? loadedTabASrc
                                 : '/api/browser/stream/outreach')
                         }
                         alt="Visible Chrome Tab A Stream"
-                        className="w-full h-full object-contain"
+                        className="w-full h-full object-contain select-none"
                         onError={() => {
                           if (captureModeTabA === 'stream' && !outreachStreamError) {
                             setOutreachStreamError(true);

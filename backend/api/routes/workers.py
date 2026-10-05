@@ -1,8 +1,8 @@
 import json
 import os
 from pathlib import Path
-from fastapi import APIRouter, Depends
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, Response
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database.session import get_db
 from backend.repositories.worker_repository import WorkerRepository
@@ -43,6 +43,60 @@ async def get_screenshot(filename: str):
     if path.exists() and path.is_file():
         return FileResponse(str(path), media_type="image/png")
     return {"error": "Screenshot not found"}
+
+@router.get("/api/browser/stream")
+async def browser_stream():
+    """MJPEG continuous live video stream directly from the isolated Instagram tab."""
+    from backend.automation.extension_bridge import extension_bridge
+    import asyncio
+
+    if extension_bridge.is_connected:
+        try:
+            await extension_bridge.start_screencast()
+        except Exception:
+            pass
+
+    async def frame_generator():
+        last_sent = None
+        while True:
+            # 1. First priority: live frame from extension screencast
+            frame = await extension_bridge.wait_for_next_frame(timeout=0.6)
+            if not frame:
+                # 2. Secondary priority: active capture screenshot
+                frame = await extension_bridge.capture_screenshot()
+            if not frame:
+                # 3. Third priority: Playwright/CDP screenshot if available
+                bw = instagram_worker.browser_worker
+                target_url = instagram_worker.current_instagram if instagram_worker.status.value == "RUNNING" else None
+                frame = await bw.capture_live_screenshot(target_url=target_url)
+
+            if frame:
+                last_sent = frame
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n" +
+                    frame + b"\r\n"
+                )
+            elif last_sent:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Content-Length: " + str(len(last_sent)).encode() + b"\r\n\r\n" +
+                    last_sent + b"\r\n"
+                )
+            await asyncio.sleep(0.04)
+
+    return StreamingResponse(
+        frame_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Connection": "keep-alive"
+        }
+    )
 
 @router.get("/api/browser/live_feed")
 async def get_browser_live_feed():

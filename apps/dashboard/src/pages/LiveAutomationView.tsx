@@ -58,6 +58,7 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   );
   const [liveTick, setLiveTick] = useState(Date.now());
   const [feedError, setFeedError] = useState(false);
+  const [streamError, setStreamError] = useState(false);
   const [isOpeningBrowser, setIsOpeningBrowser] = useState(false);
   const [extensionNeedsReload, setExtensionNeedsReload] = useState(false);
 
@@ -581,11 +582,19 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
               <div className="space-y-3">
                 <div className="relative rounded-xl overflow-hidden border border-gray-700/80 bg-gray-950 aspect-video flex items-center justify-center shadow-inner">
                   <img
-                    src={`/api/browser/live_feed?t=${liveTick}`}
-                    alt="Visible Chrome Live Feed"
+                    src={streamError ? `/api/browser/live_feed?t=${liveTick}` : "/api/browser/stream"}
+                    alt="Visible Chrome Isolated Live Stream"
                     className="w-full h-full object-contain"
-                    onError={() => setFeedError(true)}
-                    onLoad={() => setFeedError(false)}
+                    onError={() => {
+                      if (!streamError) {
+                        setStreamError(true);
+                      } else {
+                        setFeedError(true);
+                      }
+                    }}
+                    onLoad={() => {
+                      setFeedError(false);
+                    }}
                   />
                   {feedError && screenshotUrl && (
                     <img
@@ -597,9 +606,9 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                   {feedError && !screenshotUrl && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-gray-950">
                       <Eye className="w-8 h-8 text-indigo-400 mb-2 opacity-80 animate-pulse" />
-                      <p className="text-xs text-gray-200 font-semibold">Active Chrome Session</p>
+                      <p className="text-xs text-gray-200 font-semibold">Active Instagram Automation Tab</p>
                       <p className="text-[11px] text-gray-400 mt-1 max-w-xs">
-                        Capturing live visible tab. Ensure Chrome is running with the MessageV2 extension.
+                        Streaming live isolated Instagram tab.
                       </p>
                     </div>
                   )}
@@ -607,15 +616,15 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                 <div className="flex items-center justify-between text-xs text-gray-400 px-1">
                   <span className="flex items-center space-x-1.5 text-emerald-400 font-mono text-[11px]">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block mr-1" />
-                    Live session sync (2s auto-refresh)
+                    {!streamError ? "Isolated Live Video Stream (Real-Time)" : "Live session sync (2s auto-refresh)"}
                   </span>
                   <a
-                    href={`/api/browser/live_feed?t=${liveTick}`}
+                    href={streamError ? `/api/browser/live_feed?t=${liveTick}` : "/api/browser/stream"}
                     target="_blank"
                     rel="noreferrer"
                     className="text-indigo-400 hover:underline flex items-center space-x-1 text-[11px]"
                   >
-                    <span>Open Full Size</span>
+                    <span>Open Full Stream</span>
                   </a>
                 </div>
               </div>

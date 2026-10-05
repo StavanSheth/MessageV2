@@ -20,6 +20,7 @@ class ExtensionBridgeManager:
         self._latest_screenshot_data: Optional[bytes] = None
         self._latest_screenshot_time: float = 0.0
         self._capture_lock: asyncio.Lock = asyncio.Lock()
+        self._frame_event: asyncio.Event = asyncio.Event()
 
     @property
     def is_connected(self) -> bool:
@@ -34,6 +35,13 @@ class ExtensionBridgeManager:
                 text = await websocket.receive_text()
                 try:
                     data = json.loads(text)
+                    if data.get("type") == "LIVE_FRAME" and data.get("data"):
+                        raw_bytes = base64.b64decode(data["data"])
+                        self._latest_screenshot_data = raw_bytes
+                        self._latest_screenshot_time = time.time()
+                        self._frame_event.set()
+                        continue
+
                     req_id = data.get("id")
                     if req_id and req_id in self._pending_requests:
                         future = self._pending_requests.pop(req_id)
@@ -49,6 +57,19 @@ class ExtensionBridgeManager:
                 if not future.done():
                     future.set_exception(ConnectionError("Extension disconnected"))
             self._pending_requests.clear()
+
+    async def wait_for_next_frame(self, timeout: float = 1.0) -> Optional[bytes]:
+        self._frame_event.clear()
+        try:
+            await asyncio.wait_for(self._frame_event.wait(), timeout=timeout)
+            return self._latest_screenshot_data
+        except asyncio.TimeoutError:
+            return self._latest_screenshot_data
+
+    async def start_screencast(self) -> Dict[str, Any]:
+        if not self.is_connected:
+            return {"success": False, "error": "Extension not connected"}
+        return await self.send_command("START_SCREENCAST", timeout=5.0)
 
     async def send_command(self, action: str, payload: Optional[Dict[str, Any]] = None, timeout: float = 30.0) -> Dict[str, Any]:
         if not self.ws:

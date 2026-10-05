@@ -94,11 +94,70 @@ function waitForTabLoaded(tabId, timeoutMs = 15000) {
 
 // Dedicated automation tab isolation
 let automationTabId = null;
+let isScreencasting = false;
+let currentScreencastTabId = null;
+
+async function ensureScreencast(tabId) {
+  if (!chrome.debugger) return;
+  if (isScreencasting && currentScreencastTabId === tabId) return;
+
+  if (isScreencasting && currentScreencastTabId && currentScreencastTabId !== tabId) {
+    try {
+      await chrome.debugger.detach({ tabId: currentScreencastTabId });
+    } catch (e) {}
+    isScreencasting = false;
+    currentScreencastTabId = null;
+  }
+
+  try {
+    await chrome.debugger.attach({ tabId }, "1.3");
+    currentScreencastTabId = tabId;
+    isScreencasting = true;
+    await chrome.debugger.sendCommand({ tabId }, "Page.startScreencast", {
+      format: "jpeg",
+      quality: 60,
+      maxWidth: 960,
+      maxHeight: 720,
+      everyNthFrame: 1
+    });
+    console.log("[MessageV2 Extension] Live screencast started on isolated tab:", tabId);
+  } catch (err) {
+    console.log("[MessageV2 Extension] Could not start screencast on tab:", tabId, err);
+  }
+}
+
+if (chrome.debugger) {
+  chrome.debugger.onEvent.addListener((source, method, params) => {
+    if (method === "Page.screencastFrame" && params.data) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: "LIVE_FRAME",
+          data: params.data
+        }));
+      }
+      chrome.debugger.sendCommand(
+        { tabId: source.tabId },
+        "Page.screencastFrameAck",
+        { sessionId: params.sessionId }
+      ).catch(() => {});
+    }
+  });
+
+  chrome.debugger.onDetach.addListener((source, reason) => {
+    console.log("[MessageV2 Extension] Screencast detached:", reason);
+    if (source.tabId === currentScreencastTabId) {
+      isScreencasting = false;
+      currentScreencastTabId = null;
+    }
+  });
+}
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === automationTabId) {
     console.log("[MessageV2 Extension] Automation tab was closed. Resetting allocation.");
     automationTabId = null;
+    isScreencasting = false;
+    currentScreencastTabId = null;
   }
 });
 
@@ -112,6 +171,7 @@ async function getInstagramTab() {
         if (existing.status === "loading") {
           await waitForTabLoaded(existing.id, 10000);
         }
+        ensureScreencast(existing.id).catch(() => {});
         return existing;
       }
     } catch (e) {
@@ -127,6 +187,7 @@ async function getInstagramTab() {
     if (tab.status === "loading") {
       await waitForTabLoaded(tab.id, 10000);
     }
+    ensureScreencast(tab.id).catch(() => {});
     return tab;
   }
 
@@ -135,6 +196,7 @@ async function getInstagramTab() {
   const newTab = await chrome.tabs.create({ url: "https://www.instagram.com/", active: false });
   automationTabId = newTab.id;
   await waitForTabLoaded(newTab.id, 15000);
+  ensureScreencast(newTab.id).catch(() => {});
   return newTab;
 }
 
@@ -153,13 +215,39 @@ async function handleCommand(msg) {
     return { success: true, reloaded: true };
   }
 
+  if (action === "START_SCREENCAST") {
+    const tab = await getInstagramTab();
+    if (tab && tab.id) {
+      await ensureScreencast(tab.id);
+      return { success: true, screencasting: isScreencasting, tabId: tab.id };
+    }
+    return { success: false, error: "No tab found" };
+  }
+
   if (action === "CAPTURE_SCREENSHOT") {
     try {
-      // 1. Locate Instagram tab and its window without stealing user focus
       const tab = await getInstagramTab();
-      let targetWinId = tab && tab.windowId ? tab.windowId : null;
 
-      // 2. Fallback to active tab in current/last focused window
+      // 1. Isolated tab capture via Debugger (captures THIS tab exclusively, even in background)
+      if (chrome.debugger && tab && tab.id) {
+        try {
+          if (!isScreencasting || currentScreencastTabId !== tab.id) {
+            await ensureScreencast(tab.id);
+          }
+          const shot = await chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", {
+            format: "jpeg",
+            quality: 65
+          });
+          if (shot && shot.data) {
+            return { success: true, dataUrl: "data:image/jpeg;base64," + shot.data };
+          }
+        } catch (dbgErr) {
+          console.log("[MessageV2 Extension] Debugger capture fallback to window:", dbgErr);
+        }
+      }
+
+      // 2. Fallback to captureVisibleTab
+      let targetWinId = tab && tab.windowId ? tab.windowId : null;
       if (!targetWinId) {
         const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
         if (activeTabs.length > 0 && activeTabs[0].windowId) {
@@ -172,7 +260,6 @@ async function handleCommand(msg) {
         }
       }
 
-      // 3. Ensure window is not minimized
       if (targetWinId) {
         try {
           const win = await chrome.windows.get(targetWinId);
@@ -186,7 +273,6 @@ async function handleCommand(msg) {
       const dataUrl = await new Promise((resolve, reject) => {
         chrome.tabs.captureVisibleTab(targetWinId, captureOptions, (result) => {
           if (chrome.runtime.lastError || !result) {
-            // Fallback to null (captures whatever window Chrome considers active)
             chrome.tabs.captureVisibleTab(null, captureOptions, (res2) => {
               if (chrome.runtime.lastError || !res2) {
                 const msg = chrome.runtime.lastError ? chrome.runtime.lastError.message : "Empty capture buffer";

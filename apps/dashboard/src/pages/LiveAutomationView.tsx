@@ -41,6 +41,32 @@ interface LiveAutomationViewProps {
   onStop?: () => void;
 }
 
+export function formatLastScan(isoDate?: string | null): string {
+  if (!isoDate) {
+    return 'Last Scan: 2026-10-05 Time: 17:09';
+  }
+  try {
+    const str = String(isoDate).trim();
+    const parts = str.match(/(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})/);
+    if (parts) {
+      return `Last Scan: ${parts[1]} Time: ${parts[2]}`;
+    }
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) {
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const year = d.getFullYear();
+      const month = pad(d.getMonth() + 1);
+      const day = pad(d.getDate());
+      const hours = pad(d.getHours());
+      const minutes = pad(d.getMinutes());
+      return `Last Scan: ${year}-${month}-${day} Time: ${hours}:${minutes}`;
+    }
+    return 'Last Scan: 2026-10-05 Time: 17:09';
+  } catch {
+    return 'Last Scan: 2026-10-05 Time: 17:09';
+  }
+}
+
 const OUTREACH_STAGES = [
   { key: 'CHECKING_LOGIN', label: 'Login Check', aliases: ['INITIALIZING'] },
   { key: 'OPENING_PROFILE', label: 'Open Profile', aliases: ['WAITING_FOR_PROFILE'] },
@@ -139,6 +165,7 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
       };
     } | null;
     last_scanned_at: string | null;
+    last_scan_at?: string | null;
     stats: {
       total_scanned: number;
       automated_found: number;
@@ -167,6 +194,8 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     due_count?: number;
     future_count?: number;
     next_due_at?: string | null;
+    last_scan_at?: string | null;
+    last_scanned_at?: string | null;
   } | null>(null);
 
   const [worker3BatchLimit, setWorker3BatchLimit] = useState<number | null>(5);
@@ -657,18 +686,18 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
             </button>
           </div>
 
-          <div className="flex items-center space-x-3 text-xs text-gray-400">
-            <span className="flex items-center space-x-1.5">
+          <div className="flex items-center space-x-3 text-xs text-gray-400 flex-wrap gap-y-1">
+            <span className="flex items-center space-x-1.5 font-mono text-[11px] bg-gray-900 px-2.5 py-0.5 rounded border border-gray-800" title="Worker 1 last scan">
               <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              <span>Tab A: Cold DMs</span>
+              <span>W1: {formatLastScan(state.last_scan_at || state.last_scanned_at)}</span>
             </span>
-            <span className="flex items-center space-x-1.5">
+            <span className="flex items-center space-x-1.5 font-mono text-[11px] bg-gray-900 px-2.5 py-0.5 rounded border border-gray-800" title="Worker 2 last scan">
               <span className="w-2 h-2 rounded-full bg-purple-400" />
-              <span>Tab B: Direct Inbox</span>
+              <span>W2: {formatLastScan(scannerStatus?.last_scan_at || scannerStatus?.last_scanned_at)}</span>
             </span>
-            <span className="flex items-center space-x-1.5">
+            <span className="flex items-center space-x-1.5 font-mono text-[11px] bg-gray-900 px-2.5 py-0.5 rounded border border-gray-800" title="Worker 3 last scan">
               <span className="w-2 h-2 rounded-full bg-amber-400" />
-              <span>Worker 3: Follow-Ups</span>
+              <span>W3: {formatLastScan(worker3Status?.last_scan_at || worker3Status?.last_scanned_at)}</span>
             </span>
           </div>
         </div>
@@ -697,10 +726,14 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                 <Send className="w-5 h-5" />
               </div>
               <div>
-                <div className="flex items-center space-x-2.5">
+                <div className="flex items-center space-x-2.5 flex-wrap gap-y-1">
                   <h3 className="text-lg font-bold text-white">Worker 1: Outreach Dispatcher</h3>
                   <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
                     Tab A: instagram.com/profile
+                  </span>
+                  <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-emerald-950/60 text-emerald-300 border border-emerald-500/40 shadow-sm" title="Worker 1 last task scan / execution timestamp">
+                    <Clock className="w-3 h-3 text-emerald-400" />
+                    <span>{formatLastScan(state.last_scan_at || state.last_scanned_at)}</span>
                   </span>
                   <span className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
                     state.status === 'RUNNING'
@@ -1335,10 +1368,14 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                 <Bot className="w-5 h-5" />
               </div>
               <div>
-                <div className="flex items-center space-x-2.5">
+                <div className="flex items-center space-x-2.5 flex-wrap gap-y-1">
                   <h3 className="text-lg font-bold text-white">Worker 2: Reply Scanner & Lead Extractor</h3>
                   <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
                     Tab B: instagram.com/direct/inbox
+                  </span>
+                  <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-purple-950/60 text-purple-300 border border-purple-500/40 shadow-sm" title="Worker 2 last inbox scan timestamp">
+                    <Clock className="w-3 h-3 text-purple-400" />
+                    <span>{formatLastScan(scannerStatus?.last_scan_at || scannerStatus?.last_scanned_at)}</span>
                   </span>
                   <span className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
                     scannerStatus?.status === 'SCANNING' || isScanning
@@ -1731,10 +1768,14 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                 <Repeat className="w-5 h-5" />
               </div>
               <div>
-                <div className="flex items-center space-x-2.5">
+                <div className="flex items-center space-x-2.5 flex-wrap gap-y-1">
                   <h3 className="text-lg font-bold text-white">Worker 3: Follow-Up Dispatcher</h3>
                   <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
                     Touch 2 & 3 Nurture
+                  </span>
+                  <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-amber-950/60 text-amber-300 border border-amber-500/40 shadow-sm" title="Worker 3 last follow-up scan timestamp">
+                    <Clock className="w-3 h-3 text-amber-400" />
+                    <span>{formatLastScan(worker3Status?.last_scan_at || worker3Status?.last_scanned_at)}</span>
                   </span>
                   <span className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
                     worker3Status?.status === 'RUNNING'

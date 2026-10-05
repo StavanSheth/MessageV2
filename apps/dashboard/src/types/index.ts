@@ -204,6 +204,8 @@ export interface LiveAutomationState {
   delay_seconds?: number;
   is_paused?: boolean;
   is_running?: boolean;
+  last_scan_at?: string | null;
+  last_scanned_at?: string | null;
 }
 
 export interface EventLog {

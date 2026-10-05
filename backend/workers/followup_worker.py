@@ -55,6 +55,7 @@ class FollowUpWorker:
         self.is_dispatching_dm = False
         self._task: Optional[asyncio.Task] = None
         self._start_time: Optional[datetime] = None
+        self.last_scan_at: Optional[str] = None
 
     @property
     def is_running(self) -> bool:
@@ -180,6 +181,13 @@ class FollowUpWorker:
         except Exception:
             pass
 
+        if not self.last_scan_at:
+            try:
+                from backend.automation.scan_tracker import load_last_scan
+                self.last_scan_at = await load_last_scan(WORKER_ID)
+            except Exception:
+                pass
+
         return {
             "worker_id": WORKER_ID,
             "worker_name": WORKER_NAME,
@@ -200,7 +208,9 @@ class FollowUpWorker:
             "lock_held": coordinator.active_sender == WORKER_ID,
             "due_count": due_count,
             "future_count": future_count,
-            "next_due_at": next_due_at
+            "next_due_at": next_due_at,
+            "last_scan_at": self.last_scan_at,
+            "last_scanned_at": self.last_scan_at
         }
 
     async def _update_worker_db(self, **kwargs) -> None:
@@ -249,6 +259,12 @@ class FollowUpWorker:
                     logger.info(f"[Worker 3] Batch limit of {self.batch_limit} reached. Pausing safely.")
                     await self.pause()
                     continue
+
+                try:
+                    from backend.automation.scan_tracker import persist_last_scan
+                    self.last_scan_at = await persist_last_scan(WORKER_ID)
+                except Exception:
+                    pass
 
                 task = await self._claim_next_followup()
                 if not task:

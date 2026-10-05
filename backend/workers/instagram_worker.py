@@ -53,6 +53,7 @@ class InstagramWorker:
         self.is_dispatching_dm = False
         self._task: Optional[asyncio.Task] = None
         self._start_time: Optional[datetime] = None
+        self.last_scan_at: Optional[str] = None
 
     @property
     def is_running(self) -> bool:
@@ -175,6 +176,13 @@ class InstagramWorker:
         else:
             bh = await self.browser_worker.health()
             browser_status = bh.get("status", "DISCONNECTED")
+        if not self.last_scan_at:
+            try:
+                from backend.automation.scan_tracker import load_last_scan
+                self.last_scan_at = await load_last_scan(WORKER_ID)
+            except Exception:
+                pass
+
         return {
             "worker_id": WORKER_ID,
             "worker_name": WORKER_NAME,
@@ -192,7 +200,9 @@ class InstagramWorker:
             "run_completed_contact_ids": self.run_completed_contact_ids,
             "run_sent_records": self.run_sent_records,
             "delay_seconds": self.delay_between_messages,
-            "elapsed_seconds": (datetime.now(timezone.utc) - self._start_time).seconds if self._start_time else 0
+            "elapsed_seconds": (datetime.now(timezone.utc) - self._start_time).seconds if self._start_time else 0,
+            "last_scan_at": self.last_scan_at,
+            "last_scanned_at": self.last_scan_at
         }
 
     # ───────────────────────────────────────────────
@@ -303,6 +313,12 @@ class InstagramWorker:
                 if not extension_bridge.is_connected and (not self.browser_worker.is_running or not self.browser_worker.page or self.browser_worker.page.is_closed()):
                     logger.warning("[Worker] Browser closed or disconnected. Halting task loop.")
                     break
+
+                try:
+                    from backend.automation.scan_tracker import persist_last_scan
+                    self.last_scan_at = await persist_last_scan(WORKER_ID)
+                except Exception:
+                    pass
 
                 task = await self._claim_next_task()
                 if not task:

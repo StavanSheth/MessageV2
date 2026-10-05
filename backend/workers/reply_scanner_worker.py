@@ -34,9 +34,24 @@ class ReplyScannerWorker:
         self._paused = False
         self._stop_requested = False
         self._periodic_task: Optional[asyncio.Task] = None
+        self._persisted_scan_at: Optional[str] = None
 
     def get_status(self) -> Dict[str, Any]:
         display_status = "PAUSED" if self._paused else self.status
+        iso_scan = self.last_scanned_at.isoformat() if self.last_scanned_at else self._persisted_scan_at
+        if not iso_scan:
+            try:
+                import asyncio
+                # Use cached or sync fallback
+                from backend.automation.scan_tracker import load_last_scan
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    task = asyncio.create_task(load_last_scan("WORKER-02"))
+                    task.add_done_callback(lambda t: setattr(self, "_persisted_scan_at", t.result()) if not t.cancelled() and t.exception() is None else None)
+            except Exception:
+                pass
+            iso_scan = self._persisted_scan_at
+
         return {
             "worker_id": "WORKER-02",
             "worker_name": "Reply Scanner & Lead Extractor",
@@ -45,7 +60,8 @@ class ReplyScannerWorker:
             "is_running": self.status in ("RUNNING", "SCANNING") and not self._paused,
             "current_stage": self.current_stage,
             "current_target": self.current_target,
-            "last_scanned_at": self.last_scanned_at.isoformat() if self.last_scanned_at else None,
+            "last_scanned_at": iso_scan,
+            "last_scan_at": iso_scan,
             "stats": self.stats,
             "is_connected": extension_bridge.is_connected
         }
@@ -124,6 +140,12 @@ class ReplyScannerWorker:
             self.status = "SCANNING"
             self.current_stage = "OPENING_INBOX"
             now = datetime.now(timezone.utc)
+            self.last_scanned_at = now
+            try:
+                from backend.automation.scan_tracker import persist_last_scan
+                self._persisted_scan_at = await persist_last_scan("WORKER-02", now)
+            except Exception:
+                pass
             scanned_count = 0
             auto_count = 0
             human_count = 0
@@ -362,6 +384,11 @@ class ReplyScannerWorker:
 
                 self.current_stage = "COMPLETED"
                 self.last_scanned_at = now
+                try:
+                    from backend.automation.scan_tracker import persist_last_scan
+                    self._persisted_scan_at = await persist_last_scan("WORKER-02", now)
+                except Exception:
+                    pass
                 self.stats["total_scanned"] += scanned_count
                 self.stats["automated_found"] += auto_count
                 self.stats["human_replies_found"] += human_count

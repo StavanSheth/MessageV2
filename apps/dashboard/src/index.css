@@ -4,23 +4,45 @@
 
 @layer base {
   body {
-    @apply bg-[#0b0f19] text-gray-100 antialiased font-sans selection:bg-indigo-500 selection:text-white min-h-screen;
+    @apply bg-[#041610] text-[#fcfbf7] antialiased font-sans selection:bg-[#d49237] selection:text-[#041610] min-h-screen;
+    background-image: 
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(212, 146, 55, 0.09), transparent),
+      radial-gradient(circle 600px at 90% 20%, rgba(16, 185, 129, 0.05), transparent),
+      radial-gradient(circle 500px at 10% 80%, rgba(212, 146, 55, 0.04), transparent);
+    background-attachment: fixed;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  h1, h2, h3 {
+    font-family: 'Playfair Display', Georgia, serif;
+    letter-spacing: -0.015em;
   }
 }
 
-/* Custom scrollbars */
+/* Custom luxury scrollbars */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: #061d15;
 }
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: #174737;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #d49237;
 }
+
+/* Luxury Glassmorphism & Gold Hairlines */
+.luxe-card {
+  background: rgba(9, 37, 28, 0.75);
+  border: 1px solid rgba(212, 146, 55, 0.22);
+  box-shadow: 0 20px 40px -15px rgba(4, 22, 16, 0.6), inset 0 1px 0 0 rgba(212, 146, 55, 0.15);
+}
+
+.luxe-gold-glow {
+  box-shadow: 0 0 25px -5px rgba(212, 146, 55, 0.28);
+}
+

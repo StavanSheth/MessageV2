@@ -148,7 +148,7 @@ export function App() {
     automationState.status === 'ERROR';
 
   return (
-    <div className="min-h-screen bg-[#090d16] text-gray-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+    <div className="min-h-screen bg-[#041610] text-[#fcfbf7] flex flex-col font-sans selection:bg-[#d49237] selection:text-[#041610]">
       {/* Top Bar with Live Worker Controls */}
       <Navbar
         currentTab={currentTab}

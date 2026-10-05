@@ -293,11 +293,11 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
   return (
     <div className="space-y-6">
       {/* Top Header & Global Actions */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-gradient-to-r from-gray-900/90 via-[#0f172a]/90 to-gray-900/90 border border-gray-800/80 p-5 rounded-2xl shadow-xl backdrop-blur-md">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-gradient-to-r from-gray-900/90 via-[#08231a]/90 to-gray-900/90 border border-gray-800/80 p-5 rounded-2xl shadow-xl backdrop-blur-md">
         <div>
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-              <Users className="w-5 h-5 text-white" />
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#d49237] to-[#99631b] flex items-center justify-center shadow-lg shadow-[#d49237]/25">
+              <Users className="w-5 h-5 text-gray-950 font-black" />
             </div>
             <div>
               <div className="flex items-center space-x-2.5">
@@ -371,7 +371,7 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
       {/* Metric Cards Banner - Semantic Color System */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {/* Total Leads */}
-        <div className="bg-[#0f172a]/70 border border-gray-800 rounded-xl p-3 flex items-center justify-between shadow-sm">
+        <div className="bg-[#08231a]/70 border border-gray-800 rounded-xl p-3 flex items-center justify-between shadow-sm">
           <div>
             <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">Total Leads</span>
             <span className="text-xl font-black text-white mt-0.5 block">{totalContacts}</span>
@@ -448,7 +448,7 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-[#0f172a]/80 p-3 rounded-2xl border border-gray-800 backdrop-blur-sm">
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-[#08231a]/80 p-3 rounded-2xl border border-gray-800 backdrop-blur-sm">
         <div className="relative flex-1 max-w-md">
           <Search className="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
@@ -524,7 +524,7 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
       </div>
 
       {/* Main Contacts Table */}
-      <div className="bg-[#0f172a]/70 border border-gray-800/90 rounded-2xl shadow-2xl overflow-hidden backdrop-blur-md">
+      <div className="bg-[#08231a]/70 border border-gray-800/90 rounded-2xl shadow-2xl overflow-hidden backdrop-blur-md">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse min-w-[960px]">
             <thead>

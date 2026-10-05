@@ -320,3 +320,62 @@ export async function launchChromeLive(profileId?: string): Promise<any> {
   return res.json().catch(() => ({ success: true }));
 }
 
+// ─────────────────────────────────────────────────────────────
+// Worker 3 & Coordinator API Clients
+// ─────────────────────────────────────────────────────────────
+
+export async function startWorker3(batchLimit?: number | null, delaySeconds?: number): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/worker3/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ batch_limit: batchLimit, delay_seconds: delaySeconds }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to start Worker 3');
+  }
+  return res.json();
+}
+
+export async function pauseWorker3(): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/worker3/pause`, { method: 'POST' });
+  return res.json();
+}
+
+export async function resumeWorker3(): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/worker3/resume`, { method: 'POST' });
+  return res.json();
+}
+
+export async function stopWorker3(): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/worker3/stop`, { method: 'POST' });
+  return res.json();
+}
+
+export async function fetchWorker3Status(): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/worker3/status`);
+  return res.json();
+}
+
+export async function fetchCoordinatorStatus(): Promise<{
+  active_sender: string | null;
+  mode: string;
+  lock_held: boolean;
+  lock_acquired_at: string | null;
+  cold_due_count: number;
+  followup_due_count: number;
+}> {
+  const res = await fetch(`${BASE_URL}/api/automation/coordinator/status`);
+  return res.json();
+}
+
+export async function setCoordinatorMode(mode: string): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/automation/coordinator/mode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  });
+  return res.json();
+}
+
+

@@ -25,6 +25,7 @@ from backend.domain.enums import (
 from backend.config.settings import settings, SCREENSHOTS_DIR
 from backend.events.event_bus import event_bus
 from backend.automation.extension_bridge import extension_bridge, ExtensionAdapter
+from backend.automation.coordinator import coordinator
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,14 @@ class InstagramWorker:
         self._task: Optional[asyncio.Task] = None
         self._start_time: Optional[datetime] = None
 
+    @property
+    def is_running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    @property
+    def is_paused(self) -> bool:
+        return self._paused
+
     # ───────────────────────────────────────────────
     # Control methods
     # ───────────────────────────────────────────────
@@ -55,6 +64,9 @@ class InstagramWorker:
     async def start(self, batch_limit: Optional[int] = None, delay_seconds: Optional[int] = None) -> None:
         if self._task and self._task.done():
             self._task = None
+
+        # Acquire mutual exclusion lock before starting/resuming
+        await coordinator.acquire_dm_lock(WORKER_ID)
 
         if self._task and not self._task.done():
             # If already running but paused, unpause
@@ -86,11 +98,13 @@ class InstagramWorker:
     async def pause(self) -> None:
         self._paused = True
         self.status = WorkerStatus.PAUSED
+        await coordinator.release_dm_lock(WORKER_ID)
         await self._update_worker_db(status="PAUSED")
         await event_bus.publish(EventCode.WORKER_PAUSED, worker_id=WORKER_ID)
         await event_bus.publish_state(await self.health())
 
     async def resume(self) -> None:
+        await coordinator.acquire_dm_lock(WORKER_ID)
         self._paused = False
         self.status = WorkerStatus.RUNNING
         await self._update_worker_db(status="RUNNING")
@@ -100,6 +114,7 @@ class InstagramWorker:
     async def stop(self) -> None:
         self._stop_requested = True
         self._paused = False
+        await coordinator.release_dm_lock(WORKER_ID)
         task_to_cancel = self._task
         self._task = None
         if task_to_cancel and not task_to_cancel.done():
@@ -414,7 +429,7 @@ class InstagramWorker:
                 st.worker_id = None
             if stuck_tasks:
                 await session.commit()
-            return await repo.claim_next_ready(WORKER_ID)
+            return await repo.claim_next_ready(WORKER_ID, task_types=["MESSAGE"])
 
     async def _process_task(self, task, adapter: InstagramAdapter) -> None:
         task_id = task.id

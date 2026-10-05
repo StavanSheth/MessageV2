@@ -4,14 +4,21 @@ import {
   Send, AlertCircle, Sparkles, UserCheck, Terminal, Compass,
   ExternalLink, Loader2, RefreshCw, Play, Pause, Square,
   Bot, ShieldAlert, Phone, Mail, Link2, LayoutGrid, Layers,
-  Check, User
+  Check, User, Lock, Unlock, Repeat
 } from 'lucide-react';
 import { LiveAutomationState } from '../types';
 import { 
   openBrowserWindow, 
   triggerReplyScan, 
   fetchReplyScannerStatus,
-  fetchChromeProfiles 
+  fetchChromeProfiles,
+  startWorker3,
+  pauseWorker3,
+  resumeWorker3,
+  stopWorker3,
+  fetchWorker3Status,
+  fetchCoordinatorStatus,
+  setCoordinatorMode
 } from '../services/api';
 
 interface LiveAutomationViewProps {
@@ -37,6 +44,15 @@ const OUTREACH_STAGES = [
   { key: 'OPENING_COMPOSER', label: 'Type Message', aliases: ['PREPARING_MESSAGE'] },
   { key: 'SENDING_MESSAGE', label: 'Send Message', aliases: [] },
   { key: 'DETECTING_RESULT', label: 'Confirm Result', aliases: ['COMPLETED'] },
+];
+
+const FOLLOWUP_STAGES = [
+  { key: 'CHECKING_LOGIN', label: 'Login Check', aliases: ['INITIALIZING'] },
+  { key: 'OPENING_PROFILE', label: 'Open Chat', aliases: ['WAITING_FOR_PROFILE'] },
+  { key: 'CHECKING_DM_AVAILABILITY', label: 'Continuity Check', aliases: [] },
+  { key: 'OPENING_COMPOSER', label: 'Type Follow-Up', aliases: ['PREPARING_MESSAGE'] },
+  { key: 'SENDING_MESSAGE', label: 'Send Touch', aliases: [] },
+  { key: 'DETECTING_RESULT', label: 'Confirm & Schedule', aliases: ['COMPLETED'] },
 ];
 
 const SCANNER_STAGES = [
@@ -70,8 +86,8 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     ? customBatchInput
     : (batchLimit ? String(batchLimit) : '8');
 
-  // View Mode: 'dual' (Side-by-Side), 'outreach' (Worker 1 only), 'scanner' (Worker 2 only)
-  const [viewMode, setViewMode] = useState<'dual' | 'outreach' | 'scanner'>('dual');
+  // View Mode: 'triad' (All 3 Workers), 'outreach' (Worker 1 only), 'scanner' (Worker 2 only), 'followup' (Worker 3 only)
+  const [viewMode, setViewMode] = useState<'triad' | 'outreach' | 'scanner' | 'followup'>('triad');
 
   // Active Chrome profile
   const [activeProfileName, setActiveProfileName] = useState<string>('Default');
@@ -119,6 +135,35 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     is_connected: boolean;
   } | null>(null);
 
+  // Worker 3 (Follow-Up Dispatcher) State
+  const [worker3Status, setWorker3Status] = useState<{
+    worker_id: string;
+    status: string;
+    stage: string;
+    current_task_id?: string | null;
+    current_contact_name?: string | null;
+    current_instagram?: string | null;
+    current_touch?: string;
+    batch_sent_count: number;
+    batch_limit: number | null;
+    is_running: boolean;
+    is_paused: boolean;
+    lock_held: boolean;
+  } | null>(null);
+
+  const [worker3BatchLimit, setWorker3BatchLimit] = useState<number | null>(5);
+  const [worker3ActionLoading, setWorker3ActionLoading] = useState(false);
+
+  // Coordinator Mutex State
+  const [coordinatorStatus, setCoordinatorStatus] = useState<{
+    active_sender: string | null;
+    mode: string;
+    lock_held: boolean;
+    lock_acquired_at: string | null;
+    cold_due_count: number;
+    followup_due_count: number;
+  } | null>(null);
+
   const [isScanning, setIsScanning] = useState(false);
   const [scanFeedback, setScanFeedback] = useState<string | null>(null);
 
@@ -131,21 +176,70 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     }).catch(() => {});
   }, []);
 
-  // Poll Worker 2 status
+  // Poll Worker 2, Worker 3, and Coordinator status
   useEffect(() => {
-    const fetchStatus = async () => {
+    const fetchAllStatus = async () => {
       try {
-        const res = await fetchReplyScannerStatus();
-        setScannerStatus(res);
-        if (res.status !== 'SCANNING' && isScanning) {
-          setIsScanning(false);
+        const [w2, w3, coord] = await Promise.all([
+          fetchReplyScannerStatus().catch(() => null),
+          fetchWorker3Status().catch(() => null),
+          fetchCoordinatorStatus().catch(() => null),
+        ]);
+        if (w2) {
+          setScannerStatus(w2);
+          if (w2.status !== 'SCANNING' && isScanning) {
+            setIsScanning(false);
+          }
         }
+        if (w3) setWorker3Status(w3);
+        if (coord) setCoordinatorStatus(coord);
       } catch (e) {}
     };
-    fetchStatus();
-    const timer = setInterval(fetchStatus, 3000);
+    fetchAllStatus();
+    const timer = setInterval(fetchAllStatus, 3000);
     return () => clearInterval(timer);
   }, [isScanning]);
+
+  const handleStartWorker3 = async () => {
+    try {
+      setWorker3ActionLoading(true);
+      await startWorker3(worker3BatchLimit, 15);
+      const updated = await fetchWorker3Status();
+      setWorker3Status(updated);
+      const coord = await fetchCoordinatorStatus();
+      setCoordinatorStatus(coord);
+    } catch (e: any) {
+      alert(`Worker 3 Error: ${e.message}`);
+    } finally {
+      setWorker3ActionLoading(false);
+    }
+  };
+
+  const handlePauseWorker3 = async () => {
+    await pauseWorker3();
+    const updated = await fetchWorker3Status();
+    setWorker3Status(updated);
+  };
+
+  const handleResumeWorker3 = async () => {
+    await resumeWorker3();
+    const updated = await fetchWorker3Status();
+    setWorker3Status(updated);
+  };
+
+  const handleStopWorker3 = async () => {
+    await stopWorker3();
+    const updated = await fetchWorker3Status();
+    setWorker3Status(updated);
+  };
+
+  const handleSetMode = async (mode: string) => {
+    try {
+      await setCoordinatorMode(mode);
+      const coord = await fetchCoordinatorStatus();
+      setCoordinatorStatus(coord);
+    } catch (e) {}
+  };
 
   const handleTriggerScan = async () => {
     setIsScanning(true);
@@ -234,10 +328,10 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
               <span className="p-2 rounded-lg bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
                 <Activity className="w-5 h-5 animate-pulse" />
               </span>
-              <h2 className="text-2xl font-black text-white tracking-tight">Dual-Worker Automation Deck</h2>
+              <h2 className="text-2xl font-black text-white tracking-tight">3-Worker Triad Automation Deck</h2>
             </div>
             <p className="text-xs text-gray-400 max-w-xl">
-              Coordinated dual Playwright Chrome automation. Worker 1 executes targeted cold outreach on Tab A, while Worker 2 continuously audits direct inbox replies and extracts contact leads on Tab B.
+              Coordinated 3-Worker Instagram automation. Worker 1 handles initial cold outreach on Tab A, Worker 2 audits inbox replies in parallel on Tab B, and Worker 3 dispatches targeted follow-ups under strict mutual exclusion lock.
             </p>
           </div>
 
@@ -297,52 +391,143 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
           </div>
         </div>
 
+        {/* DM Mutual Exclusion Status & Strategy Bar */}
+        <div className="mt-4 pt-3 border-t border-gray-800/80 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center space-x-3">
+            {/* Lock Status Badge */}
+            <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl border text-xs font-bold shadow-sm ${
+              coordinatorStatus?.active_sender === 'WORKER-01'
+                ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                : coordinatorStatus?.active_sender === 'WORKER-03'
+                ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                : 'bg-gray-800 border-gray-700 text-gray-300'
+            }`}>
+              {coordinatorStatus?.active_sender ? (
+                <>
+                  <Lock className="w-3.5 h-3.5 animate-pulse text-amber-400" />
+                  <span>
+                    DM Lock: {coordinatorStatus.active_sender === 'WORKER-01' ? 'Worker 1 (Cold DMs Active)' : 'Worker 3 (Follow-Up Active)'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Unlock className="w-3.5 h-3.5 text-gray-400" />
+                  <span>DM Lock: Standby / Free</span>
+                </>
+              )}
+            </div>
+
+            {/* Due Tasks Count */}
+            <div className="text-xs text-gray-400 flex items-center space-x-2">
+              <span className="bg-gray-800 px-2 py-0.5 rounded text-gray-300 font-mono">
+                {coordinatorStatus?.cold_due_count || 0} Cold Ready
+              </span>
+              <span>•</span>
+              <span className="bg-gray-800 px-2 py-0.5 rounded text-amber-300 font-mono">
+                {coordinatorStatus?.followup_due_count || 0} Follow-Ups Due
+              </span>
+            </div>
+          </div>
+
+          {/* Mode Switcher */}
+          <div className="flex items-center space-x-2 text-xs">
+            <span className="text-gray-400 font-semibold uppercase text-[10px]">Strategy:</span>
+            <div className="inline-flex p-0.5 rounded-lg bg-gray-950 border border-gray-800">
+              <button
+                onClick={() => handleSetMode('BALANCED')}
+                className={`px-2.5 py-1 rounded text-xs font-bold transition cursor-pointer ${
+                  coordinatorStatus?.mode === 'BALANCED'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                ⚖️ Balanced
+              </button>
+              <button
+                onClick={() => handleSetMode('COLD_ONLY')}
+                className={`px-2.5 py-1 rounded text-xs font-bold transition cursor-pointer ${
+                  coordinatorStatus?.mode === 'COLD_ONLY'
+                    ? 'bg-emerald-600 text-white shadow'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                ⚡ Cold Only
+              </button>
+              <button
+                onClick={() => handleSetMode('FOLLOWUP_ONLY')}
+                className={`px-2.5 py-1 rounded text-xs font-bold transition cursor-pointer ${
+                  coordinatorStatus?.mode === 'FOLLOWUP_ONLY'
+                    ? 'bg-amber-600 text-white shadow'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                🔁 Follow-Ups Only
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* View Switcher Tabs */}
-        <div className="mt-5 pt-4 border-t border-gray-800/80 flex items-center justify-between flex-wrap gap-3">
-          <div className="inline-flex p-1 rounded-xl bg-gray-950/80 border border-gray-800">
+        <div className="mt-3 pt-3 border-t border-gray-800/80 flex items-center justify-between flex-wrap gap-3">
+          <div className="inline-flex p-1 rounded-xl bg-gray-950/80 border border-gray-800 flex-wrap">
             <button
-              onClick={() => setViewMode('dual')}
-              className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                viewMode === 'dual'
+              onClick={() => setViewMode('triad')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                viewMode === 'triad'
                   ? 'bg-indigo-600 text-white shadow'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
               <LayoutGrid className="w-3.5 h-3.5" />
-              <span>Side-by-Side Dual View</span>
+              <span>Triad View (All 3)</span>
             </button>
             <button
               onClick={() => setViewMode('outreach')}
-              className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
                 viewMode === 'outreach'
                   ? 'bg-indigo-600 text-white shadow'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
               <Send className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Worker 1: Outreach (Tab A)</span>
+              <span>Worker 1: Cold DMs</span>
             </button>
             <button
               onClick={() => setViewMode('scanner')}
-              className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
                 viewMode === 'scanner'
                   ? 'bg-purple-600 text-white shadow'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
               <Bot className="w-3.5 h-3.5 text-purple-400" />
-              <span>Worker 2: Reply Scanner (Tab B)</span>
+              <span>Worker 2: Inbox Scanner</span>
+            </button>
+            <button
+              onClick={() => setViewMode('followup')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                viewMode === 'followup'
+                  ? 'bg-amber-600 text-white shadow'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <Repeat className="w-3.5 h-3.5 text-amber-400" />
+              <span>Worker 3: Follow-Ups</span>
             </button>
           </div>
 
           <div className="flex items-center space-x-3 text-xs text-gray-400">
             <span className="flex items-center space-x-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              <span>Tab A: Profiles & DMs</span>
+              <span>Tab A: Cold DMs</span>
             </span>
             <span className="flex items-center space-x-1.5">
               <span className="w-2 h-2 rounded-full bg-purple-400" />
               <span>Tab B: Direct Inbox</span>
+            </span>
+            <span className="flex items-center space-x-1.5">
+              <span className="w-2 h-2 rounded-full bg-amber-400" />
+              <span>Worker 3: Follow-Ups</span>
             </span>
           </div>
         </div>
@@ -362,7 +547,7 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
       {/* ========================================================================= */}
       {/* WORKER 1: OUTREACH DISPATCHER DECK (TAB A)                                 */}
       {/* ========================================================================= */}
-      {(viewMode === 'dual' || viewMode === 'outreach') && (
+      {(viewMode === 'triad' || viewMode === 'outreach') && (
         <div className="bg-gray-900/90 border border-indigo-500/30 rounded-2xl p-6 shadow-2xl space-y-6 relative overflow-hidden">
           {/* Deck Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-gray-800 gap-3">
@@ -767,7 +952,7 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
       {/* ========================================================================= */}
       {/* WORKER 2: REPLY SCANNER & ENTITY EXTRACTOR DECK (TAB B)                   */}
       {/* ========================================================================= */}
-      {(viewMode === 'dual' || viewMode === 'scanner') && (
+      {(viewMode === 'triad' || viewMode === 'scanner') && (
         <div className="bg-gray-900/90 border border-purple-500/30 rounded-2xl p-6 shadow-2xl space-y-6 relative overflow-hidden">
           {/* Deck Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-gray-800 gap-3">
@@ -1088,6 +1273,284 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                   target="_blank"
                   rel="noreferrer"
                   className="text-purple-400 hover:underline inline-flex items-center space-x-1"
+                >
+                  <span>Open Full Video</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* WORKER 3: FOLLOW-UP DISPATCHER DECK (TOUCH 2 & 3)                         */}
+      {/* ========================================================================= */}
+      {(viewMode === 'triad' || viewMode === 'followup') && (
+        <div className="bg-gray-900/90 border border-amber-500/30 rounded-2xl p-6 shadow-2xl space-y-6 relative overflow-hidden">
+          {/* Deck Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-gray-800 gap-3">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                <Repeat className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center space-x-2.5">
+                  <h3 className="text-lg font-bold text-white">Worker 3: Follow-Up Dispatcher</h3>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    Touch 2 & 3 Nurture
+                  </span>
+                  <span className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                    worker3Status?.status === 'RUNNING'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                      : worker3Status?.status === 'PAUSED'
+                      ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
+                      : 'bg-gray-800 text-gray-400'
+                  }`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${
+                      worker3Status?.status === 'RUNNING'
+                        ? 'bg-amber-400'
+                        : worker3Status?.status === 'PAUSED'
+                        ? 'bg-yellow-400'
+                        : 'bg-gray-500'
+                    }`} />
+                    <span>{worker3Status?.status || 'IDLE'}</span>
+                  </span>
+
+                  {coordinatorStatus?.active_sender === 'WORKER-03' ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-600/30 text-amber-300 border border-amber-500/50 flex items-center space-x-1">
+                      <Lock className="w-3 h-3 text-amber-400" />
+                      <span>DM Lock Held</span>
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-800 text-gray-400 border border-gray-700 flex items-center space-x-1">
+                      <Unlock className="w-3 h-3 text-gray-500" />
+                      <span>Standby</span>
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Automated sequence follow-ups (+3d / +5d) strictly gated on Worker 2 inbox auditing. Only contacts with confirmed zero replies receive follow-ups.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-3">
+              <span className="text-xs font-mono text-gray-400">
+                Processed this session: <strong className="text-white font-bold">{worker3Status?.batch_sent_count || 0}</strong>
+              </span>
+            </div>
+          </div>
+
+          {/* Stepper Pipeline */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs uppercase font-bold text-gray-400 tracking-wider">Follow-Up Pipeline (6 Steps)</span>
+              <span className="text-xs text-amber-400 font-mono font-semibold">
+                {worker3Status?.stage ? `Stage: ${worker3Status.stage}` : 'Stage: Idle'}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+              {FOLLOWUP_STAGES.map((s, idx) => {
+                const isCurrent = worker3Status?.stage === s.key || s.aliases.includes(worker3Status?.stage || '');
+                return (
+                  <div
+                    key={s.key}
+                    className={`flex flex-col items-center p-2 rounded-xl border text-center transition-all ${
+                      isCurrent
+                        ? 'bg-amber-600/30 border-amber-400 text-amber-300 shadow-md shadow-amber-500/20 scale-105'
+                        : 'bg-gray-950/60 border-gray-800 text-gray-500'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-1 mb-1">
+                      <span className={`w-2 h-2 rounded-full ${isCurrent ? 'bg-amber-400 animate-ping' : 'bg-gray-600'}`} />
+                      <span className="text-[10px] font-mono font-bold">Step {idx + 1}</span>
+                    </div>
+                    <span className="text-xs font-semibold truncate w-full">{s.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Batch Selector & Actions Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl bg-gray-950/80 border border-gray-800/80">
+            <div className="flex items-center space-x-3">
+              <span className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/30 flex items-center justify-center font-bold text-amber-400 text-xs">
+                {worker3Status?.batch_sent_count || 0}
+              </span>
+              <div>
+                <span className="text-xs font-bold text-white block">
+                  Batch Target: {worker3Status?.batch_sent_count || 0} / {worker3BatchLimit !== null ? `${worker3BatchLimit} follow-ups` : 'All Available'}
+                </span>
+                <span className="text-[11px] text-gray-400">
+                  Worker 3 respects 15s pacing delay and auto-pauses when batch target is reached.
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Presets */}
+              <div className="flex items-center rounded-xl bg-gray-900 border border-gray-800 p-1">
+                <span className="text-[10px] text-gray-500 uppercase font-bold px-2">Batch:</span>
+                {[1, 3, 5, 10, 25, null].map((val) => (
+                  <button
+                    key={val ?? 'all'}
+                    type="button"
+                    onClick={() => setWorker3BatchLimit(val)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                      worker3BatchLimit === val
+                        ? 'bg-amber-600 text-white shadow'
+                        : 'text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    {val ?? 'All'}
+                  </button>
+                ))}
+              </div>
+
+              {/* Action Buttons */}
+              {worker3Status?.status === 'RUNNING' && !worker3Status?.is_paused ? (
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={handlePauseWorker3}
+                    className="flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-yellow-600 hover:bg-yellow-500 text-white transition active:scale-95 cursor-pointer shadow"
+                  >
+                    <Pause className="w-3.5 h-3.5" />
+                    <span>Pause</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleStopWorker3}
+                    className="flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white transition active:scale-95 cursor-pointer shadow"
+                  >
+                    <Square className="w-3.5 h-3.5" />
+                    <span>Stop</span>
+                  </button>
+                </div>
+              ) : worker3Status?.status === 'PAUSED' || worker3Status?.is_paused ? (
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={handleResumeWorker3}
+                    className="flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white transition active:scale-95 cursor-pointer shadow"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    <span>Resume</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleStopWorker3}
+                    className="flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white transition active:scale-95 cursor-pointer shadow"
+                  >
+                    <Square className="w-3.5 h-3.5" />
+                    <span>Stop</span>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleStartWorker3}
+                  disabled={worker3ActionLoading}
+                  className="flex items-center space-x-2 bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-white px-4 py-2 rounded-xl text-xs font-bold transition shadow hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50"
+                >
+                  {worker3ActionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                  <span>Start Follow-Up Batch</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Detail Cards: Target + Radar + Stream Link */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Target Profile */}
+            <div className="bg-gray-950/60 border border-gray-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-gray-800 pb-2">
+                <span className="text-xs font-bold text-gray-300 flex items-center space-x-1.5">
+                  <User className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Current Follow-Up Target</span>
+                </span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                  {worker3Status?.current_touch || 'Touch 2 / 3'}
+                </span>
+              </div>
+              {worker3Status?.current_contact_name ? (
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-white">{worker3Status.current_contact_name}</h4>
+                  <a
+                    href={worker3Status.current_instagram || '#'}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-amber-400 hover:underline flex items-center space-x-1 font-mono"
+                  >
+                    <span>{worker3Status.current_instagram}</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              ) : (
+                <div className="py-4 text-center text-xs text-gray-500">
+                  <Repeat className="w-6 h-6 mx-auto mb-1 text-gray-600" />
+                  <p>Worker 3 is currently waiting or idle.</p>
+                  <p className="text-[10px]">Start a batch to send scheduled follow-ups.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Inbox Audit Verification Radar */}
+            <div className="bg-gray-950/60 border border-gray-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-gray-800 pb-2">
+                <span className="text-xs font-bold text-gray-300 flex items-center space-x-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Worker 2 Audit Radar</span>
+                </span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
+                  Gated Active
+                </span>
+              </div>
+              <div className="space-y-2 text-xs">
+                <div className="flex items-center justify-between p-2 rounded-lg bg-gray-900 border border-gray-800">
+                  <span className="text-gray-400 text-[11px]">Inbox Pre-Check</span>
+                  <span className="text-emerald-400 font-bold font-mono">ENFORCED</span>
+                </div>
+                <div className="flex items-center justify-between p-2 rounded-lg bg-gray-900 border border-gray-800">
+                  <span className="text-gray-400 text-[11px]">Human Reply Guard</span>
+                  <span className="text-emerald-400 font-bold font-mono">ACTIVE (Auto-Cancels)</span>
+                </div>
+                <p className="text-[10px] text-gray-500 italic">
+                  Worker 3 will never send to prospects flagged with inbound replies by Worker 2.
+                </p>
+              </div>
+            </div>
+
+            {/* Outbound Channel Stream */}
+            <div className="bg-gray-950/60 border border-gray-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-gray-800 pb-2">
+                <span className="text-xs font-bold text-gray-300 flex items-center space-x-1.5">
+                  <Eye className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Outbound Tab Stream</span>
+                </span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-gray-800 text-gray-300">
+                  Shared Tab A
+                </span>
+              </div>
+              <div className="relative rounded-xl overflow-hidden border border-gray-800 bg-black aspect-video flex items-center justify-center shadow-inner">
+                <img
+                  src={outreachStreamError ? `/api/browser/live_feed?worker=outreach&t=${outreachTick}` : "/api/browser/stream/outreach"}
+                  alt="Visible Chrome Tab Stream"
+                  className="w-full h-full object-contain"
+                />
+              </div>
+              <div className="flex items-center justify-between text-[11px] text-gray-400 pt-1">
+                <span className="text-amber-400 font-mono text-[10px] flex items-center space-x-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping inline-block" />
+                  <span>Outbound channel linked</span>
+                </span>
+                <a
+                  href="/api/browser/stream/outreach"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-amber-400 hover:underline inline-flex items-center space-x-1"
                 >
                   <span>Open Full Video</span>
                   <ExternalLink className="w-3 h-3" />

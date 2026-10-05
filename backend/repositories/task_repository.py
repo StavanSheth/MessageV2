@@ -38,18 +38,20 @@ class TaskRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def claim_next_ready(self, worker_id: str) -> Optional[Task]:
+    async def claim_next_ready(self, worker_id: str, task_types: Optional[List[str]] = None) -> Optional[Task]:
         """Atomically find and claim the next ready task."""
         now = datetime.now(timezone.utc)
+        conditions = [
+            Task.status == TaskStatus.READY.value,
+            Task.scheduled_at <= now
+        ]
+        if task_types:
+            conditions.append(Task.type.in_(task_types))
+
         # Select first ready task ordered by priority desc, scheduled_at asc
         stmt = (
             select(Task.id)
-            .where(
-                and_(
-                    Task.status == TaskStatus.READY.value,
-                    Task.scheduled_at <= now
-                )
-            )
+            .where(and_(*conditions))
             .order_by(Task.priority.desc(), Task.scheduled_at.asc())
             .limit(1)
         )

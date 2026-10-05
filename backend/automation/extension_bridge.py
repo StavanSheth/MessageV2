@@ -175,16 +175,22 @@ class ExtensionBridgeManager:
                 logger.warning(f"[ExtensionBridge] Screenshot capture exception: {e}")
         return self._latest_screenshot_data
 
-    async def prepare_and_send(self, message: str) -> Tuple[bool, ResultCode, str]:
+    async def prepare_and_send(self, message: str, check_history: bool = True, task_type: str = "MESSAGE") -> Tuple[bool, ResultCode, str, bool]:
         if not self.is_connected:
-            return False, ResultCode.NETWORK_ERROR, "Extension not connected"
+            return False, ResultCode.NETWORK_ERROR, "Extension not connected", False
         try:
-            res = await self.send_command("PREPARE_AND_SEND_MESSAGE", {"message": message}, timeout=30.0)
+            res = await self.send_command("PREPARE_AND_SEND_MESSAGE", {
+                "message": message,
+                "check_history": check_history,
+                "task_type": task_type
+            }, timeout=30.0)
+            if res.get("already_messaged"):
+                return False, ResultCode.DM_NOT_AVAILABLE, res.get("error", "Existing conversation history detected"), True
             if res.get("success"):
-                return True, ResultCode.SUCCESS, "Message sent successfully"
-            return False, ResultCode.NETWORK_ERROR, res.get("error", "Failed to send message")
+                return True, ResultCode.SUCCESS, "Message sent successfully", False
+            return False, ResultCode.NETWORK_ERROR, res.get("error", "Failed to send message"), False
         except Exception as e:
-            return False, ResultCode.TIMEOUT, str(e)
+            return False, ResultCode.TIMEOUT, str(e), False
 
 # Global singleton
 extension_bridge = ExtensionBridgeManager()
@@ -226,9 +232,11 @@ class ExtensionAdapter:
         self._pending_message = text
         return True, "Prepared"
 
-    async def send_message(self) -> Tuple[bool, str]:
-        success, code, reason = await self.bridge.prepare_and_send(self._pending_message)
-        return success, reason
+    async def send_message(self, check_history: bool = True, task_type: str = "MESSAGE") -> Tuple[bool, str, bool]:
+        success, code, reason, already_messaged = await self.bridge.prepare_and_send(
+            self._pending_message, check_history=check_history, task_type=task_type
+        )
+        return success, reason, already_messaged
 
     async def detect_send_result(self) -> Tuple[ResultCode, str]:
         return ResultCode.SUCCESS, "Delivered"

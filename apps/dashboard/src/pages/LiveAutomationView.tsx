@@ -88,6 +88,15 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    if (streamError) {
+      const retryTimer = setTimeout(() => {
+        setStreamError(false);
+      }, 10000);
+      return () => clearTimeout(retryTimer);
+    }
+  }, [streamError]);
+
   const handleOpenChrome = async () => {
     setIsOpeningBrowser(true);
     try {
@@ -618,14 +627,28 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block mr-1" />
                     {!streamError ? "Isolated Live Video Stream (Real-Time)" : "Live session sync (2s auto-refresh)"}
                   </span>
-                  <a
-                    href={streamError ? `/api/browser/live_feed?t=${liveTick}` : "/api/browser/stream"}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-indigo-400 hover:underline flex items-center space-x-1 text-[11px]"
-                  >
-                    <span>Open Full Stream</span>
-                  </a>
+                  <div className="flex items-center space-x-3">
+                    <button
+                      onClick={() => {
+                        setStreamError(false);
+                        setFeedError(false);
+                        setLiveTick(Date.now());
+                      }}
+                      title="Reconnect live stream"
+                      className="text-gray-400 hover:text-white transition flex items-center space-x-1 text-[11px] cursor-pointer"
+                    >
+                      <RefreshCw className="w-3 h-3 text-indigo-400" />
+                      <span>Refresh Stream</span>
+                    </button>
+                    <a
+                      href={streamError ? `/api/browser/live_feed?t=${liveTick}` : "/api/browser/stream"}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-indigo-400 hover:underline flex items-center space-x-1 text-[11px]"
+                    >
+                      <span>Open Full Stream</span>
+                    </a>
+                  </div>
                 </div>
               </div>
             </div>

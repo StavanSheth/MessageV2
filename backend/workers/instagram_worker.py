@@ -551,6 +551,18 @@ class InstagramWorker:
                     self.current_task_id = None
                     return
 
+            # Anti-duplicate DB guard: check if contact was already messaged
+            async with AsyncSessionLocal() as session:
+                msg_repo = MessageRepository(session)
+                existing_msgs = await msg_repo.list_by_contact(contact.id)
+                sent_msgs = [m for m in existing_msgs if m.status == "SENT"]
+                if sent_msgs and task.type == "MESSAGE":
+                    logger.info(f"[Worker] Contact {contact.name} already has {len(sent_msgs)} SENT message(s) in DB. Marking task COMPLETED to prevent duplicate send.")
+                    task_repo = TaskRepository(session)
+                    await task_repo.update_status(task_id, TaskStatus.COMPLETED)
+                    self.current_task_id = None
+                    return
+
             # Create message record
             async with AsyncSessionLocal() as session:
                 msg_repo = MessageRepository(session)
@@ -569,8 +581,33 @@ class InstagramWorker:
             await event_bus.publish(EventCode.MESSAGE_ATTEMPTED, task_id=task_id, worker_id=WORKER_ID,
                                     payload={"body": message_body})
 
-            sent, send_reason = await adapter.send_message()
+            check_history = (task.type == "MESSAGE")
+            if isinstance(adapter, ExtensionAdapter):
+                sent, send_reason, already_messaged = await adapter.send_message(check_history=check_history, task_type=task.type)
+            else:
+                sent, send_reason = await adapter.send_message()
+                already_messaged = False
+
             await take_shot("message_attempted")
+
+            if already_messaged:
+                logger.warning(f"[Worker] Contact {contact.name} already has prior conversation history on Instagram! Skipping initial outreach.")
+                async with AsyncSessionLocal() as session:
+                    task_repo = TaskRepository(session)
+                    await task_repo.update_status(task_id, TaskStatus.SKIPPED)
+                    contact_repo = ContactRepository(session)
+                    await contact_repo.update(contact.id, {"replied_status": "EXISTING_HISTORY", "notes": "Existing Instagram DM history detected"})
+                    # Delete the pending message record created for this skipped attempt
+                    msg_repo = MessageRepository(session)
+                    await msg_repo.update_result(msg_id, "SKIPPED", "ALREADY_MESSAGED")
+                await event_bus.publish(
+                    EventCode.TASK_SKIPPED,
+                    task_id=task_id,
+                    worker_id=WORKER_ID,
+                    payload={"reason": "Existing conversation history detected on Instagram", "code": "ALREADY_MESSAGED"}
+                )
+                self.current_task_id = None
+                return
 
             # ── Detect Result ─────────────────────────────────
             await self._set_stage(AutomationStage.DETECTING_RESULT, contact.name, task_id=task_id)

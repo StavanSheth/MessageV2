@@ -416,11 +416,13 @@ async function handleCommand(msg) {
 
   if (action === "PREPARE_AND_SEND_MESSAGE") {
     const messageText = payload.message || "Hey";
+    const checkHistory = payload.check_history !== false && (payload.task_type === "MESSAGE" || !payload.task_type);
+    const taskType = payload.task_type || "MESSAGE";
 
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      args: [messageText],
-      func: async (textToSend) => {
+      args: [messageText, checkHistory, taskType],
+      func: async (textToSend, shouldCheckHistory, currentTaskType) => {
         // 1. Click message button if not in DM thread
         if (!window.location.href.includes("/direct/t/")) {
           const buttons = Array.from(document.querySelectorAll('div[role="button"], button'));
@@ -434,9 +436,14 @@ async function handleCommand(msg) {
           }
         }
 
-        // Dismiss any notification popup
-        const notNow = Array.from(document.querySelectorAll('button')).find(b => b.innerText.toLowerCase().includes("not now"));
-        if (notNow) notNow.click();
+        // Dismiss any notification or save info popup
+        const notNowButtons = Array.from(document.querySelectorAll('button, div[role="button"]')).filter(b => {
+          const t = b.innerText.toLowerCase();
+          return t.includes("not now") || t.includes("cancel");
+        });
+        for (const btn of notNowButtons) {
+          try { btn.click(); } catch (e) {}
+        }
 
         // 2. Find message composer (contenteditable or textarea)
         let composer = null;
@@ -450,43 +457,105 @@ async function handleCommand(msg) {
           return { success: false, error: "Message composer not found" };
         }
 
-        // Focus & Type message (compatible with background tabs)
-        composer.focus();
-
-        try {
-          const beforeInput = new InputEvent('beforeinput', {
-            bubbles: true,
-            cancelable: true,
-            inputType: 'insertText',
-            data: textToSend
+        // 3. Detect existing conversation history (Anti-Duplicate Contact Guard)
+        if (shouldCheckHistory) {
+          // Identify the active DM thread container
+          const chatPane = composer.closest('div[role="main"]') || document.querySelector('div[role="main"]') || document.body;
+          
+          // Check for message rows in Instagram's virtualized thread grid
+          const msgRows = Array.from(chatPane.querySelectorAll('div[role="row"], div[role="listitem"]'));
+          
+          // Check for existing message bubbles inside active thread
+          const threadBubbles = Array.from(chatPane.querySelectorAll('div[dir="auto"], span[dir="auto"]')).filter(el => {
+            if (composer.contains(el)) return false;
+            if (el.closest('header') || el.closest('nav') || el.closest('[role="navigation"]')) return false;
+            const txt = el.innerText?.trim();
+            if (!txt || txt === "Message..." || txt === "View Profile" || txt === "Search" || txt === "Primary" || txt === "General" || txt === "Requests") return false;
+            return txt.length > 1;
           });
-          composer.dispatchEvent(beforeInput);
+
+          if (msgRows.length > 0 || threadBubbles.length > 0) {
+            return {
+              success: false,
+              already_messaged: true,
+              error: `Existing conversation history detected with this contact (${msgRows.length} rows, ${threadBubbles.length} bubbles)`
+            };
+          }
+        }
+
+        // 4. Focus & Clean Composer (Ensure no stale drafts or duplicates)
+        composer.focus();
+        try {
+          document.execCommand('selectAll', false, null);
+          document.execCommand('delete', false, null);
         } catch (e) {}
 
-        const execOk = document.execCommand('insertText', false, textToSend);
+        if (composer.innerText && composer.innerText.trim() !== '') {
+          composer.innerText = '';
+          composer.dispatchEvent(new Event('input', { bubbles: true }));
+        }
 
-        if (!execOk || !composer.innerText || composer.innerText.trim() === '') {
+        // 5. Insert text ONCE (Never fire beforeinput and execCommand sequentially)
+        let inserted = false;
+        try {
+          inserted = document.execCommand('insertText', false, textToSend);
+        } catch (e) {
+          inserted = false;
+        }
+
+        let currentText = (composer.innerText || composer.textContent || '').trim();
+        if (!inserted || currentText !== textToSend.trim()) {
           composer.innerText = textToSend;
           composer.dispatchEvent(new Event('input', { bubbles: true }));
           composer.dispatchEvent(new Event('change', { bubbles: true }));
         }
 
+        // Sanity Check: Truncate if text was duplicated by browser
+        currentText = (composer.innerText || composer.textContent || '').trim();
+        if (currentText.length > textToSend.trim().length && currentText.startsWith(textToSend.trim())) {
+          composer.innerText = textToSend;
+          composer.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
         await new Promise(r => setTimeout(r, 600));
 
-        // 3. Send message (press Enter or click Send button)
-        const sendBtn = Array.from(document.querySelectorAll('div[role="button"], button')).find(b => b.innerText.trim().toLowerCase() === "send");
+        // 6. Send message (Single dispatch via Send button or Enter)
+        const sendBtn = Array.from(document.querySelectorAll('div[role="button"], button')).find(b => {
+          const t = b.innerText.trim().toLowerCase();
+          return (t === "send" || t === "send message") && b.offsetParent !== null;
+        });
+
         if (sendBtn) {
           sendBtn.click();
         } else {
           composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
         }
 
-        await new Promise(r => setTimeout(r, 1200));
+        // Wait and confirm composer was cleared by Instagram
+        let cleared = false;
+        for (let i = 0; i < 10; i++) {
+          await new Promise(r => setTimeout(r, 200));
+          const afterText = (composer.innerText || composer.textContent || '').trim();
+          if (afterText === '' || afterText === 'Message...') {
+            cleared = true;
+            break;
+          }
+        }
+
+        if (!cleared && sendBtn) {
+          composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+          await new Promise(r => setTimeout(r, 600));
+        }
+
         return { success: true };
       }
     });
 
-    return { success: result?.result?.success || false, error: result?.result?.error };
+    return {
+      success: result?.result?.success || false,
+      already_messaged: result?.result?.already_messaged || false,
+      error: result?.result?.error
+    };
   }
 
   if (action === "SCREENSHOT") {

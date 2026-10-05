@@ -14,6 +14,7 @@ VALID_TASK_TRANSITIONS: Dict[TaskStatus, Set[TaskStatus]] = {
     TaskStatus.READY: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
     TaskStatus.RUNNING: {
         TaskStatus.COMPLETED,
+        TaskStatus.READY,
         TaskStatus.RETRY_WAIT,
         TaskStatus.MANUAL_REVIEW,
         TaskStatus.SKIPPED,

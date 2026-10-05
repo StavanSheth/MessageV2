@@ -77,7 +77,9 @@ class TaskRepository:
         return None
 
     async def update_status(self, task_id: str, new_status: TaskStatus,
-                            last_error_id: Optional[str] = None) -> Optional[Task]:
+                            last_error_id: Optional[str] = None,
+                            worker_id: Optional[str] = None,
+                            **kwargs) -> Optional[Task]:
         task = await self.get_by_id(task_id)
         if not task:
             return None
@@ -94,6 +96,8 @@ class TaskRepository:
             values["completed_at"] = now
         if last_error_id:
             values["last_error_id"] = last_error_id
+        if "worker_id" in kwargs or worker_id is not None or "worker_id" in values:
+            values["worker_id"] = worker_id
 
         stmt = update(Task).where(Task.id == task_id).values(**values)
         await self.session.execute(stmt)

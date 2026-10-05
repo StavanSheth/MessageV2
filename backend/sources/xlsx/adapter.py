@@ -68,59 +68,74 @@ class LocalXlsxSource(SourceAdapter):
                 url = ""
             return url, username
 
-    async def read_records(self) -> List[Dict[str, Any]]:
-        if not self.workbook:
-            await self.open()
-
-        rows = list(self.sheet.iter_rows(values_only=True))
+    def _parse_sheet_rows(self, sheet_name: str, rows: list) -> Tuple[List[Dict[str, Any]], bool, Optional[str]]:
         if not rows:
-            return []
+            return [], False, "Empty sheet"
 
-        # Find header row by scanning first 10 rows
-        header_row_idx = 0
+        # Find header row by scanning first 15 rows
+        header_row_idx = None
         col_map = {}
-        for r_i, r in enumerate(rows[:10]):
+        for r_i, r in enumerate(rows[:15]):
             test_map = {}
             for idx, col in enumerate(r):
+                if col is None:
+                    continue
                 norm = self._normalize_header(col)
-                if norm:
+                # Ignore long paragraphs or sentences that are instructions, not column headers
+                if norm and len(norm) <= 35 and len(norm.split()) <= 5:
                     test_map[norm] = idx
-            # Check if this row looks like header: has instagram/ig or (name/client and multiple cols)
-            has_ig = any("instagram" in k or "ig" in k or "profile" in k or "social" in k for k in test_map)
-            has_name = any("name" in k or "client" in k or "contact" in k or "handle" in k for k in test_map)
+
+            # Must have at least 2 columns in a valid outreach table
+            if len(test_map) < 2:
+                continue
+
+            has_ig = any(
+                any(token in k.split() for token in ["instagram", "ig", "insta", "username", "handle"]) or
+                k in ["instagram id/ link", "instagram id", "instagram link", "instagram url", "profile url", "ig handle"]
+                for k in test_map
+            )
+            has_name = any(token in k.split() for token in ["name", "client", "contact", "lead", "user"] for k in test_map)
+
             if has_ig or (has_name and len(test_map) >= 3):
                 header_row_idx = r_i
                 col_map = test_map
                 break
 
-        if not col_map and rows:
-            for idx, col in enumerate(rows[0]):
-                norm = self._normalize_header(col)
-                if norm:
-                    col_map[norm] = idx
+        if header_row_idx is None:
+            return [], False, f"No recognized header row found in sheet '{sheet_name}'"
 
-        # Determine column indexes
+        # Determine column indexes with bounded alias matching
         def find_col(*aliases):
             for alias in aliases:
                 for norm, idx in col_map.items():
-                    if alias in norm or norm in alias:
+                    if alias == norm or alias in norm.split():
+                        return idx
+                for norm, idx in col_map.items():
+                    if len(norm) <= 30 and (alias in norm or norm in alias):
                         return idx
             return None
 
-        name_idx = find_col("client name", "client", "full name", "name", "contact", "user", "lead")
-        ig_idx = find_col("instagram id/ link", "instagram id", "instagram link", "instagram url", "instagram", "username", "profile url", "ig", "social")
-        msg_idx = find_col("message", "dm", "text", "body", "initial message", "reason")
-        followers_idx = find_col("expected followers", "followers", "follower count")
-        notes_idx = find_col("notes", "note", "comment", "remarks")
-        fu1_msg_idx = find_col("follow up 1 message", "follow-up 1 message", "followup 1 message", "fu1 message", "follow up 1", "follow-up 1", "fu1", "1st follow up")
-        fu1_delay_idx = find_col("follow up 1 delay", "follow-up 1 delay", "followup 1 delay", "fu1 delay", "delay 1")
-        fu2_msg_idx = find_col("follow up 2 message", "follow-up 2 message", "followup 2 message", "fu2 message", "follow up 2", "follow-up 2", "fu2", "2nd follow up")
-        fu2_delay_idx = find_col("follow up 2 delay", "follow-up 2 delay", "followup 2 delay", "fu2 delay", "delay 2")
-        replied_idx = find_col("replied status", "replied", "reply status", "has replied")
+        name_idx = find_col("client name", "client", "full name", "lead name", "lead", "contact", "user", "name", "person")
+        ig_idx = find_col(
+            "instagram id/ link", "instagram id", "instagram link", "instagram url", "instagram profile",
+            "ig handle", "ig username", "ig url", "profile url", "profile link", "instagram", "username",
+            "ig link", "profile", "handle", "ig", "social link", "social", "account"
+        )
+        msg_idx = find_col("message", "dm", "text", "body", "initial message", "reason", "copy", "script", "first message")
+        followers_idx = find_col("expected followers", "followers", "follower count", "following")
+        notes_idx = find_col("notes", "note", "comment", "remarks", "details", "category", "industry")
+        fu1_msg_idx = find_col("follow up 1 message", "follow-up 1 message", "followup 1 message", "fu1 message", "follow up 1", "follow-up 1", "fu1", "1st follow up", "touch 2")
+        fu1_delay_idx = find_col("follow up 1 delay", "follow-up 1 delay", "followup 1 delay", "fu1 delay", "delay 1", "interval 1")
+        fu2_msg_idx = find_col("follow up 2 message", "follow-up 2 message", "followup 2 message", "fu2 message", "follow up 2", "follow-up 2", "fu2", "2nd follow up", "touch 3")
+        fu2_delay_idx = find_col("follow up 2 delay", "follow-up 2 delay", "followup 2 delay", "fu2 delay", "delay 2", "interval 2")
+        replied_idx = find_col("replied status", "replied", "reply status", "has replied", "status")
+
+        # If this sheet lacks an Instagram column, it is not an outreach lead sheet (e.g. Instructions, Summary)
+        if ig_idx is None:
+            return [], False, f"Sheet '{sheet_name}' lacks an Instagram column (checked {len(col_map)} headers)"
 
         records = []
         for row_idx, row in enumerate(rows[header_row_idx + 1:], start=header_row_idx + 2):
-
             # Skip empty rows
             if not any(cell is not None and str(cell).strip() != "" for cell in row):
                 continue
@@ -132,14 +147,15 @@ class LocalXlsxSource(SourceAdapter):
             name_val = str(row[name_idx]).strip() if name_idx is not None and name_idx < len(row) and row[name_idx] is not None else ""
             ig_val = str(row[ig_idx]).strip() if ig_idx is not None and ig_idx < len(row) and row[ig_idx] is not None else ""
             msg_val = str(row[msg_idx]).strip() if msg_idx is not None and msg_idx < len(row) and row[msg_idx] is not None else ""
+            
             followers_val = None
             if followers_idx is not None and followers_idx < len(row) and row[followers_idx] is not None:
                 try:
                     followers_val = int(re.sub(r"[^\d]", "", str(row[followers_idx])))
                 except Exception:
                     followers_val = None
-            notes_val = str(row[notes_idx]).strip() if notes_idx is not None and notes_idx < len(row) and row[notes_idx] is not None else None
 
+            notes_val = str(row[notes_idx]).strip() if notes_idx is not None and notes_idx < len(row) and row[notes_idx] is not None else None
             fu1_msg_val = str(row[fu1_msg_idx]).strip() if fu1_msg_idx is not None and fu1_msg_idx < len(row) and row[fu1_msg_idx] is not None else None
             fu2_msg_val = str(row[fu2_msg_idx]).strip() if fu2_msg_idx is not None and fu2_msg_idx < len(row) and row[fu2_msg_idx] is not None else None
 
@@ -212,6 +228,7 @@ class LocalXlsxSource(SourceAdapter):
                 }
 
             records.append({
+                "sheet_name": sheet_name,
                 "row_number": row_idx,
                 "raw": raw_dict,
                 "normalized": norm_data,
@@ -219,7 +236,40 @@ class LocalXlsxSource(SourceAdapter):
                 "error": error_msg
             })
 
-        return records
+        return records, True, None
+
+    async def read_records(self) -> List[Dict[str, Any]]:
+        if not self.workbook:
+            await self.open()
+
+        all_records = []
+        self.sheets_processed = []
+        self.sheets_skipped = []
+
+        worksheets = self.workbook.worksheets if hasattr(self.workbook, "worksheets") else [self.sheet]
+
+        for ws in worksheets:
+            sheet_rows = list(ws.iter_rows(values_only=True))
+            if not sheet_rows:
+                self.sheets_skipped.append({"sheet": ws.title, "reason": "Empty worksheet"})
+                continue
+
+            records, has_leads, reason = self._parse_sheet_rows(ws.title, sheet_rows)
+            if has_leads:
+                all_records.extend(records)
+                self.sheets_processed.append({"sheet": ws.title, "records_count": len(records)})
+            else:
+                self.sheets_skipped.append({"sheet": ws.title, "reason": reason or "No lead columns found"})
+
+        # If zero sheets contained leads, raise explicit Column Mismatch error
+        if not all_records:
+            sheet_names = [ws.title for ws in worksheets]
+            raise ValueError(
+                f"Column Mismatch Error: Could not find an Instagram identifier column (e.g. 'Instagram', 'Username', 'IG Handle') "
+                f"in any worksheet. Checked sheets: {sheet_names}"
+            )
+
+        return all_records
 
     async def atomic_write_back(self, updates: Dict[str, Any], check_conflict: bool = True) -> Tuple[bool, str]:
         if not os.path.exists(self.file_path):
@@ -329,7 +379,9 @@ class LocalXlsxSource(SourceAdapter):
             "total": len(records),
             "valid": valid,
             "invalid": len(records) - valid,
-            "records": records
+            "records": records,
+            "sheets_processed": getattr(self, "sheets_processed", []),
+            "sheets_skipped": getattr(self, "sheets_skipped", [])
         }
 
     async def close(self) -> None:

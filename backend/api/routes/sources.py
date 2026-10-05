@@ -42,12 +42,18 @@ async def upload_xlsx(file: UploadFile = File(...), db: AsyncSession = Depends(g
 
     adapter = LocalXlsxSource(str(dest))
     try:
-        result = await adapter.sync()
+        try:
+            result = await adapter.sync()
+        except ValueError as ve:
+            logger.warning(f"Spreadsheet import column mismatch: {ve}")
+            raise HTTPException(400, detail=str(ve))
+
         records = result["records"]
         valid_count = result["valid"]
         invalid_count = result["invalid"]
 
         imported = 0
+        existing_contacts_updated = 0
         previously_messaged_count = 0
         try:
             from backend.database.models import OutreachHistory
@@ -99,6 +105,7 @@ async def upload_xlsx(file: UploadFile = File(...), db: AsyncSession = Depends(g
                     await event_repo.log_event(EventCode.CONTACT_CREATED, {"contact_id": contact.id, "name": contact.name})
                     await event_repo.log_event(EventCode.TASK_CREATED, {"contact_id": contact.id})
                 else:
+                    existing_contacts_updated += 1
                     # Link source record to existing contact and enrich empty fields
                     if norm.get("notes") and not existing.notes:
                         existing.notes = norm.get("notes")
@@ -106,6 +113,16 @@ async def upload_xlsx(file: UploadFile = File(...), db: AsyncSession = Depends(g
                         existing.followup_1_message = norm.get("followup_1_message")
                     if norm.get("followup_2_message") and not existing.followup_2_message:
                         existing.followup_2_message = norm.get("followup_2_message")
+                    if norm.get("expected_followers") and not existing.expected_followers:
+                        existing.expected_followers = norm.get("expected_followers")
+                    # If existing contact has an unsent MESSAGE task and sheet supplies custom copy, refresh it
+                    if norm.get("message") and norm["message"] not in ["Hey", ""]:
+                        m_task_stmt = select(Task).where(
+                            and_(Task.contact_id == existing.id, Task.type == "MESSAGE", Task.status.in_(["READY", "CREATED", "QUEUED"]))
+                        )
+                        m_task = (await db.execute(m_task_stmt)).scalar_one_or_none()
+                        if m_task:
+                            existing.message = norm["message"]
 
             await source_repo.update_counts(source.id, len(records), valid_count, invalid_count, imported)
             await db.commit()
@@ -114,7 +131,18 @@ async def upload_xlsx(file: UploadFile = File(...), db: AsyncSession = Depends(g
             logger.error(f"Failed to process source import: {e}", exc_info=True)
             raise HTTPException(500, f"Failed to import records: {str(e)}")
 
-        payload = {"source_id": source.id, "total": len(records), "valid": valid_count, "invalid": invalid_count, "imported": imported, "previously_contacted": previously_messaged_count}
+        payload = {
+            "source_id": source.id,
+            "total": len(records),
+            "valid": valid_count,
+            "invalid": invalid_count,
+            "imported": imported,
+            "new_contacts_created": imported,
+            "existing_contacts_updated": existing_contacts_updated,
+            "previously_contacted": previously_messaged_count,
+            "sheets_processed": result.get("sheets_processed", []),
+            "sheets_skipped": result.get("sheets_skipped", [])
+        }
         await event_repo.log_event(EventCode.SOURCE_IMPORTED, payload)
         await event_bus.publish(EventCode.SOURCE_IMPORTED, payload)
 
@@ -127,7 +155,11 @@ async def upload_xlsx(file: UploadFile = File(...), db: AsyncSession = Depends(g
             "invalid": invalid_count,
             "imported": imported,
             "tasks_created": imported,
+            "new_contacts_created": imported,
+            "existing_contacts_updated": existing_contacts_updated,
             "previously_contacted": previously_messaged_count,
+            "sheets_processed": result.get("sheets_processed", []),
+            "sheets_skipped": result.get("sheets_skipped", []),
             "status": "ok"
         }
     finally:

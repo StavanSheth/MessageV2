@@ -37,3 +37,54 @@ async def test_parse_in_memory_xlsx(tmp_path):
     assert records[0]["normalized"]["name"] == "Alice Smith"
     assert records[0]["normalized"]["message"] == "Hello Alice!"
     assert records[1]["normalized"]["username"] == "bobjones"
+
+@pytest.mark.asyncio
+async def test_multisheet_filters_irrelevant_data(tmp_path):
+    wb = openpyxl.Workbook()
+    # Sheet 1: Irrelevant Instructions / Notes
+    ws_notes = wb.active
+    ws_notes.title = "Instructions"
+    ws_notes.append(["How to Use This Template"])
+    ws_notes.append(["Please enter lead handles in the Leads tab below."])
+    ws_notes.append(["Do not edit columns."])
+
+    # Sheet 2: Real Leads
+    ws_leads = wb.create_sheet(title="October Leads")
+    ws_leads.append(["Lead Name", "IG Handle", "Notes"])
+    ws_leads.append(["Dave Miller", "@davemiller", "Priority"])
+    ws_leads.append(["Eve Adams", "https://instagram.com/eveadams", "VIP"])
+
+    # Sheet 3: Summary / Empty
+    ws_summary = wb.create_sheet(title="Dashboard Summary")
+    ws_summary.append(["Metric", "Count"])
+    ws_summary.append(["Total Sent", 0])
+
+    file_path = tmp_path / "multisheet_leads.xlsx"
+    wb.save(file_path)
+
+    adapter = LocalXlsxSource(file_path=str(file_path))
+    result = await adapter.sync()
+    
+    assert result["total"] == 2
+    assert result["valid"] == 2
+    assert len(result["sheets_processed"]) == 1
+    assert result["sheets_processed"][0]["sheet"] == "October Leads"
+    assert len(result["sheets_skipped"]) == 2
+
+@pytest.mark.asyncio
+async def test_column_mismatch_raises_informative_error(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "RandomData"
+    ws.append(["First Name", "City", "Company", "Phone"])
+    ws.append(["John", "New York", "Acme", "555-1234"])
+
+    file_path = tmp_path / "missing_ig_column.xlsx"
+    wb.save(file_path)
+
+    adapter = LocalXlsxSource(file_path=str(file_path))
+    with pytest.raises(ValueError) as exc_info:
+        await adapter.read_records()
+    assert "Column Mismatch Error" in str(exc_info.value)
+    assert "RandomData" in str(exc_info.value)
+

@@ -7,6 +7,8 @@ export type TaskStatus =
   | 'COMPLETED'
   | 'RETRY_WAIT'
   | 'MANUAL_REVIEW'
+  | 'AWAITING_APPROVAL'
+  | 'APPROVED'
   | 'SKIPPED'
   | 'CANCELLED'
   | 'INTERRUPTED'

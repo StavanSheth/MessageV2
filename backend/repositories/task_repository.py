@@ -212,3 +212,17 @@ class TaskRepository:
         await self.session.commit()
         return await self.get_by_id(task_id)
 
+    async def approve_task(self, task_id: str, approved_by: str = "operator") -> Optional[Task]:
+        return await self.update_status(
+            task_id,
+            TaskStatus.READY,
+            manual_review_reason=f"Approved by {approved_by}"
+        )
+
+    async def reject_task(self, task_id: str, reason: str = "Rejected by operator") -> Optional[Task]:
+        return await self.update_status(
+            task_id,
+            TaskStatus.CANCELLED,
+            manual_review_reason=f"Rejected: {reason}"
+        )
+

@@ -265,51 +265,62 @@ async def confirm_followups(req: FollowUpReviewRequest, db: AsyncSession = Depen
     """Approve and re-queue follow-up tasks for replied contacts or tasks in review."""
     from backend.database.models import Task
     from sqlalchemy import select, and_, or_
-    stmt = select(Task).where(Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]))
     conds = []
     if req.task_ids:
         conds.append(Task.id.in_(req.task_ids))
     if req.contact_ids:
         conds.append(Task.contact_id.in_(req.contact_ids))
+    
     if conds:
-        stmt = stmt.where(or_(*conds))
+        stmt = select(Task).where(or_(*conds))
     else:
-        # If no specific IDs provided, approve all tasks waiting in MANUAL_REVIEW with REPLY_RECEIVED
-        stmt = stmt.where(and_(Task.status == TaskStatus.MANUAL_REVIEW.value, Task.manual_review_reason.like("%REPLY_RECEIVED%")))
+        # If no specific IDs provided, approve all tasks waiting in MANUAL_REVIEW with REPLY_RECEIVED or AWAITING_APPROVAL
+        stmt = select(Task).where(
+            or_(
+                and_(Task.status == TaskStatus.MANUAL_REVIEW.value, Task.manual_review_reason.like("%REPLY_RECEIVED%")),
+                Task.status == TaskStatus.AWAITING_APPROVAL.value
+            )
+        )
     
     tasks = (await db.execute(stmt)).scalars().all()
     repo = TaskRepository(db)
     confirmed_count = 0
     now = datetime.now(timezone.utc)
     for t in tasks:
-        await repo.update_status(t.id, TaskStatus.READY, manual_review_reason=f"Approved by user for follow-up dispatch at {now.strftime('%b %d, %H:%M')}")
+        await repo.update_status(t.id, TaskStatus.READY, manual_review_reason=f"Approved by user for dispatch at {now.strftime('%b %d, %H:%M')}")
         confirmed_count += 1
     
-    return {"confirmed_count": confirmed_count}
+    return {"status": "ok", "updated_count": confirmed_count, "confirmed_count": confirmed_count}
 
 @router.post("/cancel-followups")
 async def cancel_followups(req: FollowUpReviewRequest, db: AsyncSession = Depends(get_db)):
-    """Cancel follow-up tasks for replied contacts so no further message is sent."""
+    """Cancel follow-up tasks for replied contacts or rejected review tasks so no message is sent."""
     from backend.database.models import Task
     from sqlalchemy import select, and_, or_
-    stmt = select(Task).where(Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]))
     conds = []
     if req.task_ids:
         conds.append(Task.id.in_(req.task_ids))
     if req.contact_ids:
         conds.append(Task.contact_id.in_(req.contact_ids))
+    
     if conds:
-        stmt = stmt.where(or_(*conds))
+        stmt = select(Task).where(or_(*conds))
     else:
-        stmt = stmt.where(and_(Task.status == TaskStatus.MANUAL_REVIEW.value, Task.manual_review_reason.like("%REPLY_RECEIVED%")))
+        stmt = select(Task).where(
+            and_(
+                Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]),
+                Task.status == TaskStatus.MANUAL_REVIEW.value,
+                Task.manual_review_reason.like("%REPLY_RECEIVED%")
+            )
+        )
     
     tasks = (await db.execute(stmt)).scalars().all()
     repo = TaskRepository(db)
     cancelled_count = 0
     for t in tasks:
-        await repo.update_status(t.id, TaskStatus.CANCELLED, manual_review_reason="Follow-up cancelled by user review")
+        await repo.update_status(t.id, TaskStatus.CANCELLED, manual_review_reason="Cancelled by user review")
         cancelled_count += 1
     
-    return {"cancelled_count": cancelled_count}
+    return {"status": "ok", "cancelled_count": cancelled_count}
 
 

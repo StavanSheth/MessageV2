@@ -137,8 +137,8 @@ class FollowUpWorker:
         if task_to_cancel and not task_to_cancel.done():
             task_to_cancel.cancel()
             try:
-                await asyncio.wait_for(asyncio.shield(task_to_cancel), timeout=2.0)
-            except (Exception, asyncio.CancelledError):
+                await asyncio.wait_for(task_to_cancel, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
                 pass
 
         if self.current_task_id:
@@ -154,6 +154,7 @@ class FollowUpWorker:
 
         self.status = WorkerStatus.STOPPED
         self.stage = AutomationStage.IDLE
+        self.is_dispatching_dm = False
         await self._update_worker_db(status="STOPPED", current_stage="IDLE")
         await event_bus.publish(EventCode.WORKER_STOPPED, worker_id=WORKER_ID)
         await event_bus.publish_state(await self.health())

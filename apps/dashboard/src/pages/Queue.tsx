@@ -32,8 +32,11 @@ export interface ErrorCategoryInfo {
 export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   const rawCat = (task.error_category || task.error_code || '').toUpperCase();
   const rawMsg = (task.error_message || task.last_error || task.manual_review_reason || '');
-  
-  if (!rawCat && !rawMsg && task.status !== 'MANUAL_REVIEW' && task.status !== 'RETRY_WAIT') {
+  const statusStr = (task.status || '').toUpperCase();
+  const isAttentionStatus = ['MANUAL_REVIEW', 'RETRY_WAIT', 'AWAITING_APPROVAL', 'RECONCILING', 'FAILED', 'INTERRUPTED', 'SKIPPED'].includes(statusStr);
+  const hasRepliedStatus = task.contact?.replied_status === 'DM_RESTRICTED' || task.contact?.replied_status === 'YES' || task.contact?.replied_status === 'AUTOMATED_MESSAGE';
+
+  if (!rawCat && !rawMsg && !isAttentionStatus && !hasRepliedStatus) {
     return null;
   }
 
@@ -42,6 +45,23 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   const matchedTag = tagMatch ? tagMatch[1].toUpperCase() : rawCat;
   const cleanMsg = tagMatch ? tagMatch[2].trim() : rawMsg.trim();
 
+  // 1. Awaiting Approval
+  if (
+    statusStr === 'AWAITING_APPROVAL' ||
+    matchedTag.includes('AWAITING_APPROVAL') ||
+    matchedTag.includes('APPROVAL') ||
+    cleanMsg.toLowerCase().includes('awaiting approval') ||
+    cleanMsg.toLowerCase().includes('manual approval')
+  ) {
+    return {
+      tag: 'AWAITING_APPROVAL',
+      label: 'Approval Required',
+      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold',
+      description: cleanMsg || 'Identity verification confidence was medium. Operator approval required before dispatch.'
+    };
+  }
+
+  // 2. Page not found / 404
   if (matchedTag.includes('PAGE_NOT_FOUND') || cleanMsg.toLowerCase().includes('page not found') || cleanMsg.toLowerCase().includes('404')) {
     return {
       tag: 'PAGE_NOT_FOUND',
@@ -51,11 +71,14 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
     };
   }
 
+  // 3. DM Restricted
   if (
     matchedTag.includes('DM_RESTRICTED') ||
     cleanMsg.toLowerCase().includes('does not accept') ||
     cleanMsg.toLowerCase().includes('message button not available') ||
-    cleanMsg.toLowerCase().includes('no message button')
+    cleanMsg.toLowerCase().includes('no message button') ||
+    cleanMsg.toLowerCase().includes('restricted') ||
+    task.contact?.replied_status === 'DM_RESTRICTED'
   ) {
     return {
       tag: 'DM_RESTRICTED',
@@ -65,6 +88,7 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
     };
   }
 
+  // 4. External message detected
   if (
     matchedTag.includes('EXTERNAL_MESSAGE_DETECTED') ||
     cleanMsg.toLowerCase().includes('external message') ||
@@ -78,11 +102,15 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
     };
   }
 
+  // 5. Reply received / inbound response
   if (
     matchedTag.includes('REPLY_RECEIVED') ||
     cleanMsg.toLowerCase().includes('reply received') ||
     cleanMsg.toLowerCase().includes('already replied') ||
-    task.contact?.has_replied
+    cleanMsg.toLowerCase().includes('contact replied') ||
+    task.contact?.has_replied ||
+    task.contact?.replied_status === 'YES' ||
+    task.contact?.replied_status === 'AUTOMATED_MESSAGE'
   ) {
     return {
       tag: 'REPLY_RECEIVED',
@@ -92,6 +120,22 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
     };
   }
 
+  // 6. Existing conversation history
+  if (
+    matchedTag.includes('EXISTING_HISTORY') ||
+    matchedTag.includes('ALREADY_MESSAGED') ||
+    cleanMsg.toLowerCase().includes('existing') ||
+    cleanMsg.toLowerCase().includes('prior conversation')
+  ) {
+    return {
+      tag: 'EXISTING_HISTORY',
+      label: 'Prior Chat History',
+      badgeClass: 'bg-sky-500/20 text-sky-300 border-sky-500/40',
+      description: cleanMsg || 'Prior conversation history detected with this account on Instagram.'
+    };
+  }
+
+  // 7. Rate limit
   if (matchedTag.includes('RATE_LIMITED') || cleanMsg.toLowerCase().includes('rate limit') || cleanMsg.toLowerCase().includes('action blocked')) {
     return {
       tag: 'RATE_LIMITED',
@@ -101,6 +145,7 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
     };
   }
 
+  // 8. Profile mismatch
   if (matchedTag.includes('PROFILE_MISMATCH') || cleanMsg.toLowerCase().includes('mismatch')) {
     return {
       tag: 'PROFILE_MISMATCH',
@@ -110,6 +155,7 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
     };
   }
 
+  // 9. Composer unavailable
   if (matchedTag.includes('COMPOSER_UNAVAILABLE') || cleanMsg.toLowerCase().includes('composer') || cleanMsg.toLowerCase().includes('typing')) {
     return {
       tag: 'COMPOSER_UNAVAILABLE',
@@ -119,6 +165,7 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
     };
   }
 
+  // 10. Security checkpoint
   if (matchedTag.includes('CHALLENGE_REQUIRED') || cleanMsg.toLowerCase().includes('challenge') || cleanMsg.toLowerCase().includes('checkpoint')) {
     return {
       tag: 'CHALLENGE_REQUIRED',
@@ -128,6 +175,7 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
     };
   }
 
+  // 11. Login / auth required
   if (matchedTag.includes('AUTH') || cleanMsg.toLowerCase().includes('login') || cleanMsg.toLowerCase().includes('not logged in')) {
     return {
       tag: 'AUTHENTICATION_REQUIRED',
@@ -137,12 +185,59 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
     };
   }
 
-  if (cleanMsg) {
+  // 12. Fallback based on specific attention task status
+  if (statusStr === 'MANUAL_REVIEW') {
     return {
-      tag: matchedTag || 'EXECUTION_ISSUE',
-      label: matchedTag ? matchedTag.replace(/_/g, ' ') : 'Execution Issue',
+      tag: matchedTag || 'MANUAL_REVIEW',
+      label: matchedTag ? matchedTag.replace(/_/g, ' ') : 'Manual Review',
       badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
-      description: cleanMsg
+      description: cleanMsg || 'Task flagged for manual operator review before proceeding.'
+    };
+  }
+
+  if (statusStr === 'RETRY_WAIT') {
+    return {
+      tag: matchedTag || 'RETRY_WAIT',
+      label: matchedTag ? matchedTag.replace(/_/g, ' ') : 'Waiting for Retry',
+      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+      description: cleanMsg || 'Task scheduled for retry attempt after transient issue.'
+    };
+  }
+
+  if (statusStr === 'INTERRUPTED') {
+    return {
+      tag: 'INTERRUPTED',
+      label: 'Interrupted',
+      badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+      description: cleanMsg || 'Automation run was interrupted while this task was executing.'
+    };
+  }
+
+  if (statusStr === 'RECONCILING') {
+    return {
+      tag: 'RECONCILING',
+      label: 'Reconciling State',
+      badgeClass: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
+      description: cleanMsg || 'Task status is currently being reconciled with Instagram message log.'
+    };
+  }
+
+  if (statusStr === 'SKIPPED') {
+    return {
+      tag: matchedTag || 'SKIPPED',
+      label: matchedTag ? matchedTag.replace(/_/g, ' ') : 'Skipped',
+      badgeClass: 'bg-gray-500/20 text-gray-300 border-gray-500/40',
+      description: cleanMsg || 'Task was skipped based on account condition or policy.'
+    };
+  }
+
+  if (cleanMsg || matchedTag) {
+    const finalTag = matchedTag || 'ATTENTION_NEEDED';
+    return {
+      tag: finalTag,
+      label: matchedTag ? matchedTag.replace(/_/g, ' ') : 'Attention Needed',
+      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+      description: cleanMsg || 'Task requires attention or operator review.'
     };
   }
 
@@ -426,7 +521,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
   };
 
   // Status and view metrics
-  const issueStatuses = ['RETRY_WAIT', 'MANUAL_REVIEW', 'FAILED', 'INTERRUPTED', 'SKIPPED'];
+  const issueStatuses = ['RETRY_WAIT', 'MANUAL_REVIEW', 'AWAITING_APPROVAL', 'RECONCILING', 'FAILED', 'INTERRUPTED', 'SKIPPED'];
   const upcomingStatuses = ['READY', 'QUEUED', 'RUNNING', 'PAUSED'];
 
   const upcomingCount = useMemo(() => tasks.filter((t) => upcomingStatuses.includes(t.status)).length, [tasks]);
@@ -989,14 +1084,17 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
 
           {/* Issue Category Filter for ISSUES mode */}
           {viewMode === 'ISSUES' && (
-            <div className="flex items-center rounded-xl bg-gray-950/90 border border-amber-500/30 p-1">
+            <div className="flex items-center rounded-xl bg-gray-950/90 border border-amber-500/30 p-1 flex-wrap gap-1">
               <span className="text-[10px] text-amber-400 uppercase font-bold px-2 hidden sm:inline">Issue Type:</span>
               {[
                 { id: 'ALL', label: 'All Issues' },
+                { id: 'AWAITING_APPROVAL', label: 'Approval' },
                 { id: 'REPLY_RECEIVED', label: 'Replied' },
                 { id: 'DM_RESTRICTED', label: 'No DMs' },
+                { id: 'PROFILE_MISMATCH', label: 'Mismatch' },
                 { id: 'PAGE_NOT_FOUND', label: '404' },
                 { id: 'RATE_LIMITED', label: 'Cooldown' },
+                { id: 'EXTERNAL_MESSAGE_DETECTED', label: 'External' },
               ].map((opt) => (
                 <button
                   key={opt.id}
@@ -1399,8 +1497,8 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                       {/* Actions */}
                       <td className="py-4 px-4 align-top text-right">
                         <div className="flex flex-col items-end space-y-1.5">
-                          {/* Inline Follow-up approval controls if in review */}
-                          {(t.status === 'MANUAL_REVIEW' || t.type?.startsWith('FOLLOW_UP')) && (
+                          {/* Inline Follow-up or verification approval controls if in review */}
+                          {(t.status === 'MANUAL_REVIEW' || t.status === 'AWAITING_APPROVAL' || t.type?.startsWith('FOLLOW_UP')) && (
                             <div className="flex items-center space-x-1">
                               <button
                                 onClick={() => handleConfirmFollowups([t.id])}

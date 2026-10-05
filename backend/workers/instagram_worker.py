@@ -138,8 +138,8 @@ class InstagramWorker:
         if task_to_cancel and not task_to_cancel.done():
             task_to_cancel.cancel()
             try:
-                await asyncio.wait_for(asyncio.shield(task_to_cancel), timeout=2.0)
-            except (Exception, asyncio.CancelledError):
+                await asyncio.wait_for(task_to_cancel, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
                 pass
 
         # Reset current task back to READY if it was RUNNING so it can be resumed cleanly later
@@ -160,6 +160,7 @@ class InstagramWorker:
             pass
         self.status = WorkerStatus.STOPPED
         self.stage = AutomationStage.IDLE
+        self.is_dispatching_dm = False
         await self._update_worker_db(status="STOPPED", browser_status="DISCONNECTED", current_stage="IDLE")
         await event_bus.publish(EventCode.WORKER_STOPPED, worker_id=WORKER_ID)
         await event_bus.publish_state(await self.health())
@@ -188,6 +189,8 @@ class InstagramWorker:
             "worker_name": WORKER_NAME,
             "status": self.status.value,
             "stage": self.stage.value,
+            "is_running": self.is_running and not self._paused,
+            "is_paused": self._paused,
             "browser_status": browser_status,
             "instagram_login_status": self.instagram_login_status,
             "current_task_id": self.current_task_id,
@@ -275,6 +278,10 @@ class InstagramWorker:
                 await event_bus.publish_state(await self.health())
 
                 while not extension_bridge.is_connected and not self._stop_requested:
+                    while self._paused and not self._stop_requested:
+                        await asyncio.sleep(1)
+                    if self._stop_requested:
+                        return
                     await asyncio.sleep(1)
 
                 if self._stop_requested:
@@ -405,6 +412,12 @@ class InstagramWorker:
     async def _check_login_loop(self, adapter: InstagramAdapter) -> None:
         first_call = True
         while True:
+            if self._stop_requested:
+                return
+
+            while self._paused and not self._stop_requested:
+                await asyncio.sleep(1)
+
             if self._stop_requested:
                 return
 
@@ -680,7 +693,7 @@ class InstagramWorker:
                 logger.warning(f"[Worker] Contact {contact.name} has DM restrictions: {send_reason}. Marking DM_RESTRICTED and skipping.")
                 async with AsyncSessionLocal() as session:
                     task_repo = TaskRepository(session)
-                    await task_repo.update_status(task_id, TaskStatus.SKIPPED)
+                    await task_repo.update_status(task_id, TaskStatus.SKIPPED, manual_review_reason=f"[DM_RESTRICTED] {send_reason}")
                     contact_repo = ContactRepository(session)
                     await contact_repo.update(contact.id, {
                         "replied_status": "DM_RESTRICTED",
@@ -702,7 +715,7 @@ class InstagramWorker:
                 logger.warning(f"[Worker] Contact {contact.name} already has prior conversation history on Instagram! Skipping initial outreach.")
                 async with AsyncSessionLocal() as session:
                     task_repo = TaskRepository(session)
-                    await task_repo.update_status(task_id, TaskStatus.SKIPPED)
+                    await task_repo.update_status(task_id, TaskStatus.SKIPPED, manual_review_reason="[EXISTING_HISTORY] Prior Instagram conversation history detected")
                     contact_repo = ContactRepository(session)
                     await contact_repo.update(contact.id, {"replied_status": "EXISTING_HISTORY", "notes": "Existing Instagram DM history detected"})
                     # Delete the pending message record created for this skipped attempt
@@ -856,7 +869,7 @@ class InstagramWorker:
                     task_repo = TaskRepository(session)
                     current_task = await task_repo.get_by_id(task_id)
                     if current_task and current_task.status == TaskStatus.RUNNING.value:
-                        await task_repo.update_status(task_id, new_status)
+                        await task_repo.update_status(task_id, new_status, manual_review_reason=f"[{result.value}] Automation send result: {result.value}")
                 await event_bus.publish(EventCode.TASK_FAILED, task_id=task_id, worker_id=WORKER_ID,
                                         payload={"result": result.value, "retryable": is_retryable})
 
@@ -868,7 +881,7 @@ class InstagramWorker:
                     task_repo = TaskRepository(session)
                     current_task = await task_repo.get_by_id(task_id)
                     if current_task and current_task.status == TaskStatus.RUNNING.value:
-                        await task_repo.update_status(task_id, TaskStatus.RETRY_WAIT)
+                        await task_repo.update_status(task_id, TaskStatus.RETRY_WAIT, manual_review_reason=f"[ERROR] {str(e)}")
             except Exception as db_err:
                 logger.error(f"[Worker] Failed to update task status after error: {db_err}")
             await event_bus.publish(EventCode.TASK_FAILED, task_id=task_id, worker_id=WORKER_ID,

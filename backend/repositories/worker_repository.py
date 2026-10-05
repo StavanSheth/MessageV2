@@ -68,6 +68,11 @@ class MessageRepository:
         await self.session.execute(stmt)
         await self.session.commit()
 
+    async def list_by_contact(self, contact_id: str) -> List[Message]:
+        stmt = select(Message).where(Message.contact_id == contact_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
 class VerificationRepository:
     def __init__(self, session: AsyncSession):
         self.session = session

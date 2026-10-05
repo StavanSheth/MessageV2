@@ -20,6 +20,7 @@ export const AttentionCenter: React.FC<AttentionCenterProps> = ({ state }) => {
   const handleOpenChrome = async () => {
     setIsOpening(true);
     try {
+      window.open('https://www.instagram.com', '_blank');
       await openBrowserWindow();
     } catch (e) {
       console.error('Failed to open browser:', e);

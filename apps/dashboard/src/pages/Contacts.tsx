@@ -2,14 +2,15 @@ import React, { useState, useMemo } from 'react';
 import { 
   Search, ExternalLink, Check, Download, Edit3, X, Save, Clock, 
   CheckCircle2, Calendar, Send, Sliders, RefreshCw, Users, 
-  Sparkles, MessageSquare, ChevronLeft, ChevronRight, ArrowUpRight
+  Sparkles, MessageSquare, ChevronLeft, ChevronRight, ArrowUpRight, Trash2
 } from 'lucide-react';
 import { Contact } from '../types';
 import { 
   toggleReplied, 
   updateContactMessages, 
   fetchMessageTemplates, 
-  applyBulkTemplates 
+  applyBulkTemplates,
+  deleteContact
 } from '../services/api';
 
 interface ContactsProps {
@@ -141,6 +142,21 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
       onRefresh();
     } catch (e) {
       console.error('Failed to toggle replied state', e);
+    } finally {
+      setLoadingContactId(null);
+    }
+  };
+
+  const handleDeleteContact = async (c: Contact) => {
+    if (!window.confirm(`Are you sure you want to delete contact "${c.name}" (@${c.username || 'unknown'})? This will also remove any queued tasks for this contact.`)) {
+      return;
+    }
+    try {
+      setLoadingContactId(c.id);
+      await deleteContact(c.id);
+      onRefresh();
+    } catch (e: any) {
+      alert(`Failed to delete contact: ${e.message}`);
     } finally {
       setLoadingContactId(null);
     }
@@ -622,16 +638,27 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                         </button>
                       </td>
 
-                      {/* Edit Messages Action */}
+                      {/* Actions */}
                       <td className="py-4 px-4 align-top text-right">
-                        <button
-                          onClick={() => handleOpenEditContact(c)}
-                          className="inline-flex items-center space-x-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 px-3 py-1.5 rounded-xl text-xs font-semibold transition hover:scale-105 active:scale-95 cursor-pointer shadow-sm"
-                          title="Edit 1st message and follow-up templates for this contact"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                          <span>Edit</span>
-                        </button>
+                        <div className="flex items-center justify-end space-x-1.5">
+                          <button
+                            onClick={() => handleOpenEditContact(c)}
+                            className="inline-flex items-center space-x-1 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition hover:scale-105 active:scale-95 cursor-pointer shadow-sm"
+                            title="Edit message templates for this contact"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>Edit</span>
+                          </button>
+                          <button
+                            onClick={() => handleDeleteContact(c)}
+                            disabled={loadingContactId === c.id}
+                            className="inline-flex items-center space-x-1 bg-rose-500/10 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition hover:scale-105 active:scale-95 cursor-pointer shadow-sm disabled:opacity-50"
+                            title="Delete contact and associated tasks"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete</span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );

@@ -34,18 +34,6 @@ class Settings(BaseSettings):
     VERIFICATION_THRESHOLD: float = 0.75
     DEFAULT_MESSAGE: str = "Hey"
 
-    # Edge-Case & Recovery Policies
-    MAX_SEND_RETRIES: int = 3
-    MAX_RECONCILIATION_ATTEMPTS: int = 3
-    TASK_LEASE_TIMEOUT: int = 120  # seconds
-    WORKER_HEARTBEAT_INTERVAL: int = 15  # seconds
-    BROWSER_RESTART_LIMIT: int = 3
-    NETWORK_BACKOFF_BASE: float = 2.0
-    SEND_CONFIRMATION_TIMEOUT: int = 15  # seconds
-    MANUAL_REVIEW_TIMEOUT: int = 3600  # seconds
-    FOLLOWUP_DELAY_DEFAULT: int = 3  # days
-    REQUIRE_MANUAL_APPROVAL: bool = False  # forces AWAITING_APPROVAL -> APPROVED flow
-
     # Vision & Observability
     SCREENSHOT_ENABLED: bool = True
     OCR_ENABLED: bool = True

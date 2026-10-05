@@ -57,7 +57,7 @@ export function App() {
     setIsCustomBatch(true);
     setCustomBatchInput(valStr);
     const parsed = parseInt(valStr, 10);
-    if (parsed > 0) {
+    if (!isNaN(parsed) && parsed > 0) {
       setBatchLimit(parsed);
     }
   };
@@ -99,9 +99,15 @@ export function App() {
   }, [loadData]);
 
   // Action handlers
-  const handleStart = async (limit?: number | null) => {
+  const handleStart = async (limitOverride?: number | null) => {
     try {
-      const activeLimit = limit !== undefined ? limit : batchLimit;
+      let activeLimit: number | null = batchLimit;
+      if (isCustomBatch) {
+        const parsed = parseInt(customBatchInput, 10);
+        activeLimit = (!isNaN(parsed) && parsed > 0) ? parsed : 5;
+      } else if (limitOverride !== undefined) {
+        activeLimit = limitOverride;
+      }
       await startAutomation({ batch_limit: activeLimit, delay_seconds: 15 });
       await loadData();
     } catch (e: any) {

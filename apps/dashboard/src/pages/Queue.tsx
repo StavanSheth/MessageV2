@@ -2,10 +2,10 @@ import React, { useState, useMemo } from 'react';
 import { 
   RefreshCw, XCircle, AlertCircle, CheckCircle2, Clock, 
   Search, ListOrdered, Calendar, Play, ChevronLeft, ChevronRight,
-  ArrowUpRight, Users, MessageSquare, AlertTriangle, Send, Sparkles, X
+  ArrowUpRight, Users, MessageSquare, AlertTriangle, Send, Sparkles, X, Trash2
 } from 'lucide-react';
 import { Task, TaskStatus } from '../types';
-import { retryTask, cancelTask, retryAllTasks } from '../services/api';
+import { retryTask, cancelTask, retryAllTasks, deleteTask } from '../services/api';
 
 interface QueueProps {
   tasks: Task[];
@@ -61,6 +61,19 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
       onRefresh();
     } catch (e: any) {
       alert(`Failed to cancel task: ${e.message}`);
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    if (!window.confirm('Are you sure you want to permanently delete this task from the queue?')) return;
+    try {
+      setActionLoadingId(taskId);
+      await deleteTask(taskId);
+      onRefresh();
+    } catch (e: any) {
+      alert(`Failed to delete task: ${e.message}`);
     } finally {
       setActionLoadingId(null);
     }
@@ -580,6 +593,16 @@ export const Queue: React.FC<QueueProps> = ({ tasks, onRefresh }) => {
                               <span>Cancel</span>
                             </button>
                           )}
+
+                          <button
+                            onClick={() => handleDeleteTask(t.id)}
+                            disabled={actionLoadingId === t.id}
+                            className="inline-flex items-center space-x-1 px-2 py-1 bg-rose-500/10 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 rounded-lg text-xs font-semibold transition cursor-pointer disabled:opacity-50"
+                            title="Delete this task permanently"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Delete</span>
+                          </button>
                         </div>
                       </td>
                     </tr>

@@ -71,8 +71,6 @@ class Contact(Base):
     followup_2_message = Column(Text, nullable=True)
     followup_2_delay_days = Column(Integer, default=5)
     replied_status = Column(String(32), default="UNKNOWN")  # UNKNOWN, YES, NO
-    replied_at = Column(DateTime, nullable=True)
-    first_contacted_at = Column(DateTime, nullable=True)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
@@ -95,24 +93,6 @@ class Task(Base):
     completed_at = Column(DateTime, nullable=True)
     attempt_count = Column(Integer, default=0)
     worker_id = Column(String(64), nullable=True)
-    lease_owner = Column(String(64), nullable=True)
-    lease_expires_at = Column(DateTime, nullable=True)
-    last_heartbeat = Column(DateTime, nullable=True)
-    idempotency_key = Column(String(128), unique=True, nullable=True, index=True)
-    send_attempt_id = Column(String(64), nullable=True)
-    send_requested_at = Column(DateTime, nullable=True)
-    send_confirmed_at = Column(DateTime, nullable=True)
-    reconciliation_status = Column(String(32), nullable=True)
-    reconciliation_attempt_count = Column(Integer, default=0)
-    last_reconciliation_at = Column(DateTime, nullable=True)
-    browser_session_id = Column(String(64), nullable=True)
-    source_sync_status = Column(String(32), default="PENDING")
-    source_sync_error = Column(Text, nullable=True)
-    last_result_code = Column(String(64), nullable=True)
-    manual_review_reason = Column(Text, nullable=True)
-    requires_approval = Column(Boolean, default=False)
-    approved_at = Column(DateTime, nullable=True)
-    approved_by = Column(String(64), nullable=True)
     last_error_id = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
@@ -125,7 +105,6 @@ class Task(Base):
     messages = relationship("Message", back_populates="task")
     errors = relationship("Error", back_populates="task")
     verifications = relationship("VerificationResult", back_populates="task")
-    send_attempts = relationship("SendAttempt", back_populates="task", cascade="all, delete-orphan")
 
 class Message(Base):
     __tablename__ = "messages"
@@ -136,39 +115,13 @@ class Message(Base):
     sequence = Column(Integer, default=1)
     body = Column(Text, nullable=False)
     status = Column(String(32), default="PENDING")
-    idempotency_key = Column(String(128), unique=True, nullable=True, index=True)
-    send_requested_at = Column(DateTime, nullable=True)
-    send_confirmed_at = Column(DateTime, nullable=True)
     attempted_at = Column(DateTime, nullable=True)
     confirmed_at = Column(DateTime, nullable=True)
-    retry_count = Column(Integer, default=0)
     result_code = Column(String(64), nullable=True)
-    browser_session_id = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=utcnow)
 
     contact = relationship("Contact", back_populates="messages")
     task = relationship("Task", back_populates="messages")
-    send_attempts = relationship("SendAttempt", back_populates="message", cascade="all, delete-orphan")
-
-class SendAttempt(Base):
-    __tablename__ = "send_attempts"
-
-    id = Column(String(64), primary_key=True, default=lambda: generate_id("att_"))
-    task_id = Column(String(64), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
-    message_id = Column(String(64), ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True)
-    attempt_id = Column(String(64), nullable=False, index=True)
-    contact_id = Column(String(64), ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False, index=True)
-    message_body = Column(Text, nullable=False)
-    send_requested_at = Column(DateTime, default=utcnow, nullable=False)
-    send_confirmed_at = Column(DateTime, nullable=True)
-    worker_id = Column(String(64), nullable=False)
-    browser_session_id = Column(String(64), nullable=True)
-    status = Column(String(32), default="REQUESTED")  # REQUESTED, CONFIRMED, FAILED, UNKNOWN
-    result_code = Column(String(64), nullable=True)
-    created_at = Column(DateTime, default=utcnow)
-
-    task = relationship("Task", back_populates="send_attempts")
-    message = relationship("Message", back_populates="send_attempts")
 
 class Worker(Base):
     __tablename__ = "workers"

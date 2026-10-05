@@ -52,3 +52,11 @@ async def automation_status(db: AsyncSession = Depends(get_db)):
         "task_counts": counts
     }
 
+@router.get("/extension_status")
+async def extension_status():
+    from backend.automation.extension_bridge import extension_bridge
+    return {
+        "extension_connected": extension_bridge.is_connected
+    }
+
+

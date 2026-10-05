@@ -1,6 +1,6 @@
 from typing import List, Optional
 from datetime import datetime, timezone
-from sqlalchemy import select, update, and_
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database.models import Contact, SourceRecord, Task
 
@@ -63,55 +63,13 @@ class ContactRepository:
         return result.scalar_one()
 
     async def update_replied(self, contact_id: str, status: str) -> Optional[Contact]:
-        """
-        Transactionally update contact reply status.
-        When YES: cancels all pending/scheduled follow-ups immediately within the same transaction.
-        Prevent YES -> NO from silently reopening follow-ups.
-        """
-        contact = await self.get_by_id(contact_id)
-        if not contact:
-            return None
-
-        now = datetime.now(timezone.utc)
-        values = {
-            "replied_status": status,
-            "updated_at": now
-        }
-        if status == "YES":
-            values["replied_at"] = now
-
-        stmt = update(Contact).where(Contact.id == contact_id).values(**values)
-        await self.session.execute(stmt)
-
-        # When contact replies YES: atomically cancel all pending/scheduled follow-up tasks
-        if status == "YES":
-            from backend.domain.enums import TaskStatus
-            cancel_stmt = (
-                update(Task)
-                .where(
-                    and_(
-                        Task.contact_id == contact_id,
-                        Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]),
-                        Task.status.in_([
-                            TaskStatus.CREATED.value,
-                            TaskStatus.QUEUED.value,
-                            TaskStatus.READY.value,
-                            TaskStatus.RETRY_WAIT.value,
-                            TaskStatus.AWAITING_APPROVAL.value,
-                            TaskStatus.APPROVED.value
-                        ])
-                    )
-                )
-                .values(
-                    status=TaskStatus.CANCELLED.value,
-                    manual_review_reason="Cancelled: Contact replied YES",
-                    updated_at=now
-                )
-            )
-            await self.session.execute(cancel_stmt)
-
+        stmt = update(Contact).where(Contact.id == contact_id).values(
+            replied_status=status,
+            updated_at=datetime.now(timezone.utc)
+        ).returning(Contact)
+        result = await self.session.execute(stmt)
         await self.session.commit()
-        return await self.get_by_id(contact_id)
+        return result.scalar_one_or_none()
 
     async def update_messages(self, contact_id: str, message: Optional[str] = None,
                               followup_1_message: Optional[str] = None,
@@ -145,3 +103,16 @@ class ContactRepository:
         res = await self.session.execute(stmt)
         await self.session.commit()
         return res.rowcount
+
+    async def delete(self, contact_id: str) -> bool:
+        from sqlalchemy import delete
+        from backend.database.models import Task, Message, VerificationResult
+        await self.session.execute(delete(VerificationResult).where(VerificationResult.contact_id == contact_id))
+        await self.session.execute(delete(Message).where(Message.contact_id == contact_id))
+        await self.session.execute(delete(Task).where(Task.contact_id == contact_id))
+        stmt = delete(Contact).where(Contact.id == contact_id)
+        res = await self.session.execute(stmt)
+        await self.session.commit()
+        return res.rowcount > 0
+
+

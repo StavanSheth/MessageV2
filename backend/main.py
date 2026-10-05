@@ -2,11 +2,9 @@ import sys
 import asyncio
 import logging
 
-def proactor_loop_factory(use_subprocess: bool = False):
-    return asyncio.ProactorEventLoop()
-
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,12 +34,12 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized.")
 
-    # Run startup recovery: safely reconcile any in-flight or interrupted tasks
+    # Run startup recovery: mark leftover RUNNING tasks as INTERRUPTED
     async with AsyncSessionLocal() as session:
         recovery = RecoveryService(session)
-        affected = await recovery.reconcile_on_startup()
+        affected = await recovery.reconcile_interrupted()
         if affected:
-            logger.info(f"Startup recovery complete: {affected}")
+            logger.warning(f"Recovery: {len(affected)} interrupted task(s) found and marked: {affected}")
 
     logger.info(f"Backend ready on http://{settings.HOST}:{settings.PORT}")
     yield
@@ -73,3 +71,12 @@ app.include_router(tasks_router)
 app.include_router(automation_router)
 app.include_router(events_router)
 app.include_router(workers_router)
+
+# Chrome Extension Bridge WebSocket Endpoint
+from fastapi import WebSocket
+from backend.automation.extension_bridge import extension_bridge
+
+@app.websocket("/ws/extension")
+async def websocket_extension_endpoint(websocket: WebSocket):
+    await extension_bridge.register(websocket)
+

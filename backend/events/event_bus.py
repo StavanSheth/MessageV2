@@ -48,43 +48,18 @@ class EventBus:
                       worker_id: Optional[str] = None, contact_name: Optional[str] = None,
                       stage: Optional[str] = None) -> None:
         code = event_code.value if isinstance(event_code, EventCode) else str(event_code)
-        now_dt = datetime.now(timezone.utc)
-        payload_data = dict(payload or {})
-        if contact_name and "contact_name" not in payload_data:
-            payload_data["contact_name"] = contact_name
-        if stage and "stage" not in payload_data:
-            payload_data["stage"] = stage
-
         event = {
             "type": "event",
-            "timestamp": now_dt.isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "event_code": code,
             "level": level,
             "task_id": task_id,
             "worker_id": worker_id,
             "contact_name": contact_name,
             "stage": stage,
-            "payload": payload_data
+            "payload": payload or {}
         }
         await self.broadcast(event)
-
-        # Persist event to database so audit logs and API history are 100% synchronized
-        try:
-            from backend.database.session import AsyncSessionLocal
-            from backend.repositories.event_repository import EventRepository
-            async with AsyncSessionLocal() as session:
-                repo = EventRepository(session)
-                await repo.log_event(
-                    event_code=code,
-                    payload=payload_data,
-                    level=level,
-                    category="AUTOMATION",
-                    entity_type="TASK" if task_id else ("WORKER" if worker_id else None),
-                    entity_id=task_id or worker_id,
-                    correlation_id=task_id
-                )
-        except Exception as e:
-            logger.debug(f"[EventBus] Could not persist event {code}: {e}")
 
     async def publish_state(self, state: Dict[str, Any]) -> None:
         await self.broadcast({"type": "state", **state})

@@ -37,40 +37,6 @@ def check_cdp_endpoint() -> Optional[str]:
             pass
     return None
 
-def cleanup_profile_locks(user_data_dir: str) -> None:
-    if os.name == "nt":
-        import subprocess
-        import json
-        try:
-            cmd = [
-                'powershell', '-NoProfile', '-Command',
-                'Get-CimInstance Win32_Process -Filter "Name = \'chrome.exe\'" | Select-Object ProcessId, CommandLine | ConvertTo-Json'
-            ]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
-            if res.returncode == 0 and res.stdout.strip():
-                data = json.loads(res.stdout)
-                if isinstance(data, dict):
-                    data = [data]
-                norm_dir = os.path.normpath(user_data_dir).lower()
-                for p in data:
-                    c = (p.get('CommandLine') or '').lower()
-                    if norm_dir in c and '--type=' in c:
-                        pid = p.get('ProcessId')
-                        try:
-                            subprocess.run(['taskkill', '/F', '/PID', str(pid)], capture_output=True, timeout=2)
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-
-    for lock_name in ["SingletonLock", "Lockfile", "lockfile"]:
-        f = Path(user_data_dir) / lock_name
-        if f.exists():
-            try:
-                f.unlink()
-            except Exception:
-                pass
-
 class BrowserWorker:
     def __init__(self, user_data_dir: Optional[str] = None):
         self.user_data_dir = user_data_dir or settings.USER_DATA_DIR
@@ -85,62 +51,19 @@ class BrowserWorker:
             if self.is_running and self.page and not self.page.is_closed():
                 return self.page
 
-            cleanup_profile_locks(self.user_data_dir)
+            Path(self.user_data_dir).mkdir(parents=True, exist_ok=True)
+            # Remove any stale Chromium lock files
+            for lock_name in ["SingletonLock", "Lockfile", "lockfile"]:
+                f = Path(self.user_data_dir) / lock_name
+                if f.exists():
+                    try:
+                        f.unlink()
+                    except Exception:
+                        pass
 
             self.playwright = await async_playwright().start()
 
-            # Prioritize connecting to Desktop Chrome (zero cmd.exe)
-            if os.name == "nt":
-                cdp_url = check_cdp_endpoint()
-
-                if not cdp_url:
-                    from backend.automation.chrome_profile_manager import chrome_profile_manager
-                    launch_res = await chrome_profile_manager.launch_chrome_live()
-                    cdp_url = launch_res.get("cdp_url") or check_cdp_endpoint()
-
-                if cdp_url:
-                    from backend.automation.chrome_profile_manager import chrome_profile_manager
-                    chrome_profile_manager.bring_chrome_to_front()
-                    try:
-                        browser = await self.playwright.chromium.connect_over_cdp(cdp_url)
-                        self.context = browser.contexts[0]
-                        # Check for existing active Instagram tab (preserve localhost dashboard tabs)
-                        active_ig = await self.get_active_instagram_page()
-                        blank_page = None
-                        for p in self.context.pages:
-                            if "localhost" in p.url or "127.0.0.1" in p.url:
-                                continue
-                            elif p.url in ["about:blank", "chrome://newtab/"]:
-                                blank_page = p
-
-                        if active_ig:
-                            self.page = active_ig
-                        elif blank_page:
-                            self.page = blank_page
-                            try:
-                                await self.page.goto("https://www.instagram.com", wait_until="domcontentloaded", timeout=settings.BROWSER_TIMEOUT)
-                            except Exception:
-                                pass
-                        else:
-                            # Do NOT overwrite localhost dashboard tabs! Open a new tab in the same Chrome window!
-                            self.page = await self.context.new_page()
-                            try:
-                                await self.page.goto("https://www.instagram.com", wait_until="domcontentloaded", timeout=settings.BROWSER_TIMEOUT)
-                            except Exception:
-                                pass
-
-                        try:
-                            await self.page.bring_to_front()
-                            chrome_profile_manager.bring_chrome_to_front()
-                        except Exception:
-                            pass
-                        self.is_running = True
-                        return self.page
-                    except Exception as e:
-                        print(f"[BrowserWorker] CDP connection error: {e}, falling back to persistent context")
-
-            # Launch persistent browser context with native Google Chrome
-            cleanup_profile_locks(self.user_data_dir)
+            # Launch directly via Playwright native OS pipeline (--remote-debugging-pipe)
             launch_args = [
                 "--disable-blink-features=AutomationControlled",
                 "--start-maximized",
@@ -153,19 +76,16 @@ class BrowserWorker:
                     headless=False,
                     slow_mo=settings.BROWSER_SLOW_MO,
                     args=launch_args,
-                    no_viewport=True,
-                    timeout=15000
+                    no_viewport=True
                 )
             except Exception as e:
-                print(f"[BrowserWorker] Chrome persistent launch error: {e}, trying bundled chromium")
-                cleanup_profile_locks(self.user_data_dir)
+                print(f"[BrowserWorker] Launching native chrome failed ({e}), falling back to bundled chromium")
                 self.context = await self.playwright.chromium.launch_persistent_context(
                     user_data_dir=self.user_data_dir,
                     headless=False,
                     slow_mo=settings.BROWSER_SLOW_MO,
                     args=launch_args,
-                    no_viewport=True,
-                    timeout=15000
+                    no_viewport=True
                 )
 
             # Get or create page (protect localhost dashboard tabs)
@@ -184,19 +104,20 @@ class BrowserWorker:
                 self.page = instagram_page
             elif blank_page:
                 self.page = blank_page
+                try:
+                    await self.page.goto("https://www.instagram.com", wait_until="domcontentloaded", timeout=settings.BROWSER_TIMEOUT)
+                except Exception:
+                    pass
             else:
                 self.page = await self.context.new_page()
-
-            if "instagram.com" not in (self.page.url or ""):
                 try:
-                    await self.page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=settings.BROWSER_TIMEOUT)
+                    await self.page.goto("https://www.instagram.com", wait_until="domcontentloaded", timeout=settings.BROWSER_TIMEOUT)
                 except Exception:
                     pass
 
+
             try:
                 await self.page.bring_to_front()
-                from backend.automation.chrome_profile_manager import chrome_profile_manager
-                chrome_profile_manager.bring_chrome_to_front()
             except Exception:
                 pass
 
@@ -207,9 +128,16 @@ class BrowserWorker:
     async def stop(self) -> None:
         async with self._lock:
             try:
-                if self.context:
-                    await self.context.close()
+                if getattr(self, "_is_cdp", False):
+                    if getattr(self, "browser", None):
+                        await self.browser.close()
+                        self.browser = None
+                    self._is_cdp = False
                     self.context = None
+                else:
+                    if self.context:
+                        await self.context.close()
+                        self.context = None
                 if self.playwright:
                     await self.playwright.stop()
                     self.playwright = None
@@ -218,18 +146,6 @@ class BrowserWorker:
             finally:
                 self.page = None
                 self.is_running = False
-
-    async def restart(self) -> Page:
-        """
-        Controlled autonomous browser recovery:
-        1. Stop existing browser connection / context cleanly
-        2. Wait brief cooldown
-        3. Reconnect / relaunch Chrome & Playwright
-        4. Return healthy page
-        """
-        await self.stop()
-        await asyncio.sleep(1.0)
-        return await self.start()
 
     async def health(self) -> Dict[str, Any]:
         if not self.is_running or not self.page or self.page.is_closed():

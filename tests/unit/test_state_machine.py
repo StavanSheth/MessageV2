@@ -13,9 +13,6 @@ def test_valid_task_transitions():
     assert validate_task_transition(TaskStatus.RUNNING, TaskStatus.COMPLETED)
     assert validate_task_transition(TaskStatus.RUNNING, TaskStatus.RETRY_WAIT)
     assert validate_task_transition(TaskStatus.RETRY_WAIT, TaskStatus.READY)
-    assert validate_task_transition(TaskStatus.SKIPPED, TaskStatus.READY)
-    assert validate_task_transition(TaskStatus.CANCELLED, TaskStatus.READY)
-    assert validate_task_transition(TaskStatus.MANUAL_REVIEW, TaskStatus.READY)
 
 def test_invalid_task_transitions():
     with pytest.raises(StateTransitionError):

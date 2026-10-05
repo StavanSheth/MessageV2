@@ -1,6 +1,5 @@
 from typing import Tuple, Optional
 from backend.domain.enums import ResultCode
-from backend.automation.retry.policy import RetryPolicy
 
 class ResultDetector:
     @staticmethod
@@ -19,8 +18,6 @@ class ResultDetector:
     @staticmethod
     def classify_dm_availability(has_button: bool, page_text: str) -> Tuple[bool, ResultCode]:
         lower_text = page_text.lower()
-        if "action blocked" in lower_text:
-            return False, ResultCode.ACTION_BLOCKED
         if "you can't message this account" in lower_text or "cannot be messaged" in lower_text:
             return False, ResultCode.DM_NOT_AVAILABLE
         if not has_button:
@@ -28,6 +25,9 @@ class ResultDetector:
         return True, ResultCode.SUCCESS
 
     @staticmethod
-    def is_retryable(result_code: ResultCode, attempt: int = 1) -> bool:
-        decision = RetryPolicy.classify(result_code, attempt=attempt)
-        return decision.should_retry
+    def is_retryable(result_code: ResultCode) -> bool:
+        return result_code in {
+            ResultCode.NETWORK_ERROR,
+            ResultCode.TIMEOUT,
+            ResultCode.UNKNOWN
+        }

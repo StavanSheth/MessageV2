@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "MessageV2 Automation Bridge",
+  "version": "1.0",
+  "description": "Bridges MessageV2 dashboard with your live active Chrome window",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "activeTab",
+    "alarms",
+    "cookies"
+  ],
+  "host_permissions": [
+    "*://*.instagram.com/*",
+    "*://instagram.com/*",
+    "http://localhost:5173/*",
+    "http://127.0.0.1:8000/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "MessageV2 Bridge"
+  }
+}

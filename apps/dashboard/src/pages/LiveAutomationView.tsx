@@ -6,7 +6,6 @@ import {
 } from 'lucide-react';
 import { LiveAutomationState } from '../types';
 import { openBrowserWindow } from '../services/api';
-import { ChromeProfileSelector } from '../components/ChromeProfileSelector';
 
 interface LiveAutomationViewProps {
   state: LiveAutomationState;
@@ -71,6 +70,7 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   const handleOpenChrome = async () => {
     setIsOpeningBrowser(true);
     try {
+      window.open('https://www.instagram.com', '_blank');
       await openBrowserWindow();
     } catch (e) {
       console.error(e);
@@ -176,9 +176,6 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
           </div>
         </div>
       </div>
-
-      {/* Chrome Profile Selection & Live Browser Control */}
-      <ChromeProfileSelector />
 
       {/* Batch Control & Sequential Queue Dispatcher */}
       <div className="bg-gradient-to-r from-gray-900 via-gray-900/90 to-gray-900 border border-gray-800 rounded-2xl p-5 shadow-xl">
@@ -311,11 +308,11 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
 
             {state.status !== 'RUNNING' && state.status !== 'PAUSED' && (
               <button
-                onClick={() => onStart?.(batchLimit)}
+                onClick={() => onStart?.(effectiveIsCustom ? (parseInt(effectiveCustomInput, 10) || 5) : batchLimit)}
                 className="ml-2 flex items-center space-x-1.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white px-4 py-1.5 rounded-lg text-xs font-bold shadow-lg shadow-emerald-600/30 transition hover:scale-105 active:scale-95 cursor-pointer"
               >
                 <Play className="w-3.5 h-3.5 fill-white" />
-                <span>Start Batch ({batchLimit === null ? 'All' : batchLimit})</span>
+                <span>Start Batch ({effectiveIsCustom ? (parseInt(effectiveCustomInput, 10) || 5) : (batchLimit === null ? 'All' : batchLimit)})</span>
               </button>
             )}
 
@@ -521,12 +518,22 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                 <h3 className="font-bold text-white text-base">Visible Chrome Capture</h3>
               </div>
               <div className="flex items-center space-x-2">
-                {!feedError && (
-                  <span className="flex items-center space-x-1.5 text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>Live Sync</span>
-                  </span>
-                )}
+                <span className="flex items-center space-x-1.5 text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>Live Sync</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFeedError(false);
+                    setLiveTick(Date.now());
+                  }}
+                  title="Force refresh screen capture"
+                  className="inline-flex items-center space-x-1 text-[11px] font-semibold px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition active:scale-95 cursor-pointer"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>Sync</span>
+                </button>
                 <button
                   type="button"
                   onClick={handleOpenChrome}
@@ -541,73 +548,47 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
             </div>
 
             <div className="mt-5 flex-1 flex flex-col justify-center">
-              {!feedError ? (
-                <div className="space-y-3">
-                  <div className="relative rounded-xl overflow-hidden border border-gray-700/80 bg-black aspect-video flex items-center justify-center shadow-inner">
-                    <img
-                      src={`/api/browser/live_feed?t=${liveTick}`}
-                      alt="Visible Chrome Live Feed"
-                      className="w-full h-full object-contain"
-                      onError={() => {
-                        if (!screenshotUrl) setFeedError(true);
-                      }}
-                      onLoad={() => setFeedError(false)}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between text-xs text-gray-400 px-1">
-                    <span className="flex items-center space-x-1.5 text-emerald-400 font-mono text-[11px]">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block mr-1" />
-                      Live session view (auto-syncing)
-                    </span>
-                    <a
-                      href={`/api/browser/live_feed?t=${liveTick}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-indigo-400 hover:underline flex items-center space-x-1"
-                    >
-                      <span>Open Full Size</span>
-                    </a>
-                  </div>
-                </div>
-              ) : screenshotUrl ? (
-                <div className="space-y-3">
-                  <div className="relative rounded-xl overflow-hidden border border-gray-700/80 bg-black aspect-video flex items-center justify-center shadow-inner">
+              <div className="space-y-3">
+                <div className="relative rounded-xl overflow-hidden border border-gray-700/80 bg-gray-950 aspect-video flex items-center justify-center shadow-inner">
+                  <img
+                    src={`/api/browser/live_feed?t=${liveTick}`}
+                    alt="Visible Chrome Live Feed"
+                    className="w-full h-full object-contain"
+                    onError={() => setFeedError(true)}
+                    onLoad={() => setFeedError(false)}
+                  />
+                  {feedError && screenshotUrl && (
                     <img
                       src={screenshotUrl}
                       alt="Current Browser Screenshot"
-                      className="w-full h-full object-contain"
+                      className="absolute inset-0 w-full h-full object-contain"
                     />
-                  </div>
-                  <div className="flex items-center justify-between text-xs text-gray-400 px-1">
-                    <span>Captured on checkpoint</span>
-                    <a
-                      href={screenshotUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-indigo-400 hover:underline flex items-center space-x-1"
-                    >
-                      <span>Open Full Size</span>
-                    </a>
-                  </div>
+                  )}
+                  {feedError && !screenshotUrl && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-gray-950">
+                      <Eye className="w-8 h-8 text-indigo-400 mb-2 opacity-80 animate-pulse" />
+                      <p className="text-xs text-gray-200 font-semibold">Active Chrome Session</p>
+                      <p className="text-[11px] text-gray-400 mt-1 max-w-xs">
+                        Capturing live visible tab. Ensure Chrome is running with the MessageV2 extension.
+                      </p>
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div className="aspect-video rounded-xl border border-gray-800 bg-black/40 flex flex-col items-center justify-center p-6 text-center">
-                  <Eye className="w-10 h-10 text-gray-600 mb-2 opacity-40" />
-                  <p className="text-sm text-gray-300 font-medium">Visible Playwright Chrome Active</p>
-                  <p className="text-xs text-gray-500 mt-1 max-w-xs">
-                    Watch the actual browser window directly on your screen. Click below to bring Chrome to front.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleOpenChrome}
-                    disabled={isOpeningBrowser}
-                    className="mt-4 inline-flex items-center space-x-2 text-xs font-bold px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/30 transition hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50"
+                <div className="flex items-center justify-between text-xs text-gray-400 px-1">
+                  <span className="flex items-center space-x-1.5 text-emerald-400 font-mono text-[11px]">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block mr-1" />
+                    Live session sync (2s auto-refresh)
+                  </span>
+                  <a
+                    href={`/api/browser/live_feed?t=${liveTick}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-indigo-400 hover:underline flex items-center space-x-1 text-[11px]"
                   >
-                    {isOpeningBrowser ? <Loader2 className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
-                    <span>Focus / Pop Up Chrome Window</span>
-                  </button>
+                    <span>Open Full Size</span>
+                  </a>
                 </div>
-              )}
+              </div>
             </div>
           </div>
         </div>

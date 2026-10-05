@@ -42,9 +42,9 @@ async def list_contacts(limit: int = 1000, offset: int = 0, db: AsyncSession = D
         task_fu1 = next((t for t in c.tasks if t.type == "FOLLOW_UP_1"), None)
         task_fu2 = next((t for t in c.tasks if t.type == "FOLLOW_UP_2"), None)
 
-        m1 = next((m for m in reversed(task_msg.messages) if m.status == "SENT"), task_msg.messages[-1] if task_msg.messages else None) if (task_msg and task_msg.messages) else None
-        m_fu1 = next((m for m in reversed(task_fu1.messages) if m.status == "SENT"), task_fu1.messages[-1] if task_fu1.messages else None) if (task_fu1 and task_fu1.messages) else None
-        m_fu2 = next((m for m in reversed(task_fu2.messages) if m.status == "SENT"), task_fu2.messages[-1] if task_fu2.messages else None) if (task_fu2 and task_fu2.messages) else None
+        m1 = task_msg.messages[0] if (task_msg and task_msg.messages) else None
+        m_fu1 = task_fu1.messages[0] if (task_fu1 and task_fu1.messages) else None
+        m_fu2 = task_fu2.messages[0] if (task_fu2 and task_fu2.messages) else None
 
         # 1st Message details
         m1_status = "NOT_QUEUED"
@@ -53,7 +53,7 @@ async def list_contacts(limit: int = 1000, offset: int = 0, db: AsyncSession = D
             m1_status = task_msg.status
             if task_msg.status == "COMPLETED" or (m1 and m1.status == "SENT"):
                 m1_status = "SENT"
-                m1_sent_at = format_datetime_readable((m1.confirmed_at if m1 else None) or task_msg.completed_at)
+                m1_sent_at = format_datetime_readable(m1.confirmed_at if m1 else task_msg.completed_at)
 
         # Follow Up 1 details
         fu1_status = "NOT_SCHEDULED"
@@ -64,7 +64,7 @@ async def list_contacts(limit: int = 1000, offset: int = 0, db: AsyncSession = D
             fu1_scheduled_at = format_datetime_readable(task_fu1.scheduled_at)
             if task_fu1.status == "COMPLETED" or (m_fu1 and m_fu1.status == "SENT"):
                 fu1_status = "SENT"
-                fu1_sent_at = format_datetime_readable((m_fu1.confirmed_at if m_fu1 else None) or task_fu1.completed_at)
+                fu1_sent_at = format_datetime_readable(m_fu1.confirmed_at if m_fu1 else task_fu1.completed_at)
             elif task_fu1.status == "READY":
                 fu1_status = "SCHEDULED"
 
@@ -77,7 +77,7 @@ async def list_contacts(limit: int = 1000, offset: int = 0, db: AsyncSession = D
             fu2_scheduled_at = format_datetime_readable(task_fu2.scheduled_at)
             if task_fu2.status == "COMPLETED" or (m_fu2 and m_fu2.status == "SENT"):
                 fu2_status = "SENT"
-                fu2_sent_at = format_datetime_readable((m_fu2.confirmed_at if m_fu2 else None) or task_fu2.completed_at)
+                fu2_sent_at = format_datetime_readable(m_fu2.confirmed_at if m_fu2 else task_fu2.completed_at)
             elif task_fu2.status == "READY":
                 fu2_status = "SCHEDULED"
 
@@ -165,23 +165,7 @@ async def update_replied(contact_id: str, status: str, db: AsyncSession = Depend
     updated = await repo.update_replied(contact_id, status)
     if not updated:
         raise HTTPException(404, "Contact not found")
-
-    from sqlalchemy import select
-    from backend.database.models import Task
-    tasks_res = await db.execute(select(Task).where(Task.contact_id == contact_id))
-    tasks = tasks_res.scalars().all()
-
-    return {
-        "id": contact_id,
-        "replied_status": updated.replied_status,
-        "replied_at": updated.replied_at.isoformat() if updated.replied_at else None,
-        "tasks": [{
-            "id": t.id,
-            "type": t.type,
-            "status": t.status,
-            "manual_review_reason": t.manual_review_reason
-        } for t in tasks]
-    }
+    return {"id": contact_id, "replied_status": status}
 
 @router.get("/export/excel")
 async def export_contacts_excel(db: AsyncSession = Depends(get_db)):
@@ -217,3 +201,16 @@ async def get_contact(contact_id: str, db: AsyncSession = Depends(get_db)):
         "created_at": contact.created_at,
         "updated_at": contact.updated_at
     }
+
+@router.delete("/{contact_id}")
+async def delete_contact(contact_id: str, db: AsyncSession = Depends(get_db)):
+    repo = ContactRepository(db)
+    contact = await repo.get_by_id(contact_id)
+    if not contact:
+        raise HTTPException(404, "Contact not found")
+    
+    deleted = await repo.delete(contact_id)
+    if not deleted:
+        raise HTTPException(500, "Failed to delete contact")
+    return {"id": contact_id, "status": "deleted"}
+

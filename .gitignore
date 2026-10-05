@@ -23,15 +23,22 @@ data/*.db
 *.db
 *.sqlite3
 data/*.db-journal
+# Runtime caches & data
 data/browser_profiles/
 data/chrome_debug_profile/
 data/chrome_live_profile/
 data/chrome_junction/
 data/chrome_user_data/
 data/screenshots/*.png
+data/screenshots/*.jpg
 data/uploads/
 !data/samples/sample_contacts.xlsx
 
-
 # Secrets & Environment
 .env
+
+# Working directories
+scratch/
+V1/
+check_feed.jpg
+

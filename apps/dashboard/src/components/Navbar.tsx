@@ -4,7 +4,6 @@ import {
   FileSpreadsheet, History, ShieldAlert, Sparkles 
 } from 'lucide-react';
 import { WorkerStatus } from '../types';
-import { ChromeProfileSelector } from './ChromeProfileSelector';
 
 interface NavbarProps {
   currentTab: string;
@@ -134,9 +133,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
           )}
 
-          {/* Chrome Profile Live Selector */}
-          <ChromeProfileSelector compact={true} />
-
           {/* Action Buttons */}
           <div className="flex items-center space-x-2 pl-2">
             {!isRunning && !isPaused && (
@@ -216,7 +212,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             {!isRunning && !isPaused && (
               <button
-                onClick={() => onStart(batchLimit)}
+                onClick={() => onStart(effectiveIsCustom ? (parseInt(customBatchInput, 10) || 5) : batchLimit)}
                 className="flex items-center space-x-2 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-lg shadow-emerald-600/30 transition-all hover:scale-105 active:scale-95 cursor-pointer"
               >
                 <Play className="w-4 h-4 fill-white" />

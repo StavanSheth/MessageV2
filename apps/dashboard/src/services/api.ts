@@ -300,6 +300,68 @@ export async function addUrlSource(url: string, name?: string): Promise<{ source
   return res.json();
 }
 
+export async function analyzeSourceXlsx(file: File): Promise<any> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch(`${BASE_URL}/api/sources/analyze-xlsx`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Spreadsheet analysis failed');
+  }
+  return res.json();
+}
+
+export async function analyzeSourceUrl(url: string, name?: string): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/sources/analyze-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, name }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'URL analysis failed');
+  }
+  return res.json();
+}
+
+export async function confirmSourceImport(payload: {
+  staging_id: string;
+  source_name?: string;
+  selected_unique_indices: number[];
+  selected_duplicate_indices: number[];
+  duplicate_mode: string;
+}): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/sources/confirm-import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to confirm import');
+  }
+  return res.json();
+}
+
+export async function fetchTablesData(): Promise<{
+  total_tables: number;
+  tables: Record<string, {
+    title: string;
+    count: number;
+    columns: string[];
+    rows: any[];
+  }>;
+}> {
+  const res = await fetch(`${BASE_URL}/api/sources/tables-data`);
+  if (!res.ok) {
+    throw new Error('Failed to fetch database tables data');
+  }
+  return res.json();
+}
+
 
 export async function fetchEvents(limit = 100): Promise<EventLog[]> {
   const res = await fetch(`${BASE_URL}/api/events?limit=${limit}`);

@@ -38,6 +38,22 @@ class InstagramSelectors:
         "a[role='button']:has-text('Message')"
     ]
     FOLLOW_BUTTON = "button:has-text('Follow'), div[role='button']:has-text('Follow')"
+    OPTIONS_BUTTON = [
+        "header button:has(svg[aria-label='Options'])",
+        "header svg[aria-label='Options']",
+        "header button[aria-label='Options']",
+        "header div[role='button']:has(svg[aria-label='Options'])",
+        "button:has(svg[aria-label='Options'])",
+        "svg[aria-label='Options']",
+        "header section button:has(svg)",
+    ]
+    OPTIONS_SEND_MESSAGE = [
+        "div[role='dialog'] button:has-text('Send message')",
+        "div[role='dialog'] [role='button']:has-text('Send message')",
+        "div[role='dialog'] button:has-text('Message')",
+        "div[role='dialog'] [role='button']:has-text('Message')",
+        "button:has-text('Send message')",
+    ]
     RESTRICTED_MESSAGE = "text='You can\\'t message this account', text='Cannot be messaged', text='This account is private'"
 
     # Direct Message UI

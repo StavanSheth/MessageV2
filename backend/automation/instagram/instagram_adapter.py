@@ -175,12 +175,33 @@ class InstagramAdapter:
         return data
 
     async def check_message_availability(self) -> Tuple[bool, ResultCode, str]:
-        """Check if message button exists and is clickable."""
+        """Check if message button exists and is clickable, including via options menu or following."""
         await self.dismiss_popups()
         for sel in InstagramSelectors.MESSAGE_BUTTON:
             btn = self.page.locator(sel).first
             if await btn.count() > 0 and await btn.is_visible():
                 return True, ResultCode.SUCCESS, "Message button available"
+
+        # Check Options (···) menu on profile header
+        for opt_sel in InstagramSelectors.OPTIONS_BUTTON:
+            opt_btn = self.page.locator(opt_sel).first
+            if await opt_btn.count() > 0 and await opt_btn.is_visible():
+                try:
+                    await opt_btn.click(timeout=2000)
+                    await asyncio.sleep(0.5)
+                    for sm_sel in InstagramSelectors.OPTIONS_SEND_MESSAGE:
+                        sm_btn = self.page.locator(sm_sel).first
+                        if await sm_btn.count() > 0 and await sm_btn.is_visible():
+                            await self.page.keyboard.press("Escape")
+                            return True, ResultCode.SUCCESS, "Message available in profile options menu"
+                    await self.page.keyboard.press("Escape")
+                except Exception:
+                    pass
+
+        # Check Follow button (profile allows messaging once followed)
+        follow_btn = self.page.locator(InstagramSelectors.FOLLOW_BUTTON).first
+        if await follow_btn.count() > 0 and await follow_btn.is_visible():
+            return True, ResultCode.SUCCESS, "Message button can be unlocked via follow"
 
         # Check restricted message text
         content = await self.page.content()
@@ -204,6 +225,43 @@ class InstagramAdapter:
                             await btn.click(force=True, timeout=3000)
                         clicked = True
                         break
+
+                # Fallback 1: Try Options (···) menu
+                if not clicked:
+                    for opt_sel in InstagramSelectors.OPTIONS_BUTTON:
+                        opt_btn = self.page.locator(opt_sel).first
+                        if await opt_btn.count() > 0 and await opt_btn.is_visible():
+                            try:
+                                await opt_btn.click(timeout=2000)
+                                await asyncio.sleep(0.6)
+                                for sm_sel in InstagramSelectors.OPTIONS_SEND_MESSAGE:
+                                    sm_btn = self.page.locator(sm_sel).first
+                                    if await sm_btn.count() > 0 and await sm_btn.is_visible():
+                                        await sm_btn.click(timeout=3000)
+                                        clicked = True
+                                        break
+                                if clicked:
+                                    break
+                                await self.page.keyboard.press("Escape")
+                            except Exception:
+                                pass
+
+                # Fallback 2: Try clicking Follow to unlock Message button
+                if not clicked:
+                    follow_btn = self.page.locator(InstagramSelectors.FOLLOW_BUTTON).first
+                    if await follow_btn.count() > 0 and await follow_btn.is_visible():
+                        try:
+                            await follow_btn.click(timeout=3000)
+                            await asyncio.sleep(1.5)
+                            await self.dismiss_popups()
+                            for sel in InstagramSelectors.MESSAGE_BUTTON:
+                                btn = self.page.locator(sel).first
+                                if await btn.count() > 0 and await btn.is_visible():
+                                    await btn.click(timeout=3000)
+                                    clicked = True
+                                    break
+                        except Exception:
+                            pass
 
                 if not clicked:
                     return False, ResultCode.DM_NOT_AVAILABLE, "Could not click message button"

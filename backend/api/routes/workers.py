@@ -57,16 +57,21 @@ async def browser_stream_replies():
 
 def _get_fallback_frame(worker: str = "outreach") -> bytes:
     """Return latest screenshot on disk or synthesize a clean placeholder frame."""
-    target_pattern = f"*{worker}*.jpg" if worker in ("scanner", "outreach") else "*.jpg"
-    matched = list(SCREENSHOTS_DIR.glob(target_pattern))
-    if not matched:
-        matched = list(SCREENSHOTS_DIR.glob("*.jpg")) + list(SCREENSHOTS_DIR.glob("*.png"))
+    matched = list(SCREENSHOTS_DIR.glob("*.png")) + list(SCREENSHOTS_DIR.glob("*.jpg"))
     if matched:
         sorted_files = sorted(matched, key=os.path.getmtime, reverse=True)
-        for s in sorted_files:
+        for s in sorted_files[:8]:
             try:
                 b = s.read_bytes()
                 if len(b) > 100:
+                    if s.suffix.lower() == ".png":
+                        from PIL import Image
+                        import io
+                        im = Image.open(io.BytesIO(b))
+                        rgb_im = im.convert("RGB")
+                        buf = io.BytesIO()
+                        rgb_im.save(buf, format="JPEG", quality=80)
+                        return buf.getvalue()
                     return b
             except Exception:
                 pass
@@ -125,6 +130,12 @@ async def _stream_worker(worker: str = "outreach"):
             if not frame and worker == "outreach" and instagram_worker.browser_worker.is_running:
                 target_url = instagram_worker.current_instagram if instagram_worker.status.value == "RUNNING" else None
                 frame = await instagram_worker.browser_worker.capture_live_screenshot(target_url=target_url)
+
+            # 5. Fallback to newest screenshot from disk if still no live frame
+            if not frame:
+                disk_frame = _get_fallback_frame(worker)
+                if disk_frame and disk_frame != last_sent:
+                    frame = disk_frame
 
             if frame and frame != last_sent:
                 last_sent = frame

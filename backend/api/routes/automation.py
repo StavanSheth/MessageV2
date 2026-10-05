@@ -1,12 +1,18 @@
+import os
+import json
 import logging
 from typing import Optional
 from datetime import datetime, timezone
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
+from sqlalchemy.orm import selectinload
 from backend.workers.instagram_worker import instagram_worker
 from backend.repositories.task_repository import TaskRepository
 from backend.database.session import get_db
+from backend.database.models import Task, Contact, VerificationResult
+from backend.config.settings import SCREENSHOTS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +57,134 @@ async def automation_status(db: AsyncSession = Depends(get_db)):
     h = await instagram_worker.health()
     repo = TaskRepository(db)
     counts = await repo.count_by_status()
+
+    current_task_id = h.get("current_task_id")
+    current_run_id = h.get("current_run_id")
+
+    target_task = None
+    if current_task_id:
+        stmt = (
+            select(Task)
+            .options(selectinload(Task.contact), selectinload(Task.verifications), selectinload(Task.messages))
+            .where(Task.id == current_task_id)
+        )
+        target_task = (await db.execute(stmt)).scalar_one_or_none()
+
+    if not target_task:
+        stmt = (
+            select(Task)
+            .options(selectinload(Task.contact), selectinload(Task.verifications), selectinload(Task.messages))
+        )
+        if current_run_id:
+            stmt = stmt.where(Task.run_id == current_run_id)
+        else:
+            stmt = stmt.where(Task.worker_id == "WORKER-01")
+        stmt = stmt.order_by(desc(Task.completed_at), desc(Task.updated_at)).limit(1)
+        target_task = (await db.execute(stmt)).scalar_one_or_none()
+
+    current_contact = None
+    verification = None
+
+    if target_task and target_task.contact:
+        c = target_task.contact
+        msg_text = target_task.messages[0].body if target_task.messages else (c.message or "Hey")
+        current_contact = {
+            "id": c.id,
+            "name": c.name,
+            "username": c.username or "",
+            "instagram_url": c.instagram_url,
+            "message": c.message,
+            "custom_message": msg_text,
+            "followup_1_message": c.followup_1_message,
+            "followup_2_message": c.followup_2_message,
+            "expected_followers": c.expected_followers,
+            "replied_status": c.replied_status,
+            "notes": c.notes,
+            "task_id": target_task.id,
+            "task_type": target_task.type,
+            "task_status": target_task.status,
+            "is_done": target_task.status in ("COMPLETED", "SENT")
+        }
+        if target_task.verifications:
+            latest_vrf = target_task.verifications[-1]
+            sigs = []
+            if latest_vrf.signals_json:
+                try:
+                    sigs = json.loads(latest_vrf.signals_json)
+                except Exception:
+                    pass
+            verification = {
+                "confidence": latest_vrf.confidence,
+                "decision": latest_vrf.decision,
+                "reason": latest_vrf.reason,
+                "signals": sigs,
+                "screenshot_path": latest_vrf.screenshot_path
+            }
+
+    # Fetch all previous & current target profiles processed in this run
+    run_query = (
+        select(Task)
+        .options(selectinload(Task.contact), selectinload(Task.verifications), selectinload(Task.messages))
+    )
+    if current_run_id:
+        run_query = run_query.where(Task.run_id == current_run_id)
+    else:
+        run_query = run_query.where(Task.worker_id == "WORKER-01")
+    run_query = run_query.order_by(desc(Task.completed_at), desc(Task.updated_at)).limit(50)
+    run_tasks = (await db.execute(run_query)).scalars().all()
+
+    current_run_targets = []
+    for t in run_tasks:
+        c = t.contact
+        if not c:
+            continue
+        vrf_dict = None
+        if t.verifications:
+            v = t.verifications[-1]
+            sigs = []
+            if v.signals_json:
+                try:
+                    sigs = json.loads(v.signals_json)
+                except Exception:
+                    pass
+            vrf_dict = {
+                "confidence": v.confidence,
+                "decision": v.decision,
+                "reason": v.reason,
+                "signals": sigs
+            }
+        
+        current_run_targets.append({
+            "task_id": t.id,
+            "contact_id": c.id,
+            "name": c.name,
+            "username": c.username or "",
+            "instagram_url": c.instagram_url,
+            "task_type": t.type,
+            "status": t.status,
+            "is_done": t.status in ("COMPLETED", "SENT"),
+            "message": t.messages[0].body if t.messages else (c.message or "Hey"),
+            "replied_status": c.replied_status,
+            "completed_at": t.completed_at.isoformat() if t.completed_at else (t.updated_at.isoformat() if t.updated_at else None),
+            "verification": vrf_dict
+        })
+
+    # Latest screenshot filename on disk
+    latest_screenshot = None
+    try:
+        matched_shots = list(SCREENSHOTS_DIR.glob("*.png")) + list(SCREENSHOTS_DIR.glob("*.jpg"))
+        if matched_shots:
+            latest_file = max(matched_shots, key=os.path.getmtime)
+            latest_screenshot = latest_file.name
+    except Exception:
+        pass
+
     return {
         **h,
+        "current_contact": current_contact,
+        "verification": verification,
+        "latest_screenshot": latest_screenshot,
+        "current_run_targets": current_run_targets,
         "task_counts": counts
     }
 

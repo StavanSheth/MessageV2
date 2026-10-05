@@ -146,6 +146,21 @@ export interface VerificationOutput {
   reason: string;
 }
 
+export interface CurrentRunTarget {
+  task_id: string;
+  contact_id: string;
+  name: string;
+  username: string;
+  instagram_url: string;
+  task_type: string;
+  status: string;
+  is_done: boolean;
+  message: string;
+  replied_status: string;
+  completed_at?: string | null;
+  verification?: VerificationOutput | null;
+}
+
 export interface LiveAutomationState {
   worker_id: string;
   worker_name: string;
@@ -169,6 +184,7 @@ export interface LiveAutomationState {
     action?: string;
     completed_at?: string;
   }>;
+  current_run_targets?: CurrentRunTarget[];
   batch_limit?: number | null;
   batch_sent_count?: number;
   latest_screenshot?: string;

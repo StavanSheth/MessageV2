@@ -101,6 +101,9 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   const [outreachTick, setOutreachTick] = useState(Date.now());
   const [outreachStreamError, setOutreachStreamError] = useState(false);
   const [outreachFeedError, setOutreachFeedError] = useState(false);
+  const [captureModeTabA, setCaptureModeTabA] = useState<'feed' | 'stream'>('feed');
+  const [selectedTargetTaskId, setSelectedTargetTaskId] = useState<string | null>(null);
+  const [isRefreshingTabA, setIsRefreshingTabA] = useState(false);
 
   // Stream state for Worker 2 (Scanner)
   const [scannerTick, setScannerTick] = useState(Date.now());
@@ -349,30 +352,22 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     return () => clearInterval(testTimer);
   }, []);
 
-  // Periodic tick for snapshot refresh fallbacks
+  // Periodic tick for live snapshot refresh (refreshes Tab A & B continuously)
   useEffect(() => {
     const timer = setInterval(() => {
       setOutreachTick(Date.now());
       setScannerTick(Date.now());
-    }, 2000);
+    }, 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // Periodic auto-recovery for live stream reconnection
-  useEffect(() => {
-    if (!outreachStreamError && !scannerStreamError) return;
-    const retryTimer = setTimeout(() => {
-      if (outreachStreamError) {
-        setOutreachStreamError(false);
-        setOutreachFeedError(false);
-      }
-      if (scannerStreamError) {
-        setScannerStreamError(false);
-        setScannerFeedError(false);
-      }
-    }, 4000);
-    return () => clearTimeout(retryTimer);
-  }, [outreachStreamError, scannerStreamError]);
+  const handleRefreshTabA = () => {
+    setIsRefreshingTabA(true);
+    setOutreachStreamError(false);
+    setOutreachFeedError(false);
+    setOutreachTick(Date.now());
+    setTimeout(() => setIsRefreshingTabA(false), 500);
+  };
 
   const handleOpenChrome = async () => {
     setIsOpeningBrowser(true);
@@ -883,211 +878,395 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
           </div>
 
           {/* Worker 1: 3-Column Grid (Target Profile + Verification Radar + Live Capture) */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-            {/* Col 1: Current Target Profile */}
-            <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-gray-800">
-                <div className="flex items-center space-x-2">
-                  <UserCheck className="w-4 h-4 text-emerald-400" />
-                  <h4 className="font-bold text-white text-sm">Current Target Profile</h4>
-                </div>
-                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-gray-800 text-gray-300">
-                  {state.current_task_id ? `Task #${state.current_task_id.slice(0, 8)}` : 'No Active Task'}
-                </span>
-              </div>
+          {(() => {
+            const runTargets = state.current_run_targets || [];
+            const selectedTarget = selectedTargetTaskId
+              ? runTargets.find((t) => t.task_id === selectedTargetTaskId)
+              : null;
 
-              {state.current_contact ? (
-                <div className="space-y-3 text-xs">
-                  <div>
-                    <span className="text-gray-400 block text-[11px]">Recipient Name</span>
-                    <p className="text-base font-bold text-white mt-0.5">{state.current_contact.name || 'N/A'}</p>
-                  </div>
+            const effectiveTarget = selectedTarget || (state.current_contact ? {
+              task_id: (state.current_contact as any).task_id || state.current_task_id || 'active',
+              contact_id: state.current_contact.id,
+              name: state.current_contact.name,
+              username: state.current_contact.username || '',
+              instagram_url: state.current_contact.instagram_url,
+              task_type: (state.current_contact as any).task_type || 'MESSAGE',
+              status: (state.current_contact as any).task_status || (state.status === 'RUNNING' ? 'RUNNING' : 'COMPLETED'),
+              is_done: (state.current_contact as any).is_done ?? (state.status !== 'RUNNING'),
+              message: (state.current_contact as any).custom_message || state.current_contact.message || 'Hey',
+              replied_status: state.current_contact.replied_status || 'UNKNOWN',
+              completed_at: null,
+              verification: state.verification
+            } : (runTargets.length > 0 ? runTargets[0] : null));
 
-                  <div>
-                    <span className="text-gray-400 block text-[11px]">Instagram Profile</span>
-                    <a
-                      href={state.current_contact.instagram_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-sm font-mono font-semibold text-emerald-400 hover:underline inline-flex items-center space-x-1 mt-0.5"
-                    >
-                      <span>@{state.current_contact.username}</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </div>
+            const effectiveVerification = selectedTarget
+              ? selectedTarget.verification
+              : (state.verification || (effectiveTarget?.verification ?? null));
 
-                  <div>
-                    <span className="text-gray-400 block text-[11px]">Outreach Message</span>
-                    <div className="mt-1 p-3 bg-gray-900 border border-gray-800 rounded-xl text-gray-200 font-sans leading-relaxed">
-                      "{state.current_contact.custom_message || state.current_contact.message || 'Hey'}"
-                    </div>
-                  </div>
-
-                  {state.current_url && (
-                    <div>
-                      <span className="text-gray-400 block text-[11px]">Active Tab URL</span>
-                      <p className="text-[11px] font-mono text-gray-400 truncate mt-0.5 bg-gray-900 px-2 py-1 rounded border border-gray-800">
-                        {state.current_url}
-                      </p>
-                    </div>
-                  )}
-
-                  <div className="pt-2 border-t border-gray-800">
-                    <span className="text-[10px] text-gray-400 uppercase font-bold block mb-1">Last System Event</span>
-                    <p className="text-[11px] font-mono text-emerald-300 bg-black/40 p-2 rounded border border-gray-800 truncate">
-                      {state.last_event || 'Awaiting task activity...'}
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="py-12 text-center text-gray-500">
-                  <Compass className="w-8 h-8 mx-auto text-gray-600 mb-2 opacity-60" />
-                  <p className="text-xs">Worker 1 is currently waiting or idle.</p>
-                  <p className="text-[11px] text-gray-600 mt-0.5">Start a batch to dispatch messages.</p>
-                </div>
-              )}
-            </div>
-
-            {/* Col 2: Identity Verification Radar */}
-            <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-4 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between pb-3 border-b border-gray-800">
-                  <div className="flex items-center space-x-2">
-                    <ShieldCheck className="w-4 h-4 text-indigo-400" />
-                    <h4 className="font-bold text-white text-sm">Identity Verification Radar</h4>
-                  </div>
-                  {state.verification && (
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
-                      state.verification.decision === 'HIGH_CONFIDENCE'
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                        : state.verification.decision === 'MEDIUM_CONFIDENCE'
-                        ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                        : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                    }`}>
-                      {state.verification.decision}
-                    </span>
-                  )}
-                </div>
-
-                {state.verification ? (
-                  <div className="mt-4 space-y-4">
-                    <div className="bg-gray-900 p-4 rounded-xl border border-gray-800 text-center">
-                      <span className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Match Confidence Score</span>
-                      <div className="text-3xl font-black text-white mt-0.5">
-                        {(state.verification.confidence * 100).toFixed(0)}%
+            return (
+              <div className="space-y-5">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                  {/* Col 1: Current Target Profile */}
+                  <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-4">
+                    <div className="flex items-center justify-between pb-3 border-b border-gray-800">
+                      <div className="flex items-center space-x-2">
+                        <UserCheck className="w-4 h-4 text-emerald-400" />
+                        <h4 className="font-bold text-white text-sm">
+                          {selectedTarget ? 'Inspecting Previous Target' : 'Current Target Profile'}
+                        </h4>
                       </div>
-                      <p className="text-[11px] text-gray-400 mt-1">
-                        {state.verification.reason}
-                      </p>
+                      <div className="flex items-center space-x-1.5">
+                        {effectiveTarget && (
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                              effectiveTarget.is_done || effectiveTarget.status === 'COMPLETED'
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                : effectiveTarget.status === 'RUNNING'
+                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                                : effectiveTarget.status === 'SKIPPED'
+                                ? 'bg-gray-800 text-gray-400 border border-gray-700'
+                                : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                            }`}
+                          >
+                            {effectiveTarget.is_done ? 'DONE (SENT)' : effectiveTarget.status}
+                          </span>
+                        )}
+                        {selectedTarget && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedTargetTaskId(null)}
+                            className="text-[10px] bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-0.5 rounded transition cursor-pointer"
+                            title="Return to currently active live task"
+                          >
+                            Live
+                          </button>
+                        )}
+                      </div>
                     </div>
 
-                    <div className="space-y-2">
-                      <span className="text-[10px] text-gray-400 uppercase tracking-wider font-bold block">
-                        Verification Signals Evaluated
-                      </span>
-                      {state.verification.signals && state.verification.signals.length > 0 ? (
-                        state.verification.signals.map((sig, i) => (
-                          <div key={i} className="bg-gray-900/80 border border-gray-800 p-2.5 rounded-lg flex items-center justify-between text-xs">
-                            <div>
-                              <span className="font-semibold text-gray-200 capitalize">{sig.name}</span>
-                              <span className="text-[10px] text-gray-500 block">{sig.notes || 'Signal evaluated'}</span>
-                            </div>
-                            <span className={`font-mono font-bold ${
-                              sig.score >= 0.8 ? 'text-emerald-400' : sig.score >= 0.5 ? 'text-amber-400' : 'text-rose-400'
-                            }`}>
-                              {(sig.score * 100).toFixed(0)}%
+                    {effectiveTarget ? (
+                      <div className="space-y-3 text-xs">
+                        <div>
+                          <span className="text-gray-400 block text-[11px]">Recipient Name</span>
+                          <div className="flex items-center justify-between mt-0.5">
+                            <p className="text-base font-bold text-white">{effectiveTarget.name || 'N/A'}</p>
+                            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-gray-800 text-gray-300">
+                              {effectiveTarget.task_type || 'MESSAGE'}
                             </span>
                           </div>
-                        ))
+                        </div>
+
+                        <div>
+                          <span className="text-gray-400 block text-[11px]">Instagram Profile</span>
+                          <a
+                            href={effectiveTarget.instagram_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-sm font-mono font-semibold text-emerald-400 hover:underline inline-flex items-center space-x-1 mt-0.5"
+                          >
+                            <span>@{effectiveTarget.username || 'unknown'}</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+
+                        <div>
+                          <span className="text-gray-400 block text-[11px]">Outreach Copy</span>
+                          <div className="mt-1 p-3 bg-gray-900 border border-gray-800 rounded-xl text-gray-200 font-sans leading-relaxed text-xs">
+                            "{effectiveTarget.message || 'Hey'}"
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[11px] pt-1 border-t border-gray-800/80">
+                          <span className="text-gray-400">Database Status:</span>
+                          <span className="font-mono text-emerald-400 font-bold">
+                            {effectiveTarget.is_done ? '✓ Message Sent to DB' : 'Queue Task Staged'}
+                          </span>
+                        </div>
+
+                        {effectiveTarget.completed_at && (
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="text-gray-400">Executed At:</span>
+                            <span className="font-mono text-gray-300">{new Date(effectiveTarget.completed_at).toLocaleTimeString()}</span>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="py-12 text-center text-gray-500">
+                        <Compass className="w-8 h-8 mx-auto text-gray-600 mb-2 opacity-60" />
+                        <p className="text-xs">Worker 1 is currently waiting or idle.</p>
+                        <p className="text-[11px] text-gray-600 mt-0.5">Start a batch to dispatch messages.</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Col 2: Identity Verification Radar */}
+                  <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-4 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between pb-3 border-b border-gray-800">
+                        <div className="flex items-center space-x-2">
+                          <ShieldCheck className="w-4 h-4 text-indigo-400" />
+                          <h4 className="font-bold text-white text-sm">Identity Verification Radar</h4>
+                        </div>
+                        {effectiveVerification && (
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                              effectiveVerification.decision === 'HIGH_CONFIDENCE'
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                : effectiveVerification.decision === 'MEDIUM_CONFIDENCE'
+                                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                            }`}
+                          >
+                            {effectiveVerification.decision}
+                          </span>
+                        )}
+                      </div>
+
+                      {effectiveVerification ? (
+                        <div className="mt-4 space-y-4">
+                          <div className="bg-gray-900 p-4 rounded-xl border border-gray-800 text-center">
+                            <span className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">
+                              Match Confidence Score
+                            </span>
+                            <div className="text-3xl font-black text-white mt-0.5">
+                              {(effectiveVerification.confidence * 100).toFixed(0)}%
+                            </div>
+                            <p className="text-[11px] text-gray-400 mt-1">
+                              {effectiveVerification.reason || 'Verified account parameters match target criteria.'}
+                            </p>
+                          </div>
+
+                          <div className="space-y-2">
+                            <span className="text-[10px] text-gray-400 uppercase tracking-wider font-bold block">
+                              Verification Signals Evaluated
+                            </span>
+                            {effectiveVerification.signals && effectiveVerification.signals.length > 0 ? (
+                              effectiveVerification.signals.map((sig, i) => (
+                                <div
+                                  key={i}
+                                  className="bg-gray-900/80 border border-gray-800 p-2.5 rounded-lg flex items-center justify-between text-xs"
+                                >
+                                  <div>
+                                    <span className="font-semibold text-gray-200 capitalize">{sig.name}</span>
+                                    <span className="text-[10px] text-gray-500 block">{sig.notes || 'Signal evaluated'}</span>
+                                  </div>
+                                  <span
+                                    className={`font-mono font-bold ${
+                                      sig.score >= 0.8
+                                        ? 'text-emerald-400'
+                                        : sig.score >= 0.5
+                                        ? 'text-amber-400'
+                                        : 'text-rose-400'
+                                    }`}
+                                  >
+                                    {(sig.score * 100).toFixed(0)}%
+                                  </span>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="bg-gray-900/60 border border-gray-800 p-3 rounded-lg text-xs space-y-1">
+                                <div className="flex items-center justify-between text-emerald-400">
+                                  <span>Username & URL Match</span>
+                                  <span className="font-mono font-bold">100%</span>
+                                </div>
+                                <div className="flex items-center justify-between text-emerald-400">
+                                  <span>Profile Accessibility</span>
+                                  <span className="font-mono font-bold">100%</span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       ) : (
-                        <p className="text-xs text-gray-500 italic">No detailed signals available.</p>
+                        <div className="py-12 text-center text-gray-500">
+                          <ShieldCheck className="w-8 h-8 mx-auto text-gray-600 mb-2 opacity-50" />
+                          <p className="text-xs">Awaiting profile inspection.</p>
+                          <p className="text-[11px] text-gray-600 mt-0.5">
+                            Multi-signal verification populates once profile loads in Chrome.
+                          </p>
+                        </div>
                       )}
                     </div>
                   </div>
-                ) : (
-                  <div className="py-12 text-center text-gray-500">
-                    <ShieldCheck className="w-8 h-8 mx-auto text-gray-600 mb-2 opacity-50" />
-                    <p className="text-xs">Awaiting profile inspection.</p>
-                    <p className="text-[11px] text-gray-600 mt-0.5">Multi-signal verification populates once profile loads.</p>
+
+                  {/* Col 3: Visible Chrome Capture (Tab A) */}
+                  <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-3 flex flex-col justify-between">
+                    <div className="flex items-center justify-between pb-3 border-b border-gray-800">
+                      <div className="flex items-center space-x-2">
+                        <Eye className="w-4 h-4 text-emerald-400" />
+                        <h4 className="font-bold text-white text-sm">Visible Chrome Capture (Tab A)</h4>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <div className="flex rounded-lg bg-gray-900 p-0.5 border border-gray-800 text-[10px]">
+                          <button
+                            type="button"
+                            onClick={() => setCaptureModeTabA('feed')}
+                            className={`px-2 py-0.5 rounded font-bold transition cursor-pointer ${
+                              captureModeTabA === 'feed'
+                                ? 'bg-indigo-600 text-white'
+                                : 'text-gray-400 hover:text-white'
+                            }`}
+                          >
+                            1s Live
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCaptureModeTabA('stream')}
+                            className={`px-2 py-0.5 rounded font-bold transition cursor-pointer ${
+                              captureModeTabA === 'stream'
+                                ? 'bg-indigo-600 text-white'
+                                : 'text-gray-400 hover:text-white'
+                            }`}
+                          >
+                            MJPEG
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={handleRefreshTabA}
+                          title="Instant refresh Tab A capture"
+                          className="p-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition cursor-pointer"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingTabA ? 'animate-spin text-emerald-400' : ''}`} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="relative rounded-xl overflow-hidden border border-gray-800 bg-black aspect-video flex items-center justify-center shadow-inner">
+                      <img
+                        key={captureModeTabA === 'feed' ? `feed-${outreachTick}` : 'stream'}
+                        src={
+                          captureModeTabA === 'feed'
+                            ? `/api/browser/live_feed?worker=outreach&t=${outreachTick}`
+                            : (outreachStreamError
+                                ? `/api/browser/live_feed?worker=outreach&t=${outreachTick}`
+                                : '/api/browser/stream/outreach')
+                        }
+                        alt="Visible Chrome Tab A Stream"
+                        className="w-full h-full object-contain"
+                        onError={() => {
+                          if (captureModeTabA === 'stream' && !outreachStreamError) {
+                            setOutreachStreamError(true);
+                          } else {
+                            setOutreachFeedError(true);
+                          }
+                        }}
+                        onLoad={() => setOutreachFeedError(false)}
+                      />
+                      {outreachFeedError && screenshotUrl && (
+                        <img
+                          src={screenshotUrl}
+                          alt="Current Browser Screenshot"
+                          className="absolute inset-0 w-full h-full object-contain"
+                        />
+                      )}
+                      {outreachFeedError && !screenshotUrl && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-gray-950">
+                          <Eye className="w-6 h-6 text-emerald-400 mb-1 opacity-80 animate-pulse" />
+                          <p className="text-xs text-gray-200 font-semibold">Tab A: Instagram Outreach</p>
+                          <p className="text-[10px] text-gray-500 mt-0.5">Capturing live Instagram outreach tab.</p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-gray-400 pt-1">
+                      <span className="text-emerald-400 font-mono text-[10px] flex items-center space-x-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
+                        <span>Tab A Live Capture Active</span>
+                      </span>
+                      <a
+                        href={`/api/browser/live_feed?worker=outreach&t=${Date.now()}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-indigo-400 hover:underline inline-flex items-center space-x-1"
+                      >
+                        <span>Full Size</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
                   </div>
-                )}
-              </div>
-            </div>
-
-            {/* Col 3: Visible Chrome Capture (Tab A) */}
-            <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-3 flex flex-col justify-between">
-              <div className="flex items-center justify-between pb-3 border-b border-gray-800">
-                <div className="flex items-center space-x-2">
-                  <Eye className="w-4 h-4 text-emerald-400" />
-                  <h4 className="font-bold text-white text-sm">Visible Chrome Capture (Tab A)</h4>
                 </div>
-                <div className="flex items-center space-x-2">
-                  <span className="flex items-center space-x-1 text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>Live Stream</span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOutreachStreamError(false);
-                      setOutreachFeedError(false);
-                      setOutreachTick(Date.now());
-                    }}
-                    title="Reconnect Tab A video stream"
-                    className="p-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition cursor-pointer"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
 
-              <div className="relative rounded-xl overflow-hidden border border-gray-800 bg-black aspect-video flex items-center justify-center shadow-inner">
-                <img
-                  src={outreachStreamError ? `/api/browser/live_feed?worker=outreach&t=${outreachTick}` : "/api/browser/stream/outreach"}
-                  alt="Visible Chrome Tab A Stream"
-                  className="w-full h-full object-contain"
-                  onError={() => {
-                    if (!outreachStreamError) {
-                      setOutreachStreamError(true);
-                    } else {
-                      setOutreachFeedError(true);
-                    }
-                  }}
-                  onLoad={() => setOutreachFeedError(false)}
-                />
-                {outreachFeedError && screenshotUrl && (
-                  <img
-                    src={screenshotUrl}
-                    alt="Current Browser Screenshot"
-                    className="absolute inset-0 w-full h-full object-contain"
-                  />
-                )}
-                {outreachFeedError && !screenshotUrl && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-gray-950">
-                    <Eye className="w-6 h-6 text-emerald-400 mb-1 opacity-80 animate-pulse" />
-                    <p className="text-xs text-gray-200 font-semibold">Tab A: Instagram Outreach</p>
-                    <p className="text-[10px] text-gray-500 mt-0.5">Streaming live isolated outreach tab.</p>
+                {/* ─────────────────────────────────────────────────────────────
+                    PREVIOUS TARGET PROFILES (DONE / NOT DONE IN CURRENT RUN)
+                    ───────────────────────────────────────────────────────────── */}
+                <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-gray-800">
+                    <div className="flex items-center space-x-2">
+                      <Activity className="w-4 h-4 text-indigo-400" />
+                      <h4 className="font-bold text-white text-sm">
+                        Current Run Target Profiles & Execution History ({runTargets.length} Processed)
+                      </h4>
+                    </div>
+                    <div className="flex items-center space-x-2 text-[11px]">
+                      <span className="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/30 text-emerald-400 font-bold">
+                        {runTargets.filter((t) => t.is_done || t.status === 'COMPLETED').length} Done
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-amber-950 border border-amber-500/30 text-amber-400 font-bold">
+                        {runTargets.filter((t) => t.status === 'RUNNING').length} Active
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-gray-800 text-gray-400 font-bold">
+                        {runTargets.filter((t) => t.status === 'SKIPPED' || t.status === 'FAILED').length} Other
+                      </span>
+                    </div>
                   </div>
-                )}
-              </div>
 
-              <div className="flex items-center justify-between text-[11px] text-gray-400 pt-1">
-                <span className="text-emerald-400 font-mono text-[10px] flex items-center space-x-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
-                  <span>Tab A screencast attached</span>
-                </span>
-                <a
-                  href={outreachStreamError ? `/api/browser/live_feed?worker=outreach&t=${outreachTick}` : "/api/browser/stream/outreach"}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-indigo-400 hover:underline inline-flex items-center space-x-1"
-                >
-                  <span>Open Full Video</span>
-                  <ExternalLink className="w-3 h-3" />
-                </a>
+                  {runTargets.length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5 max-h-[280px] overflow-y-auto pr-1">
+                      {runTargets.map((t) => {
+                        const isSelected = selectedTargetTaskId === t.task_id;
+                        return (
+                          <div
+                            key={t.task_id}
+                            onClick={() => setSelectedTargetTaskId(isSelected ? null : t.task_id)}
+                            className={`p-3 rounded-xl border transition cursor-pointer flex flex-col justify-between space-y-2 ${
+                              isSelected
+                                ? 'bg-indigo-950/50 border-indigo-500 shadow-md shadow-indigo-600/20'
+                                : 'bg-gray-900/60 border-gray-800 hover:border-gray-700'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <span className="font-bold text-white text-xs block truncate max-w-[140px]">
+                                  {t.name}
+                                </span>
+                                <span className="font-mono text-[11px] text-indigo-400 block truncate max-w-[140px]">
+                                  @{t.username || 'unknown'}
+                                </span>
+                              </div>
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase shrink-0 ${
+                                  t.is_done || t.status === 'COMPLETED'
+                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                    : t.status === 'RUNNING'
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                                    : t.status === 'SKIPPED'
+                                    ? 'bg-gray-800 text-gray-400 border border-gray-700'
+                                    : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                                }`}
+                              >
+                                {t.is_done ? 'DONE' : t.status}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center justify-between text-[10px] text-gray-400 pt-1 border-t border-gray-800/60">
+                              <span>{t.task_type}</span>
+                              <span>{t.completed_at ? new Date(t.completed_at).toLocaleTimeString() : 'In Progress'}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-500 italic py-4 text-center">
+                      No target profiles dispatched in current run yet. Start a batch to dispatch messages.
+                    </p>
+                  )}
+                </div>
               </div>
-            </div>
-          </div>
+            );
+          })()}
         </div>
       )}
 

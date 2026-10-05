@@ -282,6 +282,38 @@ export async function cancelFollowups(taskIds?: string[], contactIds?: string[])
   return res.json();
 }
 
+export async function updateTask(
+  taskId: string,
+  payload: {
+    status?: string;
+    scheduled_at?: string | null;
+    priority?: number;
+    message?: string;
+  }
+): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to update task');
+  }
+  return res.json();
+}
+
+export async function toggleTaskPause(taskId: string): Promise<{ task_id: string; status: string }> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/toggle-pause`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to toggle task pause state');
+  }
+  return res.json();
+}
+
 
 export async function fetchSources(): Promise<Source[]> {
   const res = await fetch(`${BASE_URL}/api/sources`);

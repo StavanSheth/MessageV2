@@ -10,7 +10,8 @@ export type TaskStatus =
   | 'SKIPPED'
   | 'CANCELLED'
   | 'INTERRUPTED'
-  | 'RECONCILING';
+  | 'RECONCILING'
+  | 'PAUSED';
 
 export type MessageStatus =
   | 'PENDING'
@@ -112,8 +113,11 @@ export interface Task {
   error_message?: string;
   manual_review_reason?: string;
   scheduled_at?: string;
+  scheduled_at_raw?: string;
   started_at?: string;
+  started_at_raw?: string;
   completed_at?: string;
+  completed_at_raw?: string;
   next_retry_at?: string;
   claimed_by_worker_id?: string;
   worker_id?: string;
@@ -160,6 +164,7 @@ export interface CurrentRunTarget {
   is_done: boolean;
   message: string;
   replied_status: string;
+  started_at?: string | null;
   completed_at?: string | null;
   verification?: VerificationOutput | null;
 }

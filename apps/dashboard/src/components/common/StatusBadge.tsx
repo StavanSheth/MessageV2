@@ -29,6 +29,8 @@ export function getStatusBadgeClass(status?: BadgeStatus | null): string {
       return 'bg-amber-500/20 text-amber-400 border-amber-500/40';
     case 'MANUAL_REVIEW':
       return 'bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold';
+    case 'PAUSED':
+      return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
     case 'CANCELLED':
     case 'SKIPPED':
       return 'bg-gray-800 text-gray-400 border-gray-700';

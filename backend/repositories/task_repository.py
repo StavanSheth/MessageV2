@@ -121,7 +121,7 @@ class TaskRepository:
             values["completed_at"] = now
             values["lease_owner"] = None
             values["lease_expires_at"] = None
-        elif new_status == TaskStatus.READY:
+        elif new_status in (TaskStatus.READY, TaskStatus.PAUSED):
             values["lease_owner"] = None
             values["lease_expires_at"] = None
 
@@ -141,7 +141,10 @@ class TaskRepository:
         return await self.get_by_id(task_id)
 
     async def list_tasks(self, status: Optional[str] = None, limit: int = 2000, offset: int = 0) -> List[Task]:
-        stmt = select(Task).options(selectinload(Task.contact))
+        stmt = select(Task).options(
+            selectinload(Task.contact).selectinload(Contact.tasks),
+            selectinload(Task.messages)
+        )
         if status:
             stmt = stmt.where(Task.status == status)
             if status == TaskStatus.COMPLETED.value:
@@ -190,4 +193,22 @@ class TaskRepository:
         result = await self.session.execute(stmt)
         await self.session.commit()
         return result.rowcount > 0
+
+    async def update_task(self, task_id: str, **kwargs) -> Optional[Task]:
+        task = await self.get_by_id(task_id)
+        if not task:
+            return None
+        now = datetime.now(timezone.utc)
+        values = {"updated_at": now}
+        for k, v in kwargs.items():
+            if hasattr(Task, k):
+                values[k] = v
+        if "status" in values:
+            if values["status"] in (TaskStatus.READY.value, TaskStatus.PAUSED.value):
+                values["lease_owner"] = None
+                values["lease_expires_at"] = None
+        stmt = update(Task).where(Task.id == task_id).values(**values)
+        await self.session.execute(stmt)
+        await self.session.commit()
+        return await self.get_by_id(task_id)
 

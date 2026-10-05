@@ -8,10 +8,11 @@ class StateTransitionError(Exception):
         self.to_state = to_state
 
 VALID_TASK_TRANSITIONS: Dict[TaskStatus, Set[TaskStatus]] = {
-    TaskStatus.CREATED: {TaskStatus.VALIDATING, TaskStatus.QUEUED, TaskStatus.READY, TaskStatus.CANCELLED},
-    TaskStatus.VALIDATING: {TaskStatus.QUEUED, TaskStatus.READY, TaskStatus.SKIPPED, TaskStatus.CANCELLED},
-    TaskStatus.QUEUED: {TaskStatus.READY, TaskStatus.CANCELLED},
-    TaskStatus.READY: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
+    TaskStatus.CREATED: {TaskStatus.VALIDATING, TaskStatus.QUEUED, TaskStatus.READY, TaskStatus.CANCELLED, TaskStatus.PAUSED},
+    TaskStatus.VALIDATING: {TaskStatus.QUEUED, TaskStatus.READY, TaskStatus.SKIPPED, TaskStatus.CANCELLED, TaskStatus.PAUSED},
+    TaskStatus.QUEUED: {TaskStatus.READY, TaskStatus.CANCELLED, TaskStatus.PAUSED},
+    TaskStatus.READY: {TaskStatus.RUNNING, TaskStatus.CANCELLED, TaskStatus.PAUSED},
+    TaskStatus.PAUSED: {TaskStatus.READY, TaskStatus.CANCELLED, TaskStatus.SKIPPED},
     TaskStatus.RUNNING: {
         TaskStatus.COMPLETED,
         TaskStatus.READY,
@@ -20,10 +21,11 @@ VALID_TASK_TRANSITIONS: Dict[TaskStatus, Set[TaskStatus]] = {
         TaskStatus.SKIPPED,
         TaskStatus.CANCELLED,
         TaskStatus.INTERRUPTED,
-        TaskStatus.RECONCILING
+        TaskStatus.RECONCILING,
+        TaskStatus.PAUSED
     },
-    TaskStatus.RETRY_WAIT: {TaskStatus.READY, TaskStatus.CANCELLED},
-    TaskStatus.MANUAL_REVIEW: {TaskStatus.READY, TaskStatus.SKIPPED, TaskStatus.CANCELLED, TaskStatus.COMPLETED},
+    TaskStatus.RETRY_WAIT: {TaskStatus.READY, TaskStatus.CANCELLED, TaskStatus.PAUSED},
+    TaskStatus.MANUAL_REVIEW: {TaskStatus.READY, TaskStatus.SKIPPED, TaskStatus.CANCELLED, TaskStatus.COMPLETED, TaskStatus.PAUSED},
     TaskStatus.RECONCILING: {TaskStatus.COMPLETED, TaskStatus.READY, TaskStatus.MANUAL_REVIEW, TaskStatus.CANCELLED},
     TaskStatus.INTERRUPTED: {TaskStatus.RECONCILING, TaskStatus.READY, TaskStatus.MANUAL_REVIEW, TaskStatus.CANCELLED},
     TaskStatus.COMPLETED: set(),

@@ -20,6 +20,7 @@ class TaskStatus(str, Enum):
     CANCELLED = "CANCELLED"
     INTERRUPTED = "INTERRUPTED"
     RECONCILING = "RECONCILING"
+    PAUSED = "PAUSED"
 
 class MessageStatus(str, Enum):
     PENDING = "PENDING"

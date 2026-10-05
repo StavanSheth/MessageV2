@@ -45,6 +45,34 @@ async def list_tasks(status: str = None, limit: int = 2000, offset: int = 0, db:
             msg = parts[1].strip() if len(parts) > 1 else ""
         return cat, msg, reason
 
+    def resolve_contact_dict(c):
+        if not c:
+            return None
+        c_tasks = getattr(c, "tasks", []) or []
+        t_msg = next((tk for tk in c_tasks if tk.type == "MESSAGE"), None)
+        t_fu1 = next((tk for tk in c_tasks if tk.type == "FOLLOW_UP_1"), None)
+        t_fu2 = next((tk for tk in c_tasks if tk.type == "FOLLOW_UP_2"), None)
+        return {
+            "id": c.id,
+            "name": c.name,
+            "username": c.username or "",
+            "instagram_url": c.instagram_url,
+            "message": c.message,
+            "followup_1_message": c.followup_1_message,
+            "followup_1_delay_days": c.followup_1_delay_days,
+            "followup_1_scheduled_at": t_fu1.scheduled_at.isoformat() if (t_fu1 and t_fu1.scheduled_at) else None,
+            "followup_1_status": t_fu1.status if t_fu1 else "NOT_SCHEDULED",
+            "followup_2_message": c.followup_2_message,
+            "followup_2_delay_days": c.followup_2_delay_days,
+            "followup_2_scheduled_at": t_fu2.scheduled_at.isoformat() if (t_fu2 and t_fu2.scheduled_at) else None,
+            "followup_2_status": t_fu2.status if t_fu2 else "NOT_SCHEDULED",
+            "first_message_scheduled_at": t_msg.scheduled_at.isoformat() if (t_msg and t_msg.scheduled_at) else None,
+            "first_message_status": t_msg.status if t_msg else "NOT_QUEUED",
+            "has_replied": getattr(c, "has_replied", False) or (c.replied_status == "YES"),
+            "replied_status": c.replied_status,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+        }
+
     return [{
         "id": t.id,
         "contact_id": t.contact_id,
@@ -65,11 +93,15 @@ async def list_tasks(status: str = None, limit: int = 2000, offset: int = 0, db:
         "error_message": parse_error_info(t)[1],
         "replied_status": t.contact.replied_status if t.contact else None,
         "scheduled_at": format_datetime_readable(t.scheduled_at),
+        "scheduled_at_raw": t.scheduled_at.isoformat() if t.scheduled_at else None,
         "started_at": format_datetime_readable(t.started_at),
+        "started_at_raw": t.started_at.isoformat() if t.started_at else None,
         "completed_at": format_datetime_readable(t.completed_at),
+        "completed_at_raw": t.completed_at.isoformat() if t.completed_at else None,
         "worker_id": t.worker_id,
         "created_at": t.created_at.isoformat() if t.created_at else None,
-        "updated_at": t.updated_at.isoformat() if t.updated_at else None
+        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+        "contact": resolve_contact_dict(t.contact)
     } for t in tasks]
 
 @router.get("/export/excel")
@@ -150,7 +182,79 @@ async def delete_task(task_id: str, db: AsyncSession = Depends(get_db)):
     return {"id": task_id, "status": "deleted"}
 
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
+
+class UpdateTaskRequest(BaseModel):
+    status: Optional[str] = None
+    scheduled_at: Optional[str] = None
+    priority: Optional[int] = None
+    message: Optional[str] = None
+
+@router.put("/{task_id}")
+async def update_task_details(task_id: str, req: UpdateTaskRequest, db: AsyncSession = Depends(get_db)):
+    """Update task schedule, priority, status, and associated sequence message."""
+    from dateutil import parser as dt_parser
+    repo = TaskRepository(db)
+    task = await repo.get_by_id(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+
+    kwargs = {}
+    if req.status:
+        st_upper = req.status.upper()
+        if st_upper in ("SCHEDULED", "READY"):
+            kwargs["status"] = TaskStatus.READY.value
+        elif st_upper in ("PAUSED", "CANCELLED", "COMPLETED", "MANUAL_REVIEW", "QUEUED"):
+            kwargs["status"] = st_upper
+        else:
+            kwargs["status"] = st_upper
+
+    if req.scheduled_at:
+        try:
+            dt = dt_parser.parse(req.scheduled_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            kwargs["scheduled_at"] = dt
+        except Exception:
+            raise HTTPException(400, "Invalid date format for scheduled_at")
+
+    if req.priority is not None:
+        kwargs["priority"] = req.priority
+
+    updated_task = await repo.update_task(task_id, **kwargs)
+
+    # Sync message if provided
+    if req.message is not None and updated_task:
+        if updated_task.messages:
+            updated_task.messages[0].body = req.message
+            await db.commit()
+        if updated_task.contact:
+            if updated_task.type == "FOLLOW_UP_1":
+                updated_task.contact.followup_1_message = req.message
+            elif updated_task.type == "FOLLOW_UP_2":
+                updated_task.contact.followup_2_message = req.message
+            else:
+                updated_task.contact.message = req.message
+            await db.commit()
+
+    return {
+        "status": "success",
+        "task_id": task_id,
+        "updated_status": updated_task.status if updated_task else None,
+        "scheduled_at": format_datetime_readable(updated_task.scheduled_at) if updated_task else None
+    }
+
+@router.post("/{task_id}/toggle-pause")
+async def toggle_task_pause(task_id: str, db: AsyncSession = Depends(get_db)):
+    """Pause or resume a task."""
+    repo = TaskRepository(db)
+    task = await repo.get_by_id(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    
+    new_status = TaskStatus.READY.value if task.status == TaskStatus.PAUSED.value else TaskStatus.PAUSED.value
+    updated = await repo.update_task(task_id, status=new_status)
+    return {"task_id": task_id, "status": updated.status if updated else new_status}
 
 class FollowUpReviewRequest(BaseModel):
     task_ids: Optional[List[str]] = None

@@ -965,7 +965,8 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
               is_done: (state.current_contact as any).is_done ?? (state.status !== 'RUNNING'),
               message: (state.current_contact as any).custom_message || state.current_contact.message || 'Hey',
               replied_status: state.current_contact.replied_status || 'UNKNOWN',
-              completed_at: null,
+              started_at: (state.current_contact as any).started_at || null,
+              completed_at: (state.current_contact as any).completed_at || null,
               verification: state.verification
             } : (runTargets.length > 0 ? runTargets[0] : null));
 
@@ -1053,12 +1054,29 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                           </span>
                         </div>
 
-                        {effectiveTarget.completed_at && (
+                        {effectiveTarget.started_at && (
                           <div className="flex items-center justify-between text-[11px]">
-                            <span className="text-gray-400">Executed At:</span>
-                            <span className="font-mono text-gray-300">{new Date(effectiveTarget.completed_at).toLocaleTimeString()}</span>
+                            <span className="text-gray-400">Started At:</span>
+                            <span className="font-mono text-gray-300">{new Date(effectiveTarget.started_at).toLocaleTimeString()}</span>
                           </div>
                         )}
+
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="text-gray-400">{effectiveTarget.completed_at ? 'Completed At:' : 'Duration:'}</span>
+                          <span className="font-mono text-gray-300">
+                            {effectiveTarget.completed_at
+                              ? new Date(effectiveTarget.completed_at).toLocaleTimeString()
+                              : effectiveTarget.started_at
+                                ? (() => {
+                                    const diffMs = Date.now() - new Date(effectiveTarget.started_at).getTime();
+                                    const secs = Math.floor(diffMs / 1000);
+                                    return secs < 60
+                                      ? `${secs}s (Ongoing…)`
+                                      : `${Math.floor(secs / 60)}m ${secs % 60}s (Ongoing…)`;
+                                  })()
+                                : 'Queued'}
+                          </span>
+                        </div>
                       </div>
                     ) : (
                       <div className="py-12 text-center text-gray-500">
@@ -1314,7 +1332,11 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
 
                             <div className="flex items-center justify-between text-[10px] text-gray-400 pt-1 border-t border-gray-800/60">
                               <span>{t.task_type}</span>
-                              <span>{t.completed_at ? new Date(t.completed_at).toLocaleTimeString() : 'In Progress'}</span>
+                              <span>
+                                {t.started_at ? `Started: ${new Date(t.started_at).toLocaleTimeString()}` : ''}
+                                {t.started_at && t.completed_at ? ' • ' : ''}
+                                {t.completed_at ? `Ended: ${new Date(t.completed_at).toLocaleTimeString()}` : (t.started_at ? ' (In Progress)' : 'Queued')}
+                              </span>
                             </div>
                           </div>
                         );
@@ -1506,7 +1528,7 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
 
             <div className="flex items-center space-x-3 text-gray-400">
               {scannerStatus?.last_scanned_at && (
-                <span>Last Scan: <strong className="text-gray-200">{scannerStatus.last_scanned_at}</strong></span>
+                <span>Last Scan: <strong className="text-gray-200">{formatLastScan(scannerStatus.last_scanned_at)}</strong></span>
               )}
               {scanFeedback && (
                 <span className="text-purple-300 font-semibold animate-pulse">{scanFeedback}</span>

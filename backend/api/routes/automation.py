@@ -103,7 +103,9 @@ async def automation_status(db: AsyncSession = Depends(get_db)):
             "task_id": target_task.id,
             "task_type": target_task.type,
             "task_status": target_task.status,
-            "is_done": target_task.status in ("COMPLETED", "SENT")
+            "is_done": target_task.status in ("COMPLETED", "SENT"),
+            "started_at": target_task.started_at.isoformat() if target_task.started_at else None,
+            "completed_at": target_task.completed_at.isoformat() if target_task.completed_at else None
         }
         if target_task.verifications:
             latest_vrf = target_task.verifications[-1]
@@ -165,6 +167,7 @@ async def automation_status(db: AsyncSession = Depends(get_db)):
             "is_done": t.status in ("COMPLETED", "SENT"),
             "message": t.messages[0].body if t.messages else (c.message or "Hey"),
             "replied_status": c.replied_status,
+            "started_at": t.started_at.isoformat() if t.started_at else None,
             "completed_at": t.completed_at.isoformat() if t.completed_at else (t.updated_at.isoformat() if t.updated_at else None),
             "verification": vrf_dict
         })

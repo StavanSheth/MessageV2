@@ -4,11 +4,12 @@ import {
   Search, ListOrdered, Calendar, Play, ChevronLeft, ChevronRight,
   ArrowUpRight, Users, MessageSquare, AlertTriangle, Send, Sparkles, X, Trash2,
   CheckCheck, ShieldAlert, Zap, Filter, ArrowUpDown,
-  ThumbsUp, ThumbsDown, CheckSquare, Square, Download
+  ThumbsUp, ThumbsDown, CheckSquare, Square, Download,
+  Edit3, Pause, Save
 } from 'lucide-react';
 import { Task, TaskStatus, LiveAutomationState } from '../types';
-import { retryTask, cancelTask, retryAllTasks, deleteTask, confirmFollowups, cancelFollowups } from '../services/api';
-import { DateFilterMode, matchesDateFilter, formatDisplayDate } from '../utils/date';
+import { retryTask, cancelTask, retryAllTasks, deleteTask, confirmFollowups, cancelFollowups, updateTask, toggleTaskPause, updateContactMessages, updateFollowupSchedule } from '../services/api';
+import { DateFilterMode, matchesDateFilter, formatDisplayDate, toDatetimeLocalValue } from '../utils/date';
 import { getStatusBadgeClass } from '../components/common/StatusBadge';
 
 interface QueueProps {
@@ -258,6 +259,103 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
     }
   };
 
+  // Edit Task & Sequence modal state
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editForm, setEditForm] = useState({
+    task_scheduled_at: '',
+    task_priority: 1,
+    contact_message: '',
+    followup_1_message: '',
+    followup_1_delay_days: 3,
+    followup_1_scheduled_at: '',
+    followup_1_status: 'SCHEDULED',
+    followup_2_message: '',
+    followup_2_delay_days: 5,
+    followup_2_scheduled_at: '',
+    followup_2_status: 'SCHEDULED',
+  });
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [editSuccessMsg, setEditSuccessMsg] = useState('');
+
+  const handleOpenEdit = (t: Task) => {
+    setEditingTask(t);
+    const c = t.contact;
+    setEditForm({
+      task_scheduled_at: toDatetimeLocalValue(t.scheduled_at_raw || t.scheduled_at),
+      task_priority: t.priority ?? 1,
+      contact_message: c?.message || c?.custom_message || t.message || '',
+      followup_1_message: c?.followup_1_message || 'Hey! Just following up on my previous message.',
+      followup_1_delay_days: c?.followup_1_delay_days ?? 3,
+      followup_1_scheduled_at: toDatetimeLocalValue(c?.followup_1_scheduled_at),
+      followup_1_status: c?.followup_1_status || 'SCHEDULED',
+      followup_2_message: c?.followup_2_message || 'Hey! One last quick check-in before I close this thread.',
+      followup_2_delay_days: c?.followup_2_delay_days ?? 5,
+      followup_2_scheduled_at: toDatetimeLocalValue(c?.followup_2_scheduled_at),
+      followup_2_status: c?.followup_2_status || 'SCHEDULED',
+    });
+    setEditSuccessMsg('');
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTask) return;
+    setIsSavingEdit(true);
+    setEditSuccessMsg('');
+    try {
+      const activeMsg = editingTask.type === 'FOLLOW_UP_1' 
+        ? editForm.followup_1_message 
+        : editingTask.type === 'FOLLOW_UP_2' 
+        ? editForm.followup_2_message 
+        : editForm.contact_message;
+
+      await updateTask(editingTask.id, {
+        scheduled_at: editForm.task_scheduled_at ? new Date(editForm.task_scheduled_at).toISOString() : null,
+        priority: Number(editForm.task_priority) || 1,
+        message: activeMsg,
+      });
+
+      if (editingTask.contact_id) {
+        await updateContactMessages(editingTask.contact_id, {
+          message: editForm.contact_message,
+          followup_1_message: editForm.followup_1_message,
+          followup_2_message: editForm.followup_2_message,
+        });
+
+        await updateFollowupSchedule(editingTask.contact_id, {
+          followup_1_scheduled_at: editForm.followup_1_scheduled_at ? new Date(editForm.followup_1_scheduled_at).toISOString() : null,
+          followup_1_status: editForm.followup_1_status,
+          followup_1_delay_days: Number(editForm.followup_1_delay_days) || 3,
+          followup_2_scheduled_at: editForm.followup_2_scheduled_at ? new Date(editForm.followup_2_scheduled_at).toISOString() : null,
+          followup_2_status: editForm.followup_2_status,
+          followup_2_delay_days: Number(editForm.followup_2_delay_days) || 5,
+        });
+      }
+
+      setEditSuccessMsg('Sequence and schedule updated successfully!');
+      onRefresh();
+      setTimeout(() => {
+        setEditingTask(null);
+        setEditSuccessMsg('');
+      }, 1000);
+    } catch (err: any) {
+      alert(`Error updating sequence: ${err.message}`);
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleTogglePause = async (taskId: string) => {
+    try {
+      setActionLoadingId(taskId);
+      await toggleTaskPause(taskId);
+      onRefresh();
+    } catch (e: any) {
+      alert(`Failed to toggle pause: ${e.message}`);
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
   const handleRetryAll = async () => {
     try {
       setIsRetryingAll(true);
@@ -329,11 +427,12 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
 
   // Status and view metrics
   const issueStatuses = ['RETRY_WAIT', 'MANUAL_REVIEW', 'FAILED', 'INTERRUPTED', 'SKIPPED'];
-  const upcomingStatuses = ['READY', 'QUEUED', 'RUNNING'];
+  const upcomingStatuses = ['READY', 'QUEUED', 'RUNNING', 'PAUSED'];
 
   const upcomingCount = useMemo(() => tasks.filter((t) => upcomingStatuses.includes(t.status)).length, [tasks]);
   const runningCount = useMemo(() => tasks.filter((t) => t.status === 'RUNNING').length, [tasks]);
   const readyCount = useMemo(() => tasks.filter((t) => t.status === 'READY' || t.status === 'QUEUED').length, [tasks]);
+  const pausedCount = useMemo(() => tasks.filter((t) => t.status === 'PAUSED').length, [tasks]);
   const completedCount = useMemo(() => tasks.filter((t) => t.status === 'COMPLETED').length, [tasks]);
   const issueCount = useMemo(() => tasks.filter((t) => issueStatuses.includes(t.status)).length, [tasks]);
 
@@ -579,6 +678,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
             <span className="text-2xl font-black text-sky-200 mt-1 block">{upcomingCount}</span>
             <span className="text-[10px] text-sky-400/80 mt-0.5 block">
               {runningCount > 0 ? `${runningCount} Running • ${readyCount} Ready` : `${readyCount} Primed for Dispatch`}
+              {pausedCount > 0 ? ` • ${pausedCount} Paused` : ''}
             </span>
           </div>
           <div className="w-10 h-10 rounded-xl bg-sky-500/20 border border-sky-500/40 flex items-center justify-center">
@@ -1236,6 +1336,8 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                             <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                           ) : t.status === 'RUNNING' ? (
                             <Play className="w-3 h-3 text-indigo-400 fill-indigo-400" />
+                          ) : t.status === 'PAUSED' ? (
+                            <Pause className="w-3 h-3 text-amber-400" />
                           ) : t.status === 'RETRY_WAIT' || t.status === 'MANUAL_REVIEW' ? (
                             <AlertCircle className="w-3 h-3 text-amber-400" />
                           ) : (
@@ -1321,6 +1423,42 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                           )}
 
                           <div className="flex items-center justify-end space-x-1">
+                            {/* Pause / Resume Button */}
+                            {['READY', 'QUEUED', 'PAUSED'].includes(t.status) && (
+                              <button
+                                onClick={() => handleTogglePause(t.id)}
+                                disabled={actionLoadingId === t.id}
+                                className={`inline-flex items-center space-x-1 px-2 py-1 rounded-lg text-xs font-semibold transition cursor-pointer disabled:opacity-50 border ${
+                                  t.status === 'PAUSED'
+                                    ? 'bg-emerald-600/20 hover:bg-emerald-600/35 text-emerald-300 border-emerald-500/40'
+                                    : 'bg-amber-600/20 hover:bg-amber-600/35 text-amber-300 border-amber-500/40'
+                                }`}
+                                title={t.status === 'PAUSED' ? 'Resume task (set to READY)' : 'Pause task'}
+                              >
+                                {t.status === 'PAUSED' ? (
+                                  <>
+                                    <Play className="w-3 h-3 fill-emerald-400/30" />
+                                    <span>Resume</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Pause className="w-3 h-3" />
+                                    <span>Pause</span>
+                                  </>
+                                )}
+                              </button>
+                            )}
+
+                            {/* Edit Button */}
+                            <button
+                              onClick={() => handleOpenEdit(t)}
+                              className="inline-flex items-center space-x-1 px-2 py-1 bg-indigo-600/20 hover:bg-indigo-600/35 text-indigo-300 border border-indigo-500/40 rounded-lg text-xs font-semibold transition cursor-pointer"
+                              title="Edit sequence, messages & schedule"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                              <span>Edit</span>
+                            </button>
+
                             {canRetry && (
                               <button
                                 onClick={() => handleRetry(t.id)}
@@ -1426,6 +1564,222 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
           </div>
         )}
       </div>
+
+      {/* Edit Single Task & Outreach Sequence Modal */}
+      {editingTask && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-gray-700/80 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-gray-800 pb-3.5 sticky top-0 bg-gray-900 z-10">
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center space-x-2">
+                  <Edit3 className="w-4 h-4 text-indigo-400" />
+                  <span>Customize Sequence & Task Schedule</span>
+                </h3>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Target: <span className="text-white font-semibold">{editingTask.contact_name || editingTask.contact?.name || 'Recipient'}</span> (@{editingTask.username || editingTask.contact?.username || editingTask.contact_instagram || 'target'})
+                  <span className="ml-2 text-gray-500 font-mono">Task: {editingTask.type} (#{editingTask.id.slice(0, 8)})</span>
+                </p>
+              </div>
+              <button
+                onClick={() => setEditingTask(null)}
+                className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {editSuccessMsg && (
+              <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-400 text-xs font-bold flex items-center space-x-2">
+                <CheckCircle2 className="w-4 h-4" />
+                <span>{editSuccessMsg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveEdit} className="space-y-4 text-xs">
+              {/* Task Details - Sky Theme */}
+              <div className="bg-sky-950/20 border border-sky-500/25 p-3.5 rounded-xl space-y-2">
+                <label className="block text-sky-300 font-bold flex items-center justify-between">
+                  <span className="flex items-center space-x-1.5">
+                    <Clock className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Task Execution Details</span>
+                  </span>
+                  <span className="text-gray-500 font-normal">
+                    Current Status: <span className="font-semibold text-sky-300">{editingTask.status}</span>
+                  </span>
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-400 mb-1">Execution Scheduled At</label>
+                    <input
+                      type="datetime-local"
+                      value={editForm.task_scheduled_at}
+                      onChange={(e) => setEditForm({ ...editForm, task_scheduled_at: e.target.value })}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-sky-500 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-400 mb-1">Priority (1 = standard, higher = prioritized)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={editForm.task_priority}
+                      onChange={(e) => setEditForm({ ...editForm, task_priority: parseInt(e.target.value, 10) || 1 })}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-sky-500 text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* 1st Message - Emerald Theme */}
+              <div className="bg-emerald-950/15 border border-emerald-500/25 p-3.5 rounded-xl space-y-1.5">
+                <label className="block text-emerald-300 font-bold flex items-center justify-between">
+                  <span className="flex items-center space-x-1.5">
+                    <Send className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>1. Initial Outreach (1st Message)</span>
+                  </span>
+                  <span className="text-gray-500 font-normal">Initial batch message</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={editForm.contact_message}
+                  onChange={(e) => setEditForm({ ...editForm, contact_message: e.target.value })}
+                  placeholder="Enter initial direct message..."
+                  className="w-full bg-gray-950 border border-gray-800 rounded-xl p-3 text-white focus:outline-none focus:border-emerald-500 resize-none font-sans"
+                />
+              </div>
+
+              {/* Follow-Up 1 - Indigo Theme */}
+              <div className="bg-indigo-950/15 border border-indigo-500/25 p-3.5 rounded-xl space-y-2">
+                <label className="block text-indigo-300 font-bold flex items-center justify-between">
+                  <span className="flex items-center space-x-1.5">
+                    <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>2. Follow-Up 1</span>
+                  </span>
+                  <span className="text-gray-500 font-normal">Default delay: {editForm.followup_1_delay_days} days</span>
+                </label>
+                <textarea
+                  rows={2}
+                  value={editForm.followup_1_message}
+                  onChange={(e) => setEditForm({ ...editForm, followup_1_message: e.target.value })}
+                  placeholder="Enter Follow-Up 1 message..."
+                  className="w-full bg-gray-950 border border-gray-800 rounded-xl p-3 text-white focus:outline-none focus:border-indigo-500 resize-none font-sans"
+                />
+                
+                {/* Follow-Up 1 Schedule & Controls */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 border-t border-indigo-500/20">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-400 mb-1">Delay (Days)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={90}
+                      value={editForm.followup_1_delay_days}
+                      onChange={(e) => setEditForm({ ...editForm, followup_1_delay_days: parseInt(e.target.value, 10) || 3 })}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-400 mb-1">Custom Scheduled Date/Time</label>
+                    <input
+                      type="datetime-local"
+                      value={editForm.followup_1_scheduled_at}
+                      onChange={(e) => setEditForm({ ...editForm, followup_1_scheduled_at: e.target.value })}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2 py-1.5 text-white focus:outline-none focus:border-indigo-500 text-[11px]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-400 mb-1">Task Status</label>
+                    <select
+                      value={editForm.followup_1_status}
+                      onChange={(e) => setEditForm({ ...editForm, followup_1_status: e.target.value })}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2 py-1.5 text-white focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="SCHEDULED">Scheduled / Ready</option>
+                      <option value="PAUSED">Paused</option>
+                      <option value="CANCELLED">Cancelled</option>
+                      <option value="COMPLETED">Completed</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Follow-Up 2 - Purple Theme */}
+              <div className="bg-purple-950/15 border border-purple-500/25 p-3.5 rounded-xl space-y-2">
+                <label className="block text-purple-300 font-bold flex items-center justify-between">
+                  <span className="flex items-center space-x-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-purple-400" />
+                    <span>3. Follow-Up 2</span>
+                  </span>
+                  <span className="text-gray-500 font-normal">Default delay: {editForm.followup_2_delay_days} days</span>
+                </label>
+                <textarea
+                  rows={2}
+                  value={editForm.followup_2_message}
+                  onChange={(e) => setEditForm({ ...editForm, followup_2_message: e.target.value })}
+                  placeholder="Enter Follow-Up 2 message..."
+                  className="w-full bg-gray-950 border border-gray-800 rounded-xl p-3 text-white focus:outline-none focus:border-purple-500 resize-none font-sans"
+                />
+
+                {/* Follow-Up 2 Schedule & Controls */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 border-t border-purple-500/20">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-400 mb-1">Delay (Days)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={90}
+                      value={editForm.followup_2_delay_days}
+                      onChange={(e) => setEditForm({ ...editForm, followup_2_delay_days: parseInt(e.target.value, 10) || 5 })}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-400 mb-1">Custom Scheduled Date/Time</label>
+                    <input
+                      type="datetime-local"
+                      value={editForm.followup_2_scheduled_at}
+                      onChange={(e) => setEditForm({ ...editForm, followup_2_scheduled_at: e.target.value })}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2 py-1.5 text-white focus:outline-none focus:border-purple-500 text-[11px]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-400 mb-1">Task Status</label>
+                    <select
+                      value={editForm.followup_2_status}
+                      onChange={(e) => setEditForm({ ...editForm, followup_2_status: e.target.value })}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2 py-1.5 text-white focus:outline-none focus:border-purple-500"
+                    >
+                      <option value="SCHEDULED">Scheduled / Ready</option>
+                      <option value="PAUSED">Paused</option>
+                      <option value="CANCELLED">Cancelled</option>
+                      <option value="COMPLETED">Completed</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end space-x-3 pt-3 border-t border-gray-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingTask(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-400 hover:text-white hover:bg-gray-800 transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEdit}
+                  className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-xl text-xs font-bold transition shadow-lg shadow-indigo-600/30 cursor-pointer disabled:opacity-50"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>{isSavingEdit ? 'Saving...' : 'Save Sequence & Schedule'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,50 +1,93 @@
 // MessageV2 Chrome Extension Background Service Worker
 const WS_URL = "ws://127.0.0.1:8000/ws/extension";
+const HEALTH_URL = "http://127.0.0.1:8000/api/health";
 let ws = null;
 let reconnectTimer = null;
+let isConnecting = false;
 
-function connect() {
+async function isBackendReachable() {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1200);
+    const res = await fetch(HEALTH_URL, {
+      method: "GET",
+      cache: "no-store",
+      headers: { "Accept": "application/json" },
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function connect() {
+  if (isConnecting) return;
   if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
     return;
   }
-  console.log("[MessageV2 Extension] Connecting to", WS_URL);
-  ws = new WebSocket(WS_URL);
 
-  ws.onopen = () => {
-    console.log("[MessageV2 Extension] Connected to backend!");
-    ws.send(JSON.stringify({ type: "HELLO", payload: { client: "chrome_extension", version: "1.0" } }));
-  };
-
-  ws.onmessage = async (event) => {
-    let data = null;
-    try {
-      data = JSON.parse(event.data);
-      console.log("[MessageV2 Extension] Received command:", data.action, data);
-      const res = await handleCommand(data);
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          id: data.id,
-          action: data.action,
-          ...res
-        }));
-      }
-    } catch (err) {
-      console.error("[MessageV2 Extension] Error handling message:", err);
-      if (data && data.id && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ id: data.id, success: false, error: String(err) }));
-      }
+  isConnecting = true;
+  try {
+    // Probe backend first so Chrome doesn't throw net::ERR_CONNECTION_REFUSED on chrome://extensions
+    const reachable = await isBackendReachable();
+    if (!reachable) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connect, 4000);
+      return;
     }
-  };
 
-  ws.onerror = (e) => {
-    console.log("[MessageV2 Extension] WS error", e);
-  };
+    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+      return;
+    }
 
-  ws.onclose = () => {
-    console.log("[MessageV2 Extension] Disconnected, retrying in 3s...");
+    console.log("[MessageV2 Extension] Connecting to", WS_URL);
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+      console.log("[MessageV2 Extension] Connected to backend!");
+      ws.send(JSON.stringify({ type: "HELLO", payload: { client: "chrome_extension", version: "1.0" } }));
+    };
+
+    ws.onmessage = async (event) => {
+      let data = null;
+      try {
+        data = JSON.parse(event.data);
+        console.log("[MessageV2 Extension] Received command:", data.action, data);
+        const res = await handleCommand(data);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            id: data.id,
+            action: data.action,
+            ...res
+          }));
+        }
+      } catch (err) {
+        console.warn("[MessageV2 Extension] Error handling message:", err);
+        if (data && data.id && ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ id: data.id, success: false, error: String(err) }));
+        }
+      }
+    };
+
+    ws.onerror = (e) => {
+      console.log("[MessageV2 Extension] WS connection state:", ws ? ws.readyState : "null");
+    };
+
+    ws.onclose = () => {
+      console.log("[MessageV2 Extension] Disconnected, scheduling reconnect probe in 3s...");
+      ws = null;
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connect, 3000);
+    };
+  } catch (err) {
+    console.debug("[MessageV2 Extension] Connection probe catch:", err);
     clearTimeout(reconnectTimer);
-    reconnectTimer = setTimeout(connect, 3000);
-  };
+    reconnectTimer = setTimeout(connect, 4000);
+  } finally {
+    isConnecting = false;
+  }
 }
 
 // Keep service worker active

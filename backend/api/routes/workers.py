@@ -35,14 +35,7 @@ async def worker_live_state():
 async def health_check():
     return {"status": "ok", "service": "MessageV2 Backend"}
 
-from fastapi.responses import FileResponse, Response
-
-@router.get("/screenshots/{filename}")
-async def get_screenshot(filename: str):
-    path = SCREENSHOTS_DIR / filename
-    if path.exists() and path.is_file():
-        return FileResponse(str(path), media_type="image/png")
-    return {"error": "Screenshot not found"}
+from fastapi.responses import Response
 
 @router.get("/api/browser/stream")
 @router.get("/api/browser/stream/outreach")

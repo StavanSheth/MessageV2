@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from backend.domain.enums import (
     TaskType,
     TaskStatus,
@@ -64,8 +64,7 @@ class ContactRead(ContactBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Tasks
 class TaskBase(BaseModel):
@@ -90,8 +89,7 @@ class TaskRead(TaskBase):
     updated_at: datetime
     contact: Optional[ContactRead] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Messages
 class MessageBase(BaseModel):
@@ -108,8 +106,7 @@ class MessageRead(MessageBase):
     result_code: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Sources
 class SourceCreateURL(BaseModel):
@@ -130,8 +127,7 @@ class SourceRead(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Events
 class EventCreate(BaseModel):
@@ -154,8 +150,7 @@ class EventRead(BaseModel):
     payload_json: Optional[str] = None
     correlation_id: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Worker & Live Automation
 class WorkerRead(BaseModel):
@@ -170,8 +165,7 @@ class WorkerRead(BaseModel):
     current_url: Optional[str] = None
     last_heartbeat_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class LiveAutomationState(BaseModel):
     worker_id: str = "WORKER-01"

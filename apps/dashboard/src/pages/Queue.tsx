@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { Task, TaskStatus, LiveAutomationState } from '../types';
 import { retryTask, cancelTask, retryAllTasks, deleteTask, confirmFollowups, cancelFollowups } from '../services/api';
+import { DateFilterMode, matchesDateFilter, formatDisplayDate } from '../utils/date';
+import { getStatusBadgeClass } from '../components/common/StatusBadge';
 
 interface QueueProps {
   tasks: Task[];
@@ -17,7 +19,6 @@ interface QueueProps {
 
 type QueueViewMode = 'UPCOMING' | 'DONE' | 'ISSUES' | 'ALL';
 type RunFilterMode = 'ALL' | 'NEXT_IN_RUN' | 'DONE_IN_RUN';
-type DateFilterMode = 'ALL' | 'TODAY' | 'YESTERDAY' | 'WEEK';
 type TimeSortMode = 'DEFAULT' | 'SCHEDULED_ASC' | 'SCHEDULED_DESC' | 'COMPLETED_DESC' | 'COMPLETED_ASC';
 
 export interface ErrorCategoryInfo {
@@ -145,51 +146,6 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   }
 
   return null;
-}
-
-function formatDisplayDate(dateStr?: string | null): string {
-  if (!dateStr) return '';
-  try {
-    const d = new Date(dateStr);
-    if (!isNaN(d.getTime())) {
-      return d.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-      });
-    }
-    return dateStr.replace(/:\d\d\s+UTC$/, ' UTC');
-  } catch {
-    return dateStr;
-  }
-}
-
-function matchesDateFilter(dateStr: string | null | undefined, filter: DateFilterMode): boolean {
-  if (filter === 'ALL' || !dateStr) return filter === 'ALL';
-  try {
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return false;
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const targetTime = d.getTime();
-
-    if (filter === 'TODAY') {
-      return targetTime >= todayStart;
-    }
-    if (filter === 'YESTERDAY') {
-      const yesterdayStart = todayStart - 86400000;
-      return targetTime >= yesterdayStart && targetTime < todayStart;
-    }
-    if (filter === 'WEEK') {
-      const weekStart = todayStart - 7 * 86400000;
-      return targetTime >= weekStart;
-    }
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh }) => {
@@ -516,26 +472,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
     return filteredAndSortedTasks.slice(start, start + pageSize);
   }, [filteredAndSortedTasks, currentPage, pageSize]);
 
-  const getStatusBadge = (status: TaskStatus) => {
-    switch (status) {
-      case 'COMPLETED':
-        return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-sm shadow-emerald-500/10';
-      case 'RUNNING':
-        return 'bg-indigo-500/20 text-indigo-400 border-indigo-500/40 animate-pulse';
-      case 'READY':
-      case 'QUEUED':
-        return 'bg-sky-500/20 text-sky-400 border-sky-500/30';
-      case 'RETRY_WAIT':
-        return 'bg-amber-500/20 text-amber-400 border-amber-500/40';
-      case 'MANUAL_REVIEW':
-        return 'bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold';
-      case 'CANCELLED':
-      case 'SKIPPED':
-        return 'bg-gray-800 text-gray-400 border-gray-700';
-      default:
-        return 'bg-gray-800 text-gray-300 border-gray-700';
-    }
-  };
+  const getStatusBadge = (status: TaskStatus) => getStatusBadgeClass(status);
 
   const getStageBadge = (type?: string) => {
     switch (type) {

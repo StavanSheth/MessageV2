@@ -70,7 +70,7 @@ class Contact(Base):
     followup_1_delay_days = Column(Integer, default=3)
     followup_2_message = Column(Text, nullable=True)
     followup_2_delay_days = Column(Integer, default=5)
-    replied_status = Column(String(32), default="UNKNOWN")  # UNKNOWN, YES, NO, AUTOMATED_MESSAGE, DM_RESTRICTED
+    replied_status = Column(String(32), default="UNKNOWN", index=True)  # UNKNOWN, YES, NO, AUTOMATED_MESSAGE, DM_RESTRICTED
     auto_reply_message = Column(Text, nullable=True)
     extracted_phone = Column(String(128), nullable=True)
     extracted_email = Column(String(255), nullable=True)
@@ -92,7 +92,7 @@ class Task(Base):
     __tablename__ = "tasks"
 
     id = Column(String(64), primary_key=True, default=lambda: generate_id("tsk_"))
-    contact_id = Column(String(64), ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False)
+    contact_id = Column(String(64), ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False, index=True)
     type = Column(String(32), nullable=False, default="MESSAGE")  # MESSAGE, FOLLOW_UP_1, FOLLOW_UP_2
     status = Column(String(32), nullable=False, default="CREATED", index=True)
     sequence = Column(Integer, default=1)
@@ -118,6 +118,7 @@ class Task(Base):
 
     __table_args__ = (
         UniqueConstraint("contact_id", "type", "sequence", name="uq_contact_task_seq"),
+        Index("ix_tasks_claim_ready", "status", "type", "scheduled_at", "priority"),
     )
 
     contact = relationship("Contact", back_populates="tasks")
@@ -130,8 +131,8 @@ class Message(Base):
     __tablename__ = "messages"
 
     id = Column(String(64), primary_key=True, default=lambda: generate_id("msg_"))
-    contact_id = Column(String(64), ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False)
-    task_id = Column(String(64), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    contact_id = Column(String(64), ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False, index=True)
+    task_id = Column(String(64), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
     sequence = Column(Integer, default=1)
     body = Column(Text, nullable=False)
     status = Column(String(32), default="PENDING")
@@ -197,8 +198,8 @@ class VerificationResult(Base):
     __tablename__ = "verification_results"
 
     id = Column(String(64), primary_key=True, default=lambda: generate_id("vrf_"))
-    task_id = Column(String(64), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
-    contact_id = Column(String(64), ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False)
+    task_id = Column(String(64), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    contact_id = Column(String(64), ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False, index=True)
     confidence = Column(Float, nullable=False)
     decision = Column(String(32), nullable=False)
     signals_json = Column(Text, nullable=False)  # JSON
@@ -279,5 +280,5 @@ class OutreachHistory(Base):
     action = Column(String(64), nullable=False)  # MESSAGED, REPLIED, FOLLOW_UP_1, FOLLOW_UP_2, ARCHIVED
     details = Column(Text, nullable=True)
     run_id = Column(String(64), nullable=True, index=True)
-    created_at = Column(DateTime, default=utcnow)
+    created_at = Column(DateTime, default=utcnow, index=True)
 

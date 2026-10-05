@@ -40,32 +40,8 @@ interface LiveAutomationViewProps {
   onResume?: () => void;
   onStop?: () => void;
 }
-
-export function formatLastScan(isoDate?: string | null): string {
-  if (!isoDate) {
-    return 'Last Scan: 2026-10-05 Time: 17:09';
-  }
-  try {
-    const str = String(isoDate).trim();
-    const parts = str.match(/(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})/);
-    if (parts) {
-      return `Last Scan: ${parts[1]} Time: ${parts[2]}`;
-    }
-    const d = new Date(str);
-    if (!isNaN(d.getTime())) {
-      const pad = (n: number) => String(n).padStart(2, '0');
-      const year = d.getFullYear();
-      const month = pad(d.getMonth() + 1);
-      const day = pad(d.getDate());
-      const hours = pad(d.getHours());
-      const minutes = pad(d.getMinutes());
-      return `Last Scan: ${year}-${month}-${day} Time: ${hours}:${minutes}`;
-    }
-    return 'Last Scan: 2026-10-05 Time: 17:09';
-  } catch {
-    return 'Last Scan: 2026-10-05 Time: 17:09';
-  }
-}
+import { formatLastScan } from '../utils/date';
+export { formatLastScan };
 
 const OUTREACH_STAGES = [
   { key: 'CHECKING_LOGIN', label: 'Login Check', aliases: ['INITIALIZING'] },

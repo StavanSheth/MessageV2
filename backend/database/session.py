@@ -39,12 +39,14 @@ SyncSessionLocal = sessionmaker(
 from sqlalchemy import event
 
 def _set_sqlite_pragmas(dbapi_connection, connection_record):
-    """Enforce foreign keys, WAL mode for high concurrency, and 10s busy timeout."""
+    """Enforce foreign keys, WAL mode, 64MB cache, in-memory temp store, and 10s busy timeout."""
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys = ON")
     cursor.execute("PRAGMA journal_mode = WAL")
     cursor.execute("PRAGMA busy_timeout = 10000")
     cursor.execute("PRAGMA synchronous = NORMAL")
+    cursor.execute("PRAGMA cache_size = -64000")
+    cursor.execute("PRAGMA temp_store = MEMORY")
     cursor.close()
 
 event.listen(sync_engine, "connect", _set_sqlite_pragmas)

@@ -9,16 +9,9 @@ from backend.database.session import get_db
 from backend.repositories.contact_repository import ContactRepository
 from backend.services.export_service import ExportService
 from backend.config.settings import settings
+from backend.utils.dates import format_datetime_readable
 
 router = APIRouter(prefix="/api/contacts", tags=["contacts"])
-
-def format_datetime_readable(dt: Optional[datetime]) -> Optional[str]:
-    """Format datetime into standard human readable string: Day, DD Mon YYYY, HH:MM:SS UTC."""
-    if not dt:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.strftime("%a, %d %b %Y, %H:%M:%S UTC")
 
 class UpdateMessagesRequest(BaseModel):
     message: Optional[str] = None

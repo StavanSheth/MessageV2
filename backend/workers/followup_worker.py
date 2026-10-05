@@ -27,6 +27,7 @@ from backend.config.settings import settings
 from backend.events.event_bus import event_bus
 from backend.automation.extension_bridge import extension_bridge, ExtensionAdapter
 from backend.automation.coordinator import coordinator
+from backend.automation.message_matcher import is_system_sequence_message
 
 logger = logging.getLogger(__name__)
 
@@ -437,26 +438,7 @@ class FollowUpWorker:
 
                         # 2. Outbound external message check: verify messages sent from our end
                         if outbound_msgs:
-                            expected_copies = [
-                                (contact.message or "").strip().lower(),
-                                (contact.custom_message or "").strip().lower(),
-                                (contact.followup_1_message or "").strip().lower(),
-                                (contact.followup_2_message or "").strip().lower(),
-                                settings.DEFAULT_MESSAGE.strip().lower(),
-                                "hey! just following up on my previous message",
-                                "hey! one final quick check-in"
-                            ]
-
-                            def is_expected_system_copy(out_msg: str) -> bool:
-                                clean_out = out_msg.strip().lower()
-                                if not clean_out or len(clean_out) < 3:
-                                    return True
-                                for exp in expected_copies:
-                                    if exp and (exp in clean_out or clean_out in exp or clean_out[:25] in exp):
-                                        return True
-                                return False
-
-                            external_msgs = [m for m in outbound_msgs if not is_expected_system_copy(m)]
+                            external_msgs = [m for m in outbound_msgs if not is_system_sequence_message(m, contact)]
                             if external_msgs:
                                 ext_snippet = external_msgs[-1]
                                 logger.warning(f"[Worker 3] External outbound message detected for {contact.name}: '{ext_snippet}'. Flagging MANUAL_REVIEW.")

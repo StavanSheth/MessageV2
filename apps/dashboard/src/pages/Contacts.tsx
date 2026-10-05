@@ -16,6 +16,7 @@ import {
   triggerReplyScan,
   updateFollowupSchedule
 } from '../services/api';
+import { DateFilterMode, matchesDateFilter, toDatetimeLocalValue, formatDisplayDate } from '../utils/date';
 
 interface ContactsProps {
   contacts: Contact[];
@@ -25,74 +26,8 @@ interface ContactsProps {
 }
 
 type RunFilterMode = 'ALL' | 'NEXT_IN_RUN' | 'DONE_IN_RUN';
-type DateFilterMode = 'ALL' | 'TODAY' | 'YESTERDAY' | 'WEEK';
 type TimeSortMode = 'DEFAULT' | 'SCHEDULED_ASC' | 'SCHEDULED_DESC' | 'COMPLETED_DESC' | 'NAME_ASC';
 type StageFilterMode = 'ALL' | 'MESSAGE' | 'FOLLOW_UP_1' | 'FOLLOW_UP_2';
-
-function matchesDateFilter(dateStr: string | null | undefined, filter: DateFilterMode): boolean {
-  if (filter === 'ALL' || !dateStr) return filter === 'ALL';
-  try {
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return false;
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const targetTime = d.getTime();
-
-    if (filter === 'TODAY') {
-      return targetTime >= todayStart;
-    }
-    if (filter === 'YESTERDAY') {
-      const yesterdayStart = todayStart - 86400000;
-      return targetTime >= yesterdayStart && targetTime < todayStart;
-    }
-    if (filter === 'WEEK') {
-      const weekStart = todayStart - 7 * 86400000;
-      return targetTime >= weekStart;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function toDatetimeLocalValue(dateStr?: string | null): string {
-  if (!dateStr) return '';
-  try {
-    const d = new Date(dateStr);
-    if (!isNaN(d.getTime())) {
-      const pad = (n: number) => n.toString().padStart(2, '0');
-      const year = d.getFullYear();
-      const month = pad(d.getMonth() + 1);
-      const day = pad(d.getDate());
-      const hours = pad(d.getHours());
-      const minutes = pad(d.getMinutes());
-      return `${year}-${month}-${day}T${hours}:${minutes}`;
-    }
-    return '';
-  } catch {
-    return '';
-  }
-}
-
-function formatDisplayDate(dateStr?: string | null): string {
-  if (!dateStr) return '';
-  try {
-    const d = new Date(dateStr);
-    if (!isNaN(d.getTime())) {
-      return d.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-      });
-    }
-    return dateStr.replace(/:\d\d\s+UTC$/, ' UTC');
-  } catch {
-    return dateStr;
-  }
-}
 
 export const Contacts: React.FC<ContactsProps> = ({ contacts, tasks = [], automationState, onRefresh }) => {
   const [searchTerm, setSearchTerm] = useState('');

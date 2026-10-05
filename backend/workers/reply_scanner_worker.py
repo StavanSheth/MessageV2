@@ -13,6 +13,7 @@ from backend.database.session import AsyncSessionLocal
 from backend.database.models import Contact, Task
 from backend.automation.extension_bridge import extension_bridge
 from backend.services.entity_extractor import entity_extractor
+from backend.automation.message_matcher import is_system_sequence_message
 from backend.events.event_bus import event_bus
 from backend.domain.enums import EventCode, TaskStatus
 
@@ -289,21 +290,7 @@ class ReplyScannerWorker:
                             # Check for external messages sent from our end
                             outbound_msgs = inspect_res.get("data", {}).get("outbound_messages", [])
                             if outbound_msgs:
-                                expected_copies = [
-                                    (matched_contact.message or "").strip().lower(),
-                                    (matched_contact.custom_message or "").strip().lower(),
-                                    (matched_contact.followup_1_message or "").strip().lower(),
-                                    (matched_contact.followup_2_message or "").strip().lower(),
-                                    "hey! just following up on my previous message",
-                                    "hey! one final quick check-in"
-                                ]
-                                def is_expected_system_msg(m_text: str) -> bool:
-                                    clean = m_text.strip().lower()
-                                    if not clean or len(clean) < 3:
-                                        return True
-                                    return any(exp in clean or clean in exp or clean[:25] in exp for exp in expected_copies if exp)
-
-                                ext_outbounds = [m for m in outbound_msgs if not is_expected_system_msg(m)]
+                                ext_outbounds = [m for m in outbound_msgs if not is_system_sequence_message(m, matched_contact)]
                                 if ext_outbounds:
                                     ext_snip = ext_outbounds[-1]
                                     logger.warning(f"[ReplyScanner] External outbound message detected for {matched_contact.name}: '{ext_snip}'")
@@ -349,22 +336,7 @@ class ReplyScannerWorker:
                                                 pt.updated_at = now
                                             human_count += 1
                                         elif outbound_list:
-                                            # Check external outbound messages
-                                            expected_copies = [
-                                                (matched_contact.message or "").strip().lower(),
-                                                (matched_contact.custom_message or "").strip().lower(),
-                                                (matched_contact.followup_1_message or "").strip().lower(),
-                                                (matched_contact.followup_2_message or "").strip().lower(),
-                                                "hey! just following up on my previous message",
-                                                "hey! one final quick check-in"
-                                            ]
-                                            def is_exp(m_text: str) -> bool:
-                                                clean = m_text.strip().lower()
-                                                if not clean or len(clean) < 3:
-                                                    return True
-                                                return any(exp in clean or clean in exp or clean[:25] in exp for exp in expected_copies if exp)
-
-                                            ext_out = [m for m in outbound_list if not is_exp(m)]
+                                            ext_out = [m for m in outbound_list if not is_system_sequence_message(m, matched_contact)]
                                             if ext_out:
                                                 ext_snip = ext_out[-1]
                                                 matched_contact.notes = ((matched_contact.notes or "") + f" [External message: {ext_snip[:50]}]").strip()

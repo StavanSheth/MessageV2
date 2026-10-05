@@ -70,7 +70,13 @@ class Contact(Base):
     followup_1_delay_days = Column(Integer, default=3)
     followup_2_message = Column(Text, nullable=True)
     followup_2_delay_days = Column(Integer, default=5)
-    replied_status = Column(String(32), default="UNKNOWN")  # UNKNOWN, YES, NO
+    replied_status = Column(String(32), default="UNKNOWN")  # UNKNOWN, YES, NO, AUTOMATED_MESSAGE, DM_RESTRICTED
+    auto_reply_message = Column(Text, nullable=True)
+    extracted_phone = Column(String(128), nullable=True)
+    extracted_email = Column(String(255), nullable=True)
+    extracted_link = Column(String(512), nullable=True)
+    last_checked_reply_at = Column(DateTime, nullable=True)
+    reply_detected_at = Column(DateTime, nullable=True)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
@@ -105,6 +111,7 @@ class Task(Base):
     messages = relationship("Message", back_populates="task")
     errors = relationship("Error", back_populates="task")
     verifications = relationship("VerificationResult", back_populates="task")
+    send_attempts = relationship("SendAttempt", back_populates="task", cascade="all, delete-orphan")
 
 class Message(Base):
     __tablename__ = "messages"
@@ -122,6 +129,27 @@ class Message(Base):
 
     contact = relationship("Contact", back_populates="messages")
     task = relationship("Task", back_populates="messages")
+    send_attempts = relationship("SendAttempt", back_populates="message", cascade="all, delete-orphan")
+
+class SendAttempt(Base):
+    __tablename__ = "send_attempts"
+
+    id = Column(String(64), primary_key=True, default=lambda: generate_id("att_"))
+    task_id = Column(String(64), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    message_id = Column(String(64), ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True)
+    attempt_id = Column(String(64), nullable=False, index=True)
+    contact_id = Column(String(64), ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False, index=True)
+    message_body = Column(Text, nullable=False)
+    send_requested_at = Column(DateTime, default=utcnow, nullable=False)
+    send_confirmed_at = Column(DateTime, nullable=True)
+    worker_id = Column(String(64), nullable=False)
+    browser_session_id = Column(String(64), nullable=True)
+    status = Column(String(32), default="REQUESTED")  # REQUESTED, CONFIRMED, FAILED, UNKNOWN
+    result_code = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+    task = relationship("Task", back_populates="send_attempts")
+    message = relationship("Message", back_populates="send_attempts")
 
 class Worker(Base):
     __tablename__ = "workers"

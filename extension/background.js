@@ -453,6 +453,29 @@ async function handleCommand(msg) {
           await new Promise(r => setTimeout(r, 350));
         }
 
+        // Check for Instagram DM restriction banners (e.g. Long Boi's Bakehouse)
+        const restrictionPatterns = [
+          "can't receive your message",
+          "cannot receive your message",
+          "don't allow new message requests",
+          "you can't message this account",
+          "cannot be messaged"
+        ];
+        const pageText = document.body.innerText.toLowerCase();
+        const foundRestricted = restrictionPatterns.find(p => pageText.includes(p));
+        if (foundRestricted) {
+          const restrictionElem = Array.from(document.querySelectorAll('div, span, p')).find(el => {
+            const t = el.innerText?.toLowerCase();
+            return t && restrictionPatterns.some(p => t.includes(p)) && el.innerText.length < 200;
+          });
+          const exactReason = restrictionElem ? restrictionElem.innerText.trim() : "This account can't receive message requests";
+          return {
+            success: false,
+            dm_restricted: true,
+            error: exactReason
+          };
+        }
+
         if (!composer) {
           return { success: false, error: "Message composer not found" };
         }
@@ -554,8 +577,102 @@ async function handleCommand(msg) {
     return {
       success: result?.result?.success || false,
       already_messaged: result?.result?.already_messaged || false,
+      dm_restricted: result?.result?.dm_restricted || false,
       error: result?.result?.error
     };
+  }
+
+  if (action === "SCAN_INBOX_REPLIES") {
+    const tab = await getInstagramTab();
+    if (!tab || !tab.id) return { success: false, error: "No Instagram tab found" };
+
+    if (!tab.url || !tab.url.includes("/direct/")) {
+      await chrome.tabs.update(tab.id, { url: "https://www.instagram.com/direct/inbox/" });
+      await waitForTabLoaded(tab.id, 12000);
+      await new Promise(r => setTimeout(r, 2500));
+    }
+
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: async () => {
+        const rows = Array.from(document.querySelectorAll('a[href*="/direct/t/"]'));
+        const threads = [];
+
+        for (const row of rows.slice(0, 30)) {
+          try {
+            const href = row.getAttribute('href') || '';
+            const fullText = row.innerText || '';
+            const lines = fullText.split('\n').map(l => l.trim()).filter(Boolean);
+            
+            const contactName = lines[0] || '';
+            const snippet = lines[1] || '';
+            const hasReply = snippet.length > 0 && !snippet.startsWith("You:") && !snippet.startsWith("You sent");
+            const unread = Boolean(row.querySelector('[aria-label*="unread"], [class*="unread"], div[style*="background-color: rgb(0, 149, 246)"]'));
+
+            threads.push({
+              name: contactName,
+              snippet: snippet,
+              has_reply: hasReply,
+              unread: unread,
+              href: href
+            });
+          } catch (e) {}
+        }
+
+        return { threads };
+      }
+    });
+
+    return { success: true, threads: result?.result?.threads || [] };
+  }
+
+  if (action === "INSPECT_THREAD_REPLY") {
+    const threadUrl = payload.thread_url;
+    const tab = await getInstagramTab();
+    if (!tab || !tab.id) return { success: false, error: "No Instagram tab found" };
+
+    if (threadUrl && !tab.url.includes(threadUrl)) {
+      const fullUrl = threadUrl.startsWith("http") ? threadUrl : `https://www.instagram.com${threadUrl}`;
+      await chrome.tabs.update(tab.id, { url: fullUrl });
+      await waitForTabLoaded(tab.id, 12000);
+      await new Promise(r => setTimeout(r, 2500));
+    }
+
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: async () => {
+        const composer = document.querySelector('div[contenteditable="true"][role="textbox"], textarea[placeholder*="Message"]');
+        const chatPane = composer ? (composer.closest('div[role="main"]') || document.body) : document.body;
+        
+        const bubbles = Array.from(chatPane.querySelectorAll('div[dir="auto"], span[dir="auto"]')).filter(el => {
+          if (composer && composer.contains(el)) return false;
+          if (el.closest('header') || el.closest('nav') || el.closest('[role="navigation"]')) return false;
+          const txt = el.innerText?.trim();
+          if (!txt || txt === "Message..." || txt === "View Profile" || txt === "Search" || txt === "Primary" || txt === "General" || txt === "Requests") return false;
+          return txt.length > 1;
+        });
+
+        if (bubbles.length === 0) {
+          return { has_reply: false };
+        }
+
+        const lastBubble = bubbles[bubbles.length - 1];
+        const lastText = lastBubble.innerText.trim();
+
+        // Check if last bubble is inbound (not sent by us)
+        const computed = window.getComputedStyle(lastBubble.parentElement || lastBubble);
+        const isRightAligned = computed.justifyContent === 'flex-end' || computed.textAlign === 'right' || computed.alignSelf === 'flex-end';
+
+        return {
+          has_reply: true,
+          text: lastText,
+          is_inbound: !isRightAligned,
+          bubbles_count: bubbles.length
+        };
+      }
+    });
+
+    return { success: true, data: result?.result || {} };
   }
 
   if (action === "SCREENSHOT") {

@@ -2,7 +2,8 @@ import React, { useState, useMemo } from 'react';
 import { 
   Search, ExternalLink, Check, Download, Edit3, X, Save, Clock, 
   CheckCircle2, Calendar, Send, Sliders, RefreshCw, Users, 
-  Sparkles, MessageSquare, ChevronLeft, ChevronRight, ArrowUpRight, Trash2
+  Sparkles, MessageSquare, ChevronLeft, ChevronRight, ArrowUpRight, Trash2,
+  Bot, Phone, Mail, Link2, ShieldAlert, Eye, MessageCircle
 } from 'lucide-react';
 import { Contact } from '../types';
 import { 
@@ -10,7 +11,8 @@ import {
   updateContactMessages, 
   fetchMessageTemplates, 
   applyBulkTemplates,
-  deleteContact
+  deleteContact,
+  triggerReplyScan
 } from '../services/api';
 
 interface ContactsProps {
@@ -40,9 +42,14 @@ function formatDisplayDate(dateStr?: string | null): string {
 
 export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [repliedFilter, setRepliedFilter] = useState<'all' | 'replied' | 'unreplied'>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'sent' | 'scheduled' | 'pending'>('all');
+  const [repliedFilter, setRepliedFilter] = useState<'all' | 'replied' | 'automated' | 'unreplied'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'sent' | 'scheduled' | 'pending' | 'restricted'>('all');
   const [loadingContactId, setLoadingContactId] = useState<string | null>(null);
+
+  // Reply Scanner State
+  const [isScanningReplies, setIsScanningReplies] = useState(false);
+  const [scanResultMsg, setScanResultMsg] = useState('');
+  const [viewingAutoReplyContact, setViewingAutoReplyContact] = useState<Contact | null>(null);
 
   // Pagination state
   const [pageSize, setPageSize] = useState<number>(10);
@@ -162,6 +169,23 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
     }
   };
 
+  const handleScanReplies = async () => {
+    setIsScanningReplies(true);
+    setScanResultMsg('');
+    try {
+      const res = await triggerReplyScan();
+      setScanResultMsg(
+        `Scan completed: Checked ${res.scanned_count} conversations. Found ${res.automated_found} automated replies, ${res.human_replies_found} human replies.`
+      );
+      onRefresh();
+      setTimeout(() => setScanResultMsg(''), 8000);
+    } catch (e: any) {
+      alert(`Failed to scan inbox replies: ${e.message}`);
+    } finally {
+      setIsScanningReplies(false);
+    }
+  };
+
   // Filter contacts
   const filteredContacts = useMemo(() => {
     return contacts.filter((c) => {
@@ -170,16 +194,23 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
         (c.name || '').toLowerCase().includes(term) ||
         (c.username || '').toLowerCase().includes(term) ||
         (c.message || '').toLowerCase().includes(term) ||
-        (c.custom_message || '').toLowerCase().includes(term);
+        (c.custom_message || '').toLowerCase().includes(term) ||
+        (c.auto_reply_message || '').toLowerCase().includes(term) ||
+        (c.extracted_phone || '').toLowerCase().includes(term) ||
+        (c.extracted_email || '').toLowerCase().includes(term);
 
       if (!matchesSearch) return false;
 
-      if (repliedFilter === 'replied' && !c.has_replied) return false;
-      if (repliedFilter === 'unreplied' && c.has_replied) return false;
+      // Replies Filter
+      if (repliedFilter === 'replied' && !(c.has_replied || c.replied_status === 'YES')) return false;
+      if (repliedFilter === 'automated' && c.replied_status !== 'AUTOMATED_MESSAGE') return false;
+      if (repliedFilter === 'unreplied' && (c.has_replied || c.replied_status === 'YES' || c.replied_status === 'AUTOMATED_MESSAGE')) return false;
 
+      // Status Filter
       if (statusFilter === 'sent' && c.first_message_status !== 'SENT') return false;
       if (statusFilter === 'scheduled' && c.followup_1_status !== 'SCHEDULED' && c.followup_2_status !== 'SCHEDULED') return false;
       if (statusFilter === 'pending' && c.first_message_status === 'SENT') return false;
+      if (statusFilter === 'restricted' && c.replied_status !== 'DM_RESTRICTED') return false;
 
       return true;
     });
@@ -203,7 +234,9 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
   const firstSentCount = contacts.filter((c) => c.first_message_status === 'SENT').length;
   const fu1ScheduledCount = contacts.filter((c) => c.followup_1_status === 'SCHEDULED' || c.followup_1_status === 'SENT').length;
   const fu2ScheduledCount = contacts.filter((c) => c.followup_2_status === 'SCHEDULED' || c.followup_2_status === 'SENT').length;
-  const repliedCount = contacts.filter((c) => c.has_replied).length;
+  const repliedCount = contacts.filter((c) => c.has_replied || c.replied_status === 'YES').length;
+  const automatedCount = contacts.filter((c) => c.replied_status === 'AUTOMATED_MESSAGE').length;
+  const restrictedCount = contacts.filter((c) => c.replied_status === 'DM_RESTRICTED').length;
 
   return (
     <div className="space-y-6">
@@ -230,6 +263,16 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
 
         {/* Global Action Buttons */}
         <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            onClick={handleScanReplies}
+            disabled={isScanningReplies}
+            className="flex items-center space-x-2 bg-gradient-to-r from-amber-600 via-orange-600 to-amber-600 hover:from-amber-500 hover:to-orange-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-lg shadow-amber-950/40 hover:scale-105 active:scale-95 disabled:opacity-50 cursor-pointer"
+            title="Scan Instagram Direct Inbox for inbound messages, automated replies, and extracted phone/emails"
+          >
+            <Bot className={`w-4 h-4 ${isScanningReplies ? 'animate-spin text-amber-200' : 'text-amber-100'}`} />
+            <span>{isScanningReplies ? 'Scanning Inbox...' : 'Scan Inbox Replies'}</span>
+          </button>
+
           <button
             onClick={handleOpenTemplates}
             className="flex items-center space-x-2 bg-gray-800/90 hover:bg-gray-700 text-indigo-300 border border-indigo-500/40 px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-sm hover:scale-105 active:scale-95 cursor-pointer"
@@ -260,69 +303,94 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
         </div>
       </div>
 
+      {/* Notification Banner for Reply Scan */}
+      {scanResultMsg && (
+        <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-center justify-between shadow-lg shadow-amber-950/20">
+          <div className="flex items-center space-x-2.5">
+            <Bot className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
+            <span className="font-semibold">{scanResultMsg}</span>
+          </div>
+          <button onClick={() => setScanResultMsg('')} className="text-amber-400 hover:text-white p-1">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Metric Cards Banner - Semantic Color System */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {/* Total Leads */}
-        <div className="bg-[#0f172a]/70 border border-gray-800 rounded-xl p-3.5 flex items-center justify-between shadow-sm">
+        <div className="bg-[#0f172a]/70 border border-gray-800 rounded-xl p-3 flex items-center justify-between shadow-sm">
           <div>
             <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">Total Leads</span>
-            <span className="text-2xl font-black text-white mt-1 block">{totalContacts}</span>
-            <span className="text-[10px] text-gray-500 mt-0.5 block">Imported Lead Pool</span>
+            <span className="text-xl font-black text-white mt-0.5 block">{totalContacts}</span>
+            <span className="text-[9px] text-gray-500 mt-0.5 block">Imported Pool</span>
           </div>
-          <div className="w-9 h-9 rounded-lg bg-gray-800/80 border border-gray-700 flex items-center justify-center">
-            <Users className="w-4 h-4 text-gray-300" />
+          <div className="w-8 h-8 rounded-lg bg-gray-800/80 border border-gray-700 flex items-center justify-center">
+            <Users className="w-3.5 h-3.5 text-gray-300" />
           </div>
         </div>
 
         {/* 1st Message Sent - Emerald */}
-        <div className="bg-emerald-950/25 border border-emerald-500/30 rounded-xl p-3.5 flex items-center justify-between shadow-sm shadow-emerald-950/30">
+        <div className="bg-emerald-950/25 border border-emerald-500/30 rounded-xl p-3 flex items-center justify-between shadow-sm shadow-emerald-950/30">
           <div>
-            <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block">1st Outreach Sent</span>
-            <span className="text-2xl font-black text-emerald-300 mt-1 block">{firstSentCount}</span>
-            <span className="text-[10px] text-emerald-500/80 mt-0.5 block">
-              {totalContacts > 0 ? `${Math.round((firstSentCount / totalContacts) * 100)}% dispatched` : '0%'}
+            <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block">1st Sent</span>
+            <span className="text-xl font-black text-emerald-300 mt-0.5 block">{firstSentCount}</span>
+            <span className="text-[9px] text-emerald-500/80 mt-0.5 block">
+              {totalContacts > 0 ? `${Math.round((firstSentCount / totalContacts) * 100)}% sent` : '0%'}
             </span>
           </div>
-          <div className="w-9 h-9 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center">
-            <Send className="w-4 h-4 text-emerald-400" />
+          <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center">
+            <Send className="w-3.5 h-3.5 text-emerald-400" />
           </div>
         </div>
 
         {/* Follow-Up 1 - Indigo */}
-        <div className="bg-indigo-950/25 border border-indigo-500/30 rounded-xl p-3.5 flex items-center justify-between shadow-sm shadow-indigo-950/30">
+        <div className="bg-indigo-950/25 border border-indigo-500/30 rounded-xl p-3 flex items-center justify-between shadow-sm shadow-indigo-950/30">
           <div>
-            <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider block">FU 1 Active (+3d)</span>
-            <span className="text-2xl font-black text-indigo-300 mt-1 block">{fu1ScheduledCount}</span>
-            <span className="text-[10px] text-indigo-400/80 mt-0.5 block">Scheduled / Sent</span>
+            <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider block">FU 1 (+3d)</span>
+            <span className="text-xl font-black text-indigo-300 mt-0.5 block">{fu1ScheduledCount}</span>
+            <span className="text-[9px] text-indigo-400/80 mt-0.5 block">Active</span>
           </div>
-          <div className="w-9 h-9 rounded-lg bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center">
-            <Clock className="w-4 h-4 text-indigo-400" />
+          <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center">
+            <Clock className="w-3.5 h-3.5 text-indigo-400" />
           </div>
         </div>
 
-        {/* Follow-Up 2 - Purple */}
-        <div className="bg-purple-950/25 border border-purple-500/30 rounded-xl p-3.5 flex items-center justify-between shadow-sm shadow-purple-950/30">
+        {/* Automated Replies - Amber */}
+        <div className="bg-amber-950/25 border border-amber-500/35 rounded-xl p-3 flex items-center justify-between shadow-sm shadow-amber-950/30">
           <div>
-            <span className="text-[10px] text-purple-400 font-bold uppercase tracking-wider block">FU 2 Active (+5d)</span>
-            <span className="text-2xl font-black text-purple-300 mt-1 block">{fu2ScheduledCount}</span>
-            <span className="text-[10px] text-purple-400/80 mt-0.5 block">Scheduled / Sent</span>
+            <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider block">Auto-Replies</span>
+            <span className="text-xl font-black text-amber-300 mt-0.5 block">{automatedCount}</span>
+            <span className="text-[9px] text-amber-400/80 mt-0.5 block">Extracted Leads</span>
           </div>
-          <div className="w-9 h-9 rounded-lg bg-purple-500/20 border border-purple-500/40 flex items-center justify-center">
-            <Calendar className="w-4 h-4 text-purple-400" />
+          <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center">
+            <Bot className="w-3.5 h-3.5 text-amber-400" />
           </div>
         </div>
 
         {/* Replied Leads - Rose / Warm Conversion */}
-        <div className="bg-rose-950/25 border border-rose-500/35 rounded-xl p-3.5 flex items-center justify-between shadow-sm shadow-rose-950/30">
+        <div className="bg-rose-950/25 border border-rose-500/35 rounded-xl p-3 flex items-center justify-between shadow-sm shadow-rose-950/30">
           <div>
-            <span className="text-[10px] text-rose-400 font-bold uppercase tracking-wider block">Replied Leads</span>
-            <span className="text-2xl font-black text-rose-300 mt-1 block">{repliedCount}</span>
-            <span className="text-[10px] text-rose-400/80 mt-0.5 block">
-              {firstSentCount > 0 ? `${Math.round((repliedCount / firstSentCount) * 100)}% reply rate` : '0%'}
+            <span className="text-[10px] text-rose-400 font-bold uppercase tracking-wider block">Human Replies</span>
+            <span className="text-xl font-black text-rose-300 mt-0.5 block">{repliedCount}</span>
+            <span className="text-[9px] text-rose-400/80 mt-0.5 block">
+              {firstSentCount > 0 ? `${Math.round((repliedCount / firstSentCount) * 100)}% rate` : '0%'}
             </span>
           </div>
-          <div className="w-9 h-9 rounded-lg bg-rose-500/20 border border-rose-500/40 flex items-center justify-center">
-            <Sparkles className="w-4 h-4 text-rose-400" />
+          <div className="w-8 h-8 rounded-lg bg-rose-500/20 border border-rose-500/40 flex items-center justify-center">
+            <Sparkles className="w-3.5 h-3.5 text-rose-400" />
+          </div>
+        </div>
+
+        {/* Restricted DMs - Red/Zinc */}
+        <div className="bg-red-950/20 border border-red-500/30 rounded-xl p-3 flex items-center justify-between shadow-sm shadow-red-950/20">
+          <div>
+            <span className="text-[10px] text-red-400 font-bold uppercase tracking-wider block">DM Restricted</span>
+            <span className="text-xl font-black text-red-300 mt-0.5 block">{restrictedCount}</span>
+            <span className="text-[9px] text-red-400/80 mt-0.5 block">No DM requests</span>
+          </div>
+          <div className="w-8 h-8 rounded-lg bg-red-500/20 border border-red-500/40 flex items-center justify-center">
+            <ShieldAlert className="w-3.5 h-3.5 text-red-400" />
           </div>
         </div>
       </div>
@@ -333,7 +401,7 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
           <Search className="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Search by name, @handle, or message content..."
+            placeholder="Search by name, @handle, message, phone, or email..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full bg-gray-950/90 border border-gray-800 rounded-xl pl-9 pr-8 py-2 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500 transition"
@@ -352,7 +420,7 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
           {/* Status Filter */}
           <div className="flex items-center rounded-xl bg-gray-950/90 border border-gray-800 p-1">
             <span className="text-[10px] text-gray-500 uppercase font-bold px-2 hidden sm:inline">Status:</span>
-            {(['all', 'sent', 'scheduled', 'pending'] as const).map((mode) => (
+            {(['all', 'sent', 'scheduled', 'pending', 'restricted'] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setStatusFilter(mode)}
@@ -362,25 +430,27 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                     : 'text-gray-400 hover:text-gray-200'
                 }`}
               >
-                {mode === 'all' ? 'All' : mode}
+                {mode === 'all' ? 'All' : mode === 'restricted' ? 'Restricted' : mode}
               </button>
             ))}
           </div>
 
           {/* Replied Filter */}
           <div className="flex items-center rounded-xl bg-gray-950/90 border border-gray-800 p-1">
-            <span className="text-[10px] text-gray-500 uppercase font-bold px-2 hidden sm:inline">Replies:</span>
-            {(['all', 'replied', 'unreplied'] as const).map((mode) => (
+            <span className="text-[10px] text-gray-500 uppercase font-bold px-2 hidden sm:inline">Inbox:</span>
+            {(['all', 'replied', 'automated', 'unreplied'] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setRepliedFilter(mode)}
                 className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize transition cursor-pointer ${
                   repliedFilter === mode
-                    ? 'bg-rose-600 text-white shadow-sm'
+                    ? mode === 'automated'
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'bg-rose-600 text-white shadow-sm'
                     : 'text-gray-400 hover:text-gray-200'
                 }`}
               >
-                {mode === 'all' ? 'All' : mode === 'replied' ? 'Replied' : 'Pending'}
+                {mode === 'all' ? 'All' : mode === 'replied' ? '💬 Human' : mode === 'automated' ? '🤖 Auto-Reply' : '⏳ No Reply'}
               </button>
             ))}
           </div>
@@ -481,6 +551,82 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                               <span>View Profile</span>
                               <ArrowUpRight className="w-3 h-3 shrink-0" />
                             </a>
+
+                            {/* Status Badges for Auto Reply / DM Restricted */}
+                            {c.replied_status === 'AUTOMATED_MESSAGE' && (
+                              <div className="mt-2 space-y-1">
+                                <div className="flex items-center space-x-1">
+                                  <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                                    <Bot className="w-3 h-3 text-purple-400" />
+                                    <span>Automated Reply</span>
+                                  </span>
+                                </div>
+
+                                {/* Extracted Asset Pills */}
+                                <div className="flex flex-wrap gap-1 pt-0.5">
+                                  {c.extracted_phone && (
+                                    <a
+                                      href={`tel:${c.extracted_phone}`}
+                                      className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-mono hover:bg-emerald-500/20"
+                                      title={`Call ${c.extracted_phone}`}
+                                    >
+                                      <Phone className="w-2.5 h-2.5" />
+                                      <span>{c.extracted_phone}</span>
+                                    </a>
+                                  )}
+                                  {c.extracted_email && (
+                                    <a
+                                      href={`mailto:${c.extracted_email}`}
+                                      className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/30 text-[10px] font-mono hover:bg-sky-500/20"
+                                      title={`Email ${c.extracted_email}`}
+                                    >
+                                      <Mail className="w-2.5 h-2.5" />
+                                      <span className="max-w-[110px] truncate">{c.extracted_email}</span>
+                                    </a>
+                                  )}
+                                  {c.extracted_link && (
+                                    <a
+                                      href={c.extracted_link}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/30 text-[10px] hover:bg-indigo-500/20"
+                                      title={`Visit ${c.extracted_link}`}
+                                    >
+                                      <Link2 className="w-2.5 h-2.5" />
+                                      <span className="max-w-[100px] truncate">{c.extracted_link.replace(/^https?:\/\//, '')}</span>
+                                    </a>
+                                  )}
+                                </div>
+
+                                {c.auto_reply_message && (
+                                  <button
+                                    onClick={() => setViewingAutoReplyContact(c)}
+                                    className="inline-flex items-center space-x-1 text-[10px] font-semibold text-purple-400 hover:text-purple-300 hover:underline pt-0.5 cursor-pointer"
+                                  >
+                                    <Eye className="w-2.5 h-2.5" />
+                                    <span>View captured reply</span>
+                                  </button>
+                                )}
+                              </div>
+                            )}
+
+                            {c.replied_status === 'DM_RESTRICTED' && (
+                              <div className="mt-2 space-y-1">
+                                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                  <ShieldAlert className="w-3 h-3 text-amber-400" />
+                                  <span>DM Restricted</span>
+                                </span>
+                                {c.auto_reply_message && (
+                                  <div 
+                                    onClick={() => setViewingAutoReplyContact(c)}
+                                    className="text-[10px] text-amber-300/80 line-clamp-1 italic cursor-pointer hover:underline"
+                                    title={c.auto_reply_message}
+                                  >
+                                    "{c.auto_reply_message}"
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -613,18 +759,32 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                       </td>
 
                       {/* Replied Toggle */}
-                      <td className="py-4 px-3 align-top text-center">
+                      <td className="py-4 px-3 align-top text-center space-y-1.5">
                         <button
                           onClick={() => handleToggleReplied(c)}
                           disabled={loadingContactId === c.id}
                           className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition shadow-sm cursor-pointer ${
-                            c.has_replied
+                            c.replied_status === 'AUTOMATED_MESSAGE'
+                              ? 'bg-purple-500/20 border-purple-500/50 text-purple-300 hover:bg-purple-500/30'
+                              : c.replied_status === 'DM_RESTRICTED'
+                              ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 hover:bg-amber-500/30'
+                              : c.has_replied
                               ? 'bg-rose-500/20 border-rose-500/50 text-rose-300 shadow-rose-500/20 hover:bg-rose-500/30'
                               : 'bg-gray-900 border-gray-800 text-gray-400 hover:text-gray-200 hover:border-gray-700'
                           }`}
-                          title={c.has_replied ? 'Click to mark as unreplied' : 'Click to mark lead as replied'}
+                          title={c.has_replied ? 'Click to toggle reply status' : 'Click to mark lead as replied'}
                         >
-                          {c.has_replied ? (
+                          {c.replied_status === 'AUTOMATED_MESSAGE' ? (
+                            <>
+                              <Bot className="w-3.5 h-3.5 text-purple-400" />
+                              <span>Auto-Reply</span>
+                            </>
+                          ) : c.replied_status === 'DM_RESTRICTED' ? (
+                            <>
+                              <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                              <span>Restricted</span>
+                            </>
+                          ) : c.has_replied ? (
                             <>
                               <Sparkles className="w-3.5 h-3.5 text-rose-400" />
                               <span>Replied</span>
@@ -632,10 +792,21 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                           ) : (
                             <>
                               <Check className="w-3.5 h-3.5 text-gray-500" />
-                              <span>Mark Replied</span>
+                              <span>No Reply</span>
                             </>
                           )}
                         </button>
+
+                        {/* Checked / Replied Timestamp Indicator */}
+                        {c.reply_detected_at ? (
+                          <div className="text-[10px] text-purple-300/90 font-mono">
+                            {formatDisplayDate(c.reply_detected_at)}
+                          </div>
+                        ) : c.last_checked_reply_at ? (
+                          <div className="text-[10px] text-gray-500 font-mono" title={`Checked on ${formatDisplayDate(c.last_checked_reply_at)}`}>
+                            Checked {formatDisplayDate(c.last_checked_reply_at)}
+                          </div>
+                        ) : null}
                       </td>
 
                       {/* Actions */}
@@ -925,6 +1096,148 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Captured Auto-Reply & Contact Details Modal */}
+      {viewingAutoReplyContact && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-gray-700/80 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-gray-800 pb-3.5">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-purple-500 to-indigo-600 p-[1.5px] shrink-0">
+                  <div className="w-full h-full rounded-full bg-gray-950 flex items-center justify-center text-xs font-bold text-white">
+                    {(viewingAutoReplyContact.name || viewingAutoReplyContact.username || 'U').substring(0, 2).toUpperCase()}
+                  </div>
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center space-x-2">
+                    <span>{viewingAutoReplyContact.name || viewingAutoReplyContact.username}</span>
+                    <span className="text-xs text-gray-400 font-mono font-normal">(@{viewingAutoReplyContact.username})</span>
+                  </h3>
+                  <div className="flex items-center space-x-2 mt-0.5">
+                    {viewingAutoReplyContact.replied_status === 'AUTOMATED_MESSAGE' ? (
+                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                        <Bot className="w-3 h-3 text-purple-400" />
+                        <span>Automated System Response</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                        <ShieldAlert className="w-3 h-3 text-amber-400" />
+                        <span>DM Delivery Restriction</span>
+                      </span>
+                    )}
+                    {viewingAutoReplyContact.reply_detected_at && (
+                      <span className="text-[11px] text-gray-400 font-mono">
+                        Captured: {formatDisplayDate(viewingAutoReplyContact.reply_detected_at)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setViewingAutoReplyContact(null)}
+                className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Message Content */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-gray-300 flex items-center space-x-1.5">
+                <MessageCircle className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Full Captured Message Bubble</span>
+              </label>
+              <div className="bg-gray-950 p-4 rounded-xl border border-gray-800 text-gray-200 text-xs font-sans whitespace-pre-wrap leading-relaxed shadow-inner max-h-48 overflow-y-auto">
+                {viewingAutoReplyContact.auto_reply_message || 'No text captured.'}
+              </div>
+            </div>
+
+            {/* Extracted Contact Assets */}
+            {(viewingAutoReplyContact.extracted_phone || viewingAutoReplyContact.extracted_email || viewingAutoReplyContact.extracted_link) && (
+              <div className="space-y-2 bg-gray-950/70 p-3.5 rounded-xl border border-gray-800">
+                <label className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center space-x-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Extracted Contact Info</span>
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                  {viewingAutoReplyContact.extracted_phone && (
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300">
+                      <span className="flex items-center space-x-1.5">
+                        <Phone className="w-3.5 h-3.5" />
+                        <span className="font-mono font-semibold">{viewingAutoReplyContact.extracted_phone}</span>
+                      </span>
+                      <a
+                        href={`tel:${viewingAutoReplyContact.extracted_phone}`}
+                        className="px-2 py-0.5 rounded bg-emerald-500 text-gray-950 font-bold text-[10px] hover:bg-emerald-400"
+                      >
+                        Call
+                      </a>
+                    </div>
+                  )}
+                  {viewingAutoReplyContact.extracted_email && (
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-300">
+                      <span className="flex items-center space-x-1.5 truncate mr-2">
+                        <Mail className="w-3.5 h-3.5 shrink-0" />
+                        <span className="font-mono font-semibold truncate">{viewingAutoReplyContact.extracted_email}</span>
+                      </span>
+                      <a
+                        href={`mailto:${viewingAutoReplyContact.extracted_email}`}
+                        className="px-2 py-0.5 rounded bg-sky-500 text-gray-950 font-bold text-[10px] hover:bg-sky-400 shrink-0"
+                      >
+                        Email
+                      </a>
+                    </div>
+                  )}
+                  {viewingAutoReplyContact.extracted_link && (
+                    <div className="sm:col-span-2 flex items-center justify-between p-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-300">
+                      <span className="flex items-center space-x-1.5 truncate mr-2">
+                        <Link2 className="w-3.5 h-3.5 shrink-0" />
+                        <span className="font-mono truncate">{viewingAutoReplyContact.extracted_link}</span>
+                      </span>
+                      <a
+                        href={viewingAutoReplyContact.extracted_link}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-2 py-0.5 rounded bg-indigo-500 text-white font-bold text-[10px] hover:bg-indigo-400 shrink-0"
+                      >
+                        Open
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Safety Notice */}
+            <div className="text-[11px] text-gray-400 bg-gray-950/40 p-3 rounded-xl border border-gray-800/80 flex items-start space-x-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+              <span>
+                Outreach automation sequence has been paused for this contact to prevent sending irrelevant follow-ups.
+              </span>
+            </div>
+
+            {/* Footer Actions */}
+            <div className="flex items-center justify-between pt-2 border-t border-gray-800">
+              <a
+                href={viewingAutoReplyContact.instagram_url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center space-x-1 text-xs text-indigo-400 hover:text-indigo-300 font-semibold"
+              >
+                <span>Open Instagram Profile</span>
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </a>
+              <button
+                onClick={() => setViewingAutoReplyContact(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-gray-800 hover:bg-gray-700 text-white transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

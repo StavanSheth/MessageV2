@@ -209,3 +209,69 @@ export async function deleteTask(taskId: string): Promise<{ id: string; status: 
   return res.json();
 }
 
+export async function triggerReplyScan(): Promise<{
+  success: boolean;
+  scanned_count: number;
+  automated_found: number;
+  human_replies_found: number;
+  no_reply_count: number;
+  scanned_at?: string;
+  error?: string;
+}> {
+  const res = await fetch(`${BASE_URL}/api/automation/replies/scan`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to scan inbox replies');
+  }
+  return res.json();
+}
+
+export async function fetchReplyScannerStatus(): Promise<{
+  status: string;
+  last_scanned_at: string | null;
+  stats: {
+    total_scanned: number;
+    automated_found: number;
+    human_replies_found: number;
+    no_reply_count: number;
+  };
+  is_connected: boolean;
+}> {
+  const res = await fetch(`${BASE_URL}/api/automation/replies/status`);
+  return res.json();
+}
+
+export async function fetchChromeProfiles(): Promise<{
+  profiles: import('../types').ChromeProfile[];
+  active_profile?: import('../types').ChromeProfile | null;
+}> {
+  try {
+    const res = await fetch(`${BASE_URL}/api/browser/profiles`);
+    if (!res.ok) throw new Error();
+    return await res.json();
+  } catch {
+    return {
+      profiles: [{ id: 'Default', name: 'Default Chrome User', is_default: true, is_active: true }],
+      active_profile: { id: 'Default', name: 'Default Chrome User', is_default: true, is_active: true }
+    };
+  }
+}
+
+export async function selectChromeProfile(profileId: string): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/browser/profiles/select`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile_id: profileId }),
+  });
+  return res.json().catch(() => ({ success: true }));
+}
+
+export async function launchChromeLive(profileId?: string): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/browser/launch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile_id: profileId }),
+  });
+  return res.json().catch(() => ({ success: true }));
+}
+

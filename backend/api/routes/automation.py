@@ -59,4 +59,17 @@ async def extension_status():
         "extension_connected": extension_bridge.is_connected
     }
 
+@router.post("/replies/scan")
+async def scan_replies():
+    from backend.workers.reply_scanner_worker import reply_scanner_worker
+    res = await reply_scanner_worker.scan_inbox()
+    if not res.get("success"):
+        raise HTTPException(400, res.get("error", "Scan failed"))
+    return res
+
+@router.get("/replies/status")
+async def get_reply_scanner_status():
+    from backend.workers.reply_scanner_worker import reply_scanner_worker
+    return reply_scanner_worker.get_status()
+
 

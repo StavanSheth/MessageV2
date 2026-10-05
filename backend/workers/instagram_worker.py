@@ -106,7 +106,7 @@ class InstagramWorker:
             task_to_cancel.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(task_to_cancel), timeout=2.0)
-            except Exception:
+            except (Exception, asyncio.CancelledError):
                 pass
 
         # Reset current task back to READY if it was RUNNING so it can be resumed cleanly later
@@ -583,12 +583,35 @@ class InstagramWorker:
 
             check_history = (task.type == "MESSAGE")
             if isinstance(adapter, ExtensionAdapter):
-                sent, send_reason, already_messaged = await adapter.send_message(check_history=check_history, task_type=task.type)
+                sent, send_reason, already_messaged, dm_restricted = await adapter.send_message(check_history=check_history, task_type=task.type)
             else:
                 sent, send_reason = await adapter.send_message()
                 already_messaged = False
+                dm_restricted = False
 
             await take_shot("message_attempted")
+
+            if dm_restricted:
+                logger.warning(f"[Worker] Contact {contact.name} has DM restrictions: {send_reason}. Marking DM_RESTRICTED and skipping.")
+                async with AsyncSessionLocal() as session:
+                    task_repo = TaskRepository(session)
+                    await task_repo.update_status(task_id, TaskStatus.SKIPPED)
+                    contact_repo = ContactRepository(session)
+                    await contact_repo.update(contact.id, {
+                        "replied_status": "DM_RESTRICTED",
+                        "auto_reply_message": send_reason,
+                        "notes": f"Instagram DM Restricted: {send_reason}"
+                    })
+                    msg_repo = MessageRepository(session)
+                    await msg_repo.update_result(msg_id, "SKIPPED", "DM_RESTRICTED")
+                await event_bus.publish(
+                    EventCode.TASK_SKIPPED,
+                    task_id=task_id,
+                    worker_id=WORKER_ID,
+                    payload={"reason": send_reason, "code": "DM_RESTRICTED"}
+                )
+                self.current_task_id = None
+                return
 
             if already_messaged:
                 logger.warning(f"[Worker] Contact {contact.name} already has prior conversation history on Instagram! Skipping initial outreach.")

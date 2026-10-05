@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { 
   Activity, CheckCircle2, ShieldCheck, Eye, Clock, 
   Send, AlertCircle, Sparkles, UserCheck, Terminal, Compass,
-  ExternalLink, Loader2, RefreshCw, Play, Pause, Square
+  ExternalLink, Loader2, RefreshCw, Play, Pause, Square,
+  Bot, ShieldAlert
 } from 'lucide-react';
 import { LiveAutomationState } from '../types';
-import { openBrowserWindow } from '../services/api';
+import { openBrowserWindow, triggerReplyScan, fetchReplyScannerStatus } from '../services/api';
 
 interface LiveAutomationViewProps {
   state: LiveAutomationState;
@@ -61,6 +62,56 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   const [streamError, setStreamError] = useState(false);
   const [isOpeningBrowser, setIsOpeningBrowser] = useState(false);
   const [extensionNeedsReload, setExtensionNeedsReload] = useState(false);
+
+  // Worker 2 (Reply Scanner) State
+  const [scannerStatus, setScannerStatus] = useState<{
+    status: string;
+    last_scanned_at: string | null;
+    stats: {
+      total_scanned: number;
+      automated_found: number;
+      human_replies_found: number;
+      no_reply_count: number;
+    };
+    is_connected: boolean;
+  } | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanFeedback, setScanFeedback] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchStatus = async () => {
+      try {
+        const res = await fetchReplyScannerStatus();
+        setScannerStatus(res);
+        if (res.status !== 'SCANNING' && isScanning) {
+          setIsScanning(false);
+        }
+      } catch (e) {}
+    };
+    fetchStatus();
+    const timer = setInterval(fetchStatus, 4000);
+    return () => clearInterval(timer);
+  }, [isScanning]);
+
+  const handleTriggerScan = async () => {
+    setIsScanning(true);
+    setScanFeedback('Worker 2 is scanning Instagram Direct Inbox...');
+    try {
+      const res = await triggerReplyScan();
+      setScanFeedback(
+        res.success 
+          ? `Scanned ${res.scanned_count} conversations. Found ${res.automated_found} auto-replies, ${res.human_replies_found} human.` 
+          : (res.error || 'Scan finished.')
+      );
+      const updated = await fetchReplyScannerStatus();
+      setScannerStatus(updated);
+    } catch (err: any) {
+      setScanFeedback(`Scan error: ${err.message}`);
+    } finally {
+      setIsScanning(false);
+      setTimeout(() => setScanFeedback(null), 6000);
+    }
+  };
 
   useEffect(() => {
     const checkCapture = async () => {
@@ -203,6 +254,97 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                 </div>
               );
             })}
+          </div>
+        </div>
+      </div>
+
+      {/* Dual Coordinated Worker Control Dock */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Worker 1: Outreach Dispatcher */}
+        <div className="bg-gray-900/90 border border-gray-800 rounded-2xl p-4 shadow-lg flex flex-col justify-between relative overflow-hidden">
+          <div className="flex items-start justify-between">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+                <Send className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <h4 className="text-sm font-bold text-white">Worker 1: Outreach Dispatcher</h4>
+                  <span className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    state.status === 'RUNNING'
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                      : state.status === 'PAUSED'
+                      ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                      : 'bg-gray-800 text-gray-400 border border-gray-700'
+                  }`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${state.status === 'RUNNING' ? 'bg-emerald-400 animate-ping' : 'bg-gray-500'}`} />
+                    <span>{state.status || 'IDLE'}</span>
+                  </span>
+                </div>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Sequential cold outreach & follow-up messenger with instant DM restriction detection.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 pt-3 border-t border-gray-800/80 flex items-center justify-between text-xs text-gray-400">
+            <span>Processed this session: <strong className="text-white font-mono">{state.batch_sent_count ?? 0}</strong></span>
+            <span className="font-mono text-[11px] text-gray-400">{state.current_contact ? `@${state.current_contact.username}` : 'No active target'}</span>
+          </div>
+        </div>
+
+        {/* Worker 2: Reply Scanner & Entity Extractor */}
+        <div className="bg-gray-900/90 border border-gray-800 rounded-2xl p-4 shadow-lg flex flex-col justify-between relative overflow-hidden">
+          <div className="flex items-start justify-between">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-500/30 flex items-center justify-center text-purple-400">
+                <Bot className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <h4 className="text-sm font-bold text-white">Worker 2: Reply Scanner & Extractor</h4>
+                  <span className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    scannerStatus?.status === 'SCANNING' || isScanning
+                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                      : 'bg-gray-800 text-gray-400 border border-gray-700'
+                  }`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${scannerStatus?.status === 'SCANNING' || isScanning ? 'bg-purple-400 animate-ping' : 'bg-gray-500'}`} />
+                    <span>{scannerStatus?.status === 'SCANNING' || isScanning ? 'SCANNING INBOX' : 'STANDBY'}</span>
+                  </span>
+                </div>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Scans Direct Inbox, classifies auto-responders vs human leads, extracts phones, emails & links.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleTriggerScan}
+              disabled={isScanning || scannerStatus?.status === 'SCANNING' || state.status === 'RUNNING'}
+              className="flex items-center space-x-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition shadow hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 shrink-0"
+              title={state.status === 'RUNNING' ? 'Pause Worker 1 before running inbox scan' : 'Scan Instagram inbox for replies now'}
+            >
+              {isScanning || scannerStatus?.status === 'SCANNING' ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Scanning...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Scan Inbox</span>
+                </>
+              )}
+            </button>
+          </div>
+          <div className="mt-3 pt-3 border-t border-gray-800/80 flex items-center justify-between text-xs text-gray-400">
+            <span>
+              {scannerStatus?.last_scanned_at ? `Last scan: ${scannerStatus.last_scanned_at}` : 'Ready for scan'}
+            </span>
+            {scanFeedback && (
+              <span className="text-[11px] text-purple-300 font-semibold animate-pulse truncate max-w-[200px]">
+                {scanFeedback}
+              </span>
+            )}
           </div>
         </div>
       </div>

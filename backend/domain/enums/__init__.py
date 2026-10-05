@@ -79,6 +79,10 @@ class RepliedStatus(str, Enum):
     UNKNOWN = "UNKNOWN"
     YES = "YES"
     NO = "NO"
+    NO_REPLY = "NO_REPLY"
+    AUTOMATED_MESSAGE = "AUTOMATED_MESSAGE"
+    DM_RESTRICTED = "DM_RESTRICTED"
+    EXISTING_HISTORY = "EXISTING_HISTORY"
 
 class SourceType(str, Enum):
     XLSX = "XLSX"

@@ -66,6 +66,12 @@ export interface Contact {
   has_replied: boolean;
   replied_status?: string;
   replied_at?: string;
+  auto_reply_message?: string;
+  extracted_phone?: string;
+  extracted_email?: string;
+  extracted_link?: string;
+  last_checked_reply_at?: string | null;
+  reply_detected_at?: string | null;
   notes?: string;
   // Outreach & Follow-up Tracking
   first_message_status?: string;
@@ -184,4 +190,15 @@ export interface Source {
   valid_count: number;
   invalid_count: number;
   created_at: string;
+}
+
+export interface ChromeProfile {
+  id: string;
+  name: string;
+  path?: string;
+  gaia_name?: string;
+  email?: string;
+  is_default?: boolean;
+  avatar_url?: string;
+  is_active?: boolean;
 }

@@ -175,22 +175,35 @@ class ExtensionBridgeManager:
                 logger.warning(f"[ExtensionBridge] Screenshot capture exception: {e}")
         return self._latest_screenshot_data
 
-    async def prepare_and_send(self, message: str, check_history: bool = True, task_type: str = "MESSAGE") -> Tuple[bool, ResultCode, str, bool]:
+    async def prepare_and_send(self, message: str, check_history: bool = True, task_type: str = "MESSAGE") -> Tuple[bool, ResultCode, str, bool, bool]:
+        """Returns (success, code, reason, already_messaged, dm_restricted)"""
         if not self.is_connected:
-            return False, ResultCode.NETWORK_ERROR, "Extension not connected", False
+            return False, ResultCode.NETWORK_ERROR, "Extension not connected", False, False
         try:
             res = await self.send_command("PREPARE_AND_SEND_MESSAGE", {
                 "message": message,
                 "check_history": check_history,
                 "task_type": task_type
             }, timeout=30.0)
+            if res.get("dm_restricted"):
+                return False, ResultCode.DM_NOT_AVAILABLE, res.get("error", "This account can't receive your message requests"), False, True
             if res.get("already_messaged"):
-                return False, ResultCode.DM_NOT_AVAILABLE, res.get("error", "Existing conversation history detected"), True
+                return False, ResultCode.DM_NOT_AVAILABLE, res.get("error", "Existing conversation history detected"), True, False
             if res.get("success"):
-                return True, ResultCode.SUCCESS, "Message sent successfully", False
-            return False, ResultCode.NETWORK_ERROR, res.get("error", "Failed to send message"), False
+                return True, ResultCode.SUCCESS, "Message sent successfully", False, False
+            return False, ResultCode.NETWORK_ERROR, res.get("error", "Failed to send message"), False, False
         except Exception as e:
-            return False, ResultCode.TIMEOUT, str(e), False
+            return False, ResultCode.TIMEOUT, str(e), False, False
+
+    async def scan_inbox_replies(self) -> Dict[str, Any]:
+        if not self.is_connected:
+            return {"success": False, "error": "Extension not connected"}
+        return await self.send_command("SCAN_INBOX_REPLIES", timeout=25.0)
+
+    async def inspect_thread_reply(self, thread_url: str) -> Dict[str, Any]:
+        if not self.is_connected:
+            return {"success": False, "error": "Extension not connected"}
+        return await self.send_command("INSPECT_THREAD_REPLY", {"thread_url": thread_url}, timeout=25.0)
 
 # Global singleton
 extension_bridge = ExtensionBridgeManager()
@@ -232,11 +245,17 @@ class ExtensionAdapter:
         self._pending_message = text
         return True, "Prepared"
 
-    async def send_message(self, check_history: bool = True, task_type: str = "MESSAGE") -> Tuple[bool, str, bool]:
-        success, code, reason, already_messaged = await self.bridge.prepare_and_send(
+    async def send_message(self, check_history: bool = True, task_type: str = "MESSAGE") -> Tuple[bool, str, bool, bool]:
+        success, code, reason, already_messaged, dm_restricted = await self.bridge.prepare_and_send(
             self._pending_message, check_history=check_history, task_type=task_type
         )
-        return success, reason, already_messaged
+        return success, reason, already_messaged, dm_restricted
+
+    async def scan_inbox(self) -> Dict[str, Any]:
+        return await self.bridge.scan_inbox_replies()
+
+    async def inspect_thread(self, thread_url: str) -> Dict[str, Any]:
+        return await self.bridge.inspect_thread_reply(thread_url)
 
     async def detect_send_result(self) -> Tuple[ResultCode, str]:
         return ResultCode.SUCCESS, "Delivered"

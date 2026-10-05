@@ -29,6 +29,12 @@ class ContactBase(BaseModel):
     followup_2_message: Optional[str] = None
     followup_2_delay_days: int = 5
     replied_status: RepliedStatus = RepliedStatus.UNKNOWN
+    auto_reply_message: Optional[str] = None
+    extracted_phone: Optional[str] = None
+    extracted_email: Optional[str] = None
+    extracted_link: Optional[str] = None
+    last_checked_reply_at: Optional[datetime] = None
+    reply_detected_at: Optional[datetime] = None
     notes: Optional[str] = None
 
 class ContactCreate(ContactBase):
@@ -41,6 +47,12 @@ class ContactUpdate(BaseModel):
     expected_followers: Optional[int] = None
     message: Optional[str] = None
     replied_status: Optional[RepliedStatus] = None
+    auto_reply_message: Optional[str] = None
+    extracted_phone: Optional[str] = None
+    extracted_email: Optional[str] = None
+    extracted_link: Optional[str] = None
+    last_checked_reply_at: Optional[datetime] = None
+    reply_detected_at: Optional[datetime] = None
     notes: Optional[str] = None
 
 class ContactRead(ContactBase):

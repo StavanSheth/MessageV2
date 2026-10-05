@@ -92,10 +92,37 @@ function waitForTabLoaded(tabId, timeoutMs = 15000) {
   });
 }
 
-// Find or start the Instagram tab in this Chrome window
+// Dedicated automation tab isolation
+let automationTabId = null;
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabId === automationTabId) {
+    console.log("[MessageV2 Extension] Automation tab was closed. Resetting allocation.");
+    automationTabId = null;
+  }
+});
+
+// Find or start the dedicated Instagram tab in background
 async function getInstagramTab() {
+  // 1. If we already hold a dedicated tab, verify it's still alive
+  if (automationTabId !== null) {
+    try {
+      const existing = await chrome.tabs.get(automationTabId);
+      if (existing && !existing.discarded) {
+        if (existing.status === "loading") {
+          await waitForTabLoaded(existing.id, 10000);
+        }
+        return existing;
+      }
+    } catch (e) {
+      automationTabId = null;
+    }
+  }
+
+  // 2. Look for any existing Instagram tab to adopt
   const tabs = await chrome.tabs.query({ url: ["*://*.instagram.com/*", "*://instagram.com/*"] });
   if (tabs.length > 0) {
+    automationTabId = tabs[0].id;
     const tab = tabs[0];
     if (tab.status === "loading") {
       await waitForTabLoaded(tab.id, 10000);
@@ -103,26 +130,10 @@ async function getInstagramTab() {
     return tab;
   }
 
-  // If no Instagram tab, check active tab in current window
-  try {
-    const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (activeTabs.length > 0) {
-      const active = activeTabs[0];
-      const url = active.url || "";
-      if (url.includes("newtab") || url === "about:blank" || url === "" || url.startsWith("chrome://")) {
-        console.log("[MessageV2 Extension] Navigating current blank tab to Instagram...");
-        const updatedTab = await chrome.tabs.update(active.id, { url: "https://www.instagram.com/", active: true });
-        await waitForTabLoaded(updatedTab.id, 15000);
-        return updatedTab;
-      }
-    }
-  } catch (e) {
-    console.log("[MessageV2 Extension] Active tab check error:", e);
-  }
-
-  // Create a new visible tab for Instagram
-  console.log("[MessageV2 Extension] Opening new Instagram tab in Chrome...");
-  const newTab = await chrome.tabs.create({ url: "https://www.instagram.com/", active: true });
+  // 3. Otherwise, create a dedicated background tab without stealing user focus (active: false)
+  console.log("[MessageV2 Extension] Creating dedicated automation tab in background...");
+  const newTab = await chrome.tabs.create({ url: "https://www.instagram.com/", active: false });
+  automationTabId = newTab.id;
   await waitForTabLoaded(newTab.id, 15000);
   return newTab;
 }
@@ -144,15 +155,9 @@ async function handleCommand(msg) {
 
   if (action === "CAPTURE_SCREENSHOT") {
     try {
-      // 1. Locate Instagram tab and its window
-      const igTabs = await chrome.tabs.query({ url: ["*://*.instagram.com/*", "*://instagram.com/*"] });
-      let targetWinId = null;
-      if (igTabs.length > 0) {
-        targetWinId = igTabs[0].windowId;
-        try {
-          await chrome.tabs.update(igTabs[0].id, { active: true });
-        } catch (e) {}
-      }
+      // 1. Locate Instagram tab and its window without stealing user focus
+      const tab = await getInstagramTab();
+      let targetWinId = tab && tab.windowId ? tab.windowId : null;
 
       // 2. Fallback to active tab in current/last focused window
       if (!targetWinId) {
@@ -273,7 +278,8 @@ async function handleCommand(msg) {
 
   if (action === "OPEN_PROFILE") {
     const targetUrl = payload.url;
-    await chrome.tabs.update(tab.id, { url: targetUrl, active: true });
+    // Quiet background navigation: do NOT set active: true!
+    await chrome.tabs.update(tab.id, { url: targetUrl });
     await waitForTabLoaded(tab.id, 20000);
     return { success: true, url: targetUrl };
   }
@@ -338,7 +344,7 @@ async function handleCommand(msg) {
           });
           if (msgBtn) {
             msgBtn.click();
-            await new Promise(r => setTimeout(r, 2500));
+            await new Promise(r => setTimeout(r, 2000));
           }
         }
 
@@ -351,16 +357,33 @@ async function handleCommand(msg) {
         for (let i = 0; i < 20; i++) {
           composer = document.querySelector('div[contenteditable="true"][role="textbox"], textarea[placeholder*="Message"], div[aria-label="Message"]');
           if (composer) break;
-          await new Promise(r => setTimeout(r, 400));
+          await new Promise(r => setTimeout(r, 350));
         }
 
         if (!composer) {
           return { success: false, error: "Message composer not found" };
         }
 
-        // Focus & Type message
+        // Focus & Type message (compatible with background tabs)
         composer.focus();
-        document.execCommand('insertText', false, textToSend);
+
+        try {
+          const beforeInput = new InputEvent('beforeinput', {
+            bubbles: true,
+            cancelable: true,
+            inputType: 'insertText',
+            data: textToSend
+          });
+          composer.dispatchEvent(beforeInput);
+        } catch (e) {}
+
+        const execOk = document.execCommand('insertText', false, textToSend);
+
+        if (!execOk || !composer.innerText || composer.innerText.trim() === '') {
+          composer.innerText = textToSend;
+          composer.dispatchEvent(new Event('input', { bubbles: true }));
+          composer.dispatchEvent(new Event('change', { bubbles: true }));
+        }
 
         await new Promise(r => setTimeout(r, 600));
 
@@ -372,7 +395,7 @@ async function handleCommand(msg) {
           composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
         }
 
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 1200));
         return { success: true };
       }
     });

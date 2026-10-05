@@ -338,13 +338,14 @@ class InstagramWorker:
                 return
 
             if first_call:
-                try:
-                    from backend.automation.chrome_profile_manager import chrome_profile_manager
-                    chrome_profile_manager.bring_chrome_to_front()
-                    if adapter.page and not adapter.page.is_closed():
-                        await adapter.page.bring_to_front()
-                except Exception:
-                    pass
+                if not extension_bridge.is_connected:
+                    try:
+                        from backend.automation.chrome_profile_manager import chrome_profile_manager
+                        chrome_profile_manager.bring_chrome_to_front()
+                        if adapter.page and not adapter.page.is_closed():
+                            await adapter.page.bring_to_front()
+                    except Exception:
+                        pass
                 first_call = False
 
             is_logged_in, requires_login, has_challenge, reason = await adapter.check_login()
@@ -450,13 +451,17 @@ class InstagramWorker:
 
             if not success:
                 if result_code in {ResultCode.LOGIN_REQUIRED, ResultCode.CHALLENGE_REQUIRED}:
-                    logger.warning(f"[Worker] Task {task_id} paused: Instagram login required. Resetting task to READY and entering login wait gate.")
-                    async with AsyncSessionLocal() as session:
-                        repo = TaskRepository(session)
-                        await repo.update_status(task_id, TaskStatus.READY, worker_id=None)
-                    await self._set_stage(AutomationStage.CHECKING_LOGIN, contact.name, task_id=task_id)
-                    await self._check_login_loop(adapter)
-                    return
+                    is_logged_in, requires_login, _, _ = await adapter.check_login()
+                    if not is_logged_in:
+                        logger.warning(f"[Worker] Task {task_id} paused: Instagram login required. Resetting task to READY and entering login wait gate.")
+                        async with AsyncSessionLocal() as session:
+                            repo = TaskRepository(session)
+                            await repo.update_status(task_id, TaskStatus.READY, worker_id=None)
+                        await self._set_stage(AutomationStage.CHECKING_LOGIN, contact.name, task_id=task_id)
+                        await self._check_login_loop(adapter)
+                        return
+                    else:
+                        logger.info(f"[Worker] Task {task_id} open_profile transient glitch while user in another tab. Skipping cleanly without pausing.")
 
                 if "target page, context or browser has been closed" in str(reason).lower():
                     logger.warning("[Worker] Browser closed/disconnected during open_profile. Halting worker loop.")

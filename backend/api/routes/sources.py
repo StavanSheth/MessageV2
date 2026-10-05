@@ -378,7 +378,10 @@ async def export_universal_excel(db: AsyncSession = Depends(get_db)):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": f"attachment; filename={filename}",
-            "Access-Control-Expose-Headers": "Content-Disposition"
+            "Access-Control-Expose-Headers": "Content-Disposition",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
         }
     )
 

@@ -238,6 +238,11 @@ class ExtensionBridgeManager:
             return {"success": False, "error": "Extension not connected"}
         return await self.send_command("INSPECT_THREAD_REPLY", {"thread_url": thread_url}, timeout=25.0)
 
+    async def inspect_current_conversation(self, worker: str = "outreach") -> Dict[str, Any]:
+        if not self.is_connected:
+            return {"success": False, "error": "Extension not connected"}
+        return await self.send_command("INSPECT_CONVERSATION", {"worker": worker}, timeout=25.0)
+
 # Global singleton
 extension_bridge = ExtensionBridgeManager()
 
@@ -289,6 +294,9 @@ class ExtensionAdapter:
 
     async def inspect_thread(self, thread_url: str) -> Dict[str, Any]:
         return await self.bridge.inspect_thread_reply(thread_url)
+
+    async def inspect_conversation(self, worker: str = "outreach") -> Dict[str, Any]:
+        return await self.bridge.inspect_current_conversation(worker=worker)
 
     async def detect_send_result(self) -> Tuple[ResultCode, str]:
         return ResultCode.SUCCESS, "Delivered"

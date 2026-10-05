@@ -240,15 +240,18 @@ async def update_replied(contact_id: str, status: str, db: AsyncSession = Depend
 
 @router.get("/export/excel")
 async def export_contacts_excel(db: AsyncSession = Depends(get_db)):
-    """Export all contacts with full 1st message, follow-up 1, and follow-up 2 tracking to Excel (.xlsx)."""
-    excel_stream = await ExportService.generate_outreach_excel(db)
+    """Export all contacts with full 1st message, follow-up 1, and follow-up 2 tracking categorized across 4 sheets to Excel (.xlsx)."""
+    excel_stream = await ExportService.generate_contacts_excel(db)
     filename = f"Instagram_Outreach_Tracking_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     return StreamingResponse(
         excel_stream,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": f"attachment; filename={filename}",
-            "Access-Control-Expose-Headers": "Content-Disposition"
+            "Access-Control-Expose-Headers": "Content-Disposition",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
         }
     )
 

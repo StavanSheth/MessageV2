@@ -225,19 +225,6 @@ export const Sources: React.FC<SourcesProps> = ({ sources, onImportSuccess, onNa
             Analyze spreadsheets for database duplicates, customize duplicate handling, and view or export all database tables.
           </p>
         </div>
-
-        {/* Universal Download Action */}
-        <div className="flex items-center space-x-3">
-          <a
-            href="/api/sources/export/universal"
-            download
-            className="flex items-center space-x-2 bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/30 transition hover:scale-105 active:scale-95 cursor-pointer"
-            title="Download Universal Excel containing all 5 database tables"
-          >
-            <Download className="w-4 h-4" />
-            <span>Universal Download (All 5 Tables)</span>
-          </a>
-        </div>
       </div>
 
       {/* Universal Export Highlight Card */}
@@ -261,12 +248,13 @@ export const Sources: React.FC<SourcesProps> = ({ sources, onImportSuccess, onNa
 
         <div className="flex items-center space-x-3 shrink-0">
           <a
-            href="/api/sources/export/universal"
+            href={`/api/sources/export/universal?t=${Date.now()}`}
             download
-            className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-xs font-bold transition shadow-md cursor-pointer"
+            className="flex items-center space-x-2 bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/30 transition hover:scale-105 active:scale-95 cursor-pointer"
+            title="Download Universal Excel containing all 5 database tables"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>Download All Data (.xlsx)</span>
+            <Download className="w-4 h-4" />
+            <span>Universal Download (All 5 Tables)</span>
           </a>
         </div>
       </div>

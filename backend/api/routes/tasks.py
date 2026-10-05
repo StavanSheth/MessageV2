@@ -5,6 +5,8 @@ from backend.repositories.task_repository import TaskRepository
 from backend.domain.enums import TaskStatus
 from backend.events.event_bus import event_bus
 from backend.domain.enums import EventCode
+from starlette.responses import StreamingResponse
+from backend.services.export_service import ExportService
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -69,6 +71,23 @@ async def list_tasks(status: str = None, limit: int = 2000, offset: int = 0, db:
         "created_at": t.created_at.isoformat() if t.created_at else None,
         "updated_at": t.updated_at.isoformat() if t.updated_at else None
     } for t in tasks]
+
+@router.get("/export/excel")
+async def export_queue_excel(db: AsyncSession = Depends(get_db)):
+    """Export complete queue categorized into 4 sheets (Upcoming, Done, Action Needed, All) to Excel (.xlsx)."""
+    excel_stream = await ExportService.generate_queue_excel(db)
+    filename = f"Dispatch_Queue_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return StreamingResponse(
+        excel_stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Access-Control-Expose-Headers": "Content-Disposition",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+    )
 
 @router.post("/retry-all")
 async def retry_all_tasks(db: AsyncSession = Depends(get_db)):

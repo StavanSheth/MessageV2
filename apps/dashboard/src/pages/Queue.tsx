@@ -4,7 +4,7 @@ import {
   Search, ListOrdered, Calendar, Play, ChevronLeft, ChevronRight,
   ArrowUpRight, Users, MessageSquare, AlertTriangle, Send, Sparkles, X, Trash2,
   CheckCheck, ShieldAlert, Zap, Filter, ArrowUpDown,
-  ThumbsUp, ThumbsDown, CheckSquare, Square
+  ThumbsUp, ThumbsDown, CheckSquare, Square, Download
 } from 'lucide-react';
 import { Task, TaskStatus, LiveAutomationState } from '../types';
 import { retryTask, cancelTask, retryAllTasks, deleteTask, confirmFollowups, cancelFollowups } from '../services/api';
@@ -60,6 +60,19 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
       label: 'DMs Restricted / Closed',
       badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
       description: cleanMsg || 'Account has closed direct messages to non-followers or restricts receiving messages.'
+    };
+  }
+
+  if (
+    matchedTag.includes('EXTERNAL_MESSAGE_DETECTED') ||
+    cleanMsg.toLowerCase().includes('external message') ||
+    cleanMsg.toLowerCase().includes('message not sent by system')
+  ) {
+    return {
+      tag: 'EXTERNAL_MESSAGE_DETECTED',
+      label: 'External Message Detected',
+      badgeClass: 'bg-rose-500/25 text-rose-300 border-rose-500/40 font-bold',
+      description: cleanMsg || 'A message was sent directly from this Instagram account that did not originate from the automated sequence. Please verify.'
     };
   }
 
@@ -590,6 +603,16 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
               <span>Retry Issues ({issueCount})</span>
             </button>
           )}
+
+          <a
+            href={`/api/tasks/export/excel?t=${Date.now()}`}
+            download
+            className="flex items-center space-x-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-md shadow-emerald-950/40 cursor-pointer active:scale-95 hover:scale-105"
+            title="Download categorized queue workbook (.xlsx) with Upcoming, Done, and Action Needed sheets"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Download Queue (.xlsx)</span>
+          </a>
 
           <button
             onClick={handleManualRefresh}

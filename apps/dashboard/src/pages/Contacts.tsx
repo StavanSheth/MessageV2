@@ -508,13 +508,13 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, tasks = [], automa
           </button>
 
           <a
-            href="/api/contacts/export/excel"
+            href={`/api/contacts/export/excel?t=${Date.now()}`}
             download
             className="flex items-center space-x-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold shadow-lg shadow-emerald-500/25 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-            title="Export complete table with 1st message, Follow-Up 1, and Follow-Up 2 day/time tracking into Excel"
+            title="Download categorized contacts workbook (.xlsx) with All Contacts, Replied Leads, Active Outreach, and Needs Review sheets"
           >
             <Download className="w-4 h-4" />
-            <span>Export Excel (.xlsx)</span>
+            <span>Download Contacts (.xlsx)</span>
           </a>
 
           <button

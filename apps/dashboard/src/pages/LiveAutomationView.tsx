@@ -111,6 +111,9 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   const [scannerTick, setScannerTick] = useState(Date.now());
   const [scannerStreamError, setScannerStreamError] = useState(false);
   const [scannerFeedError, setScannerFeedError] = useState(false);
+  const [loadedTabBSrc, setLoadedTabBSrc] = useState<string>('/api/browser/live_feed?worker=scanner');
+  const [isFeedPausedTabB, setIsFeedPausedTabB] = useState<boolean>(false);
+  const [isRefreshingTabB, setIsRefreshingTabB] = useState<boolean>(false);
 
   const [isOpeningBrowser, setIsOpeningBrowser] = useState(false);
   const [extensionNeedsReload, setExtensionNeedsReload] = useState(false);
@@ -391,6 +394,38 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     };
     img.onerror = () => {
       setIsRefreshingTabA(false);
+    };
+    img.src = forceUrl;
+  };
+
+  // Seamless double-buffered offscreen preload for Tab B to prevent blanking
+  useEffect(() => {
+    if (isFeedPausedTabB) return;
+    const nextUrl = `/api/browser/live_feed?worker=scanner&t=${scannerTick}`;
+    const img = new Image();
+    img.onload = () => {
+      setLoadedTabBSrc(nextUrl);
+      setScannerFeedError(false);
+    };
+    img.onerror = () => {
+      setScannerFeedError(true);
+    };
+    img.src = nextUrl;
+  }, [scannerTick, isFeedPausedTabB]);
+
+  const handleRefreshTabB = () => {
+    setIsRefreshingTabB(true);
+    setScannerStreamError(false);
+    setScannerFeedError(false);
+    const forceUrl = `/api/browser/live_feed?worker=scanner&t=${Date.now()}`;
+    const img = new Image();
+    img.onload = () => {
+      setLoadedTabBSrc(forceUrl);
+      setScannerFeedError(false);
+      setIsRefreshingTabB(false);
+    };
+    img.onerror = () => {
+      setIsRefreshingTabB(false);
     };
     img.src = forceUrl;
   };
@@ -1115,56 +1150,37 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Col 3: Visible Chrome Capture (Tab A) */}
+                  {/* Col 3: Live Screen (Tab A) */}
                   <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-3 flex flex-col justify-between">
                     <div className="flex items-center justify-between pb-3 border-b border-gray-800">
                       <div className="flex items-center space-x-2">
                         <Eye className="w-4 h-4 text-emerald-400" />
-                        <h4 className="font-bold text-white text-sm">Visible Chrome Capture (Tab A)</h4>
+                        <h4 className="font-bold text-white text-sm">Live Screen (Tab A)</h4>
                       </div>
                       <div className="flex items-center space-x-2">
-                        <div className="flex rounded-lg bg-gray-900 p-0.5 border border-gray-800 text-[10px]">
-                          <button
-                            type="button"
-                            onClick={() => setCaptureModeTabA('feed')}
-                            className={`px-2 py-0.5 rounded font-bold transition cursor-pointer ${
-                              captureModeTabA === 'feed'
-                                ? 'bg-indigo-600 text-white'
-                                : 'text-gray-400 hover:text-white'
-                            }`}
-                          >
-                            1s Live
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setCaptureModeTabA('stream')}
-                            className={`px-2 py-0.5 rounded font-bold transition cursor-pointer ${
-                              captureModeTabA === 'stream'
-                                ? 'bg-indigo-600 text-white'
-                                : 'text-gray-400 hover:text-white'
-                            }`}
-                          >
-                            MJPEG
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setIsFeedPausedTabA(!isFeedPausedTabA)}
-                            title={isFeedPausedTabA ? "Resume 1s auto-refresh" : "Pause auto-refresh (freeze frame)"}
-                            className={`px-2 py-0.5 rounded font-bold transition cursor-pointer ${
-                              isFeedPausedTabA
-                                ? 'bg-amber-500/30 text-amber-300 border border-amber-500/40'
-                                : 'text-gray-400 hover:text-white'
-                            }`}
-                          >
-                            {isFeedPausedTabA ? 'Freeze' : 'Live'}
-                          </button>
-                        </div>
+                        <span className="flex items-center space-x-1 text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          <span>Live Feed</span>
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() => setIsFeedPausedTabA(!isFeedPausedTabA)}
+                          title={isFeedPausedTabA ? "Resume auto-refresh" : "Pause auto-refresh (freeze frame)"}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer border ${
+                            isFeedPausedTabA
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                              : 'bg-gray-900 text-gray-300 border-gray-800 hover:text-white hover:border-gray-700'
+                          }`}
+                        >
+                          {isFeedPausedTabA ? 'Freeze' : 'Live'}
+                        </button>
 
                         <button
                           type="button"
                           onClick={handleRefreshTabA}
-                          title="Instant snap / refresh Tab A capture"
-                          className="p-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition cursor-pointer"
+                          title="Instant snap / refresh Tab A live capture"
+                          className="p-1 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition cursor-pointer"
                         >
                           <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingTabA ? 'animate-spin text-emerald-400' : ''}`} />
                         </button>
@@ -1629,45 +1645,49 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
               </div>
             </div>
 
-            {/* Col 3: Visible Chrome Capture (Tab B) */}
+            {/* Col 3: Live Screen (Tab B) */}
             <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-3 flex flex-col justify-between">
               <div className="flex items-center justify-between pb-3 border-b border-gray-800">
                 <div className="flex items-center space-x-2">
                   <Eye className="w-4 h-4 text-purple-400" />
-                  <h4 className="font-bold text-white text-sm">Visible Chrome Capture (Tab B)</h4>
+                  <h4 className="font-bold text-white text-sm">Live Screen (Tab B)</h4>
                 </div>
                 <div className="flex items-center space-x-2">
                   <span className="flex items-center space-x-1 text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
                     <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
-                    <span>Live Stream</span>
+                    <span>Live Feed</span>
                   </span>
+
                   <button
                     type="button"
-                    onClick={() => {
-                      setScannerStreamError(false);
-                      setScannerFeedError(false);
-                      setScannerTick(Date.now());
-                    }}
-                    title="Reconnect Tab B video stream"
-                    className="p-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition cursor-pointer"
+                    onClick={() => setIsFeedPausedTabB(!isFeedPausedTabB)}
+                    title={isFeedPausedTabB ? "Resume auto-refresh" : "Pause auto-refresh (freeze frame)"}
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer border ${
+                      isFeedPausedTabB
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                        : 'bg-gray-900 text-gray-300 border-gray-800 hover:text-white hover:border-gray-700'
+                    }`}
                   >
-                    <RefreshCw className="w-3.5 h-3.5" />
+                    {isFeedPausedTabB ? 'Freeze' : 'Live'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleRefreshTabB}
+                    title="Instant snap / refresh Tab B live capture"
+                    className="p-1 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingTabB ? 'animate-spin text-purple-400' : ''}`} />
                   </button>
                 </div>
               </div>
 
               <div className="relative rounded-xl overflow-hidden border border-gray-800 bg-black aspect-video flex items-center justify-center shadow-inner">
                 <img
-                  src={scannerStreamError ? `/api/browser/live_feed?worker=scanner&t=${scannerTick}` : "/api/browser/stream/replies"}
-                  alt="Visible Chrome Tab B Stream"
+                  src={loadedTabBSrc}
+                  alt="Live Screen Tab B"
                   className="w-full h-full object-contain"
-                  onError={() => {
-                    if (!scannerStreamError) {
-                      setScannerStreamError(true);
-                    } else {
-                      setScannerFeedError(true);
-                    }
-                  }}
+                  onError={() => setScannerFeedError(true)}
                   onLoad={() => setScannerFeedError(false)}
                 />
                 {scannerFeedError && (
@@ -2045,7 +2065,7 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
               <div className="flex items-center justify-between border-b border-gray-800 pb-2">
                 <span className="text-xs font-bold text-gray-300 flex items-center space-x-1.5">
                   <Eye className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Outbound Tab Stream</span>
+                  <span>Live Screen (Tab A)</span>
                 </span>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-gray-800 text-gray-300">
                   Shared Tab A
@@ -2053,8 +2073,8 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
               </div>
               <div className="relative rounded-xl overflow-hidden border border-gray-800 bg-black aspect-video flex items-center justify-center shadow-inner">
                 <img
-                  src={outreachStreamError ? `/api/browser/live_feed?worker=outreach&t=${outreachTick}` : "/api/browser/stream/outreach"}
-                  alt="Visible Chrome Tab Stream"
+                  src={loadedTabASrc}
+                  alt="Live Screen Tab A"
                   className="w-full h-full object-contain"
                 />
               </div>

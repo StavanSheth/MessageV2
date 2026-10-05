@@ -775,21 +775,28 @@ async function handleCommand(msg) {
     const scannerTab = await getScannerTab();
     if (!scannerTab || !scannerTab.id) return { success: false, error: "No Scanner tab found" };
 
-    if (!scannerTab.url || !scannerTab.url.includes("/direct/")) {
+    if (!scannerTab.url || !scannerTab.url.includes("/direct/inbox/")) {
       await chrome.tabs.update(scannerTab.id, { url: "https://www.instagram.com/direct/inbox/" });
       await waitForTabLoaded(scannerTab.id, 12000);
-      await new Promise(r => setTimeout(r, 2500));
+      await new Promise(r => setTimeout(r, 2000));
     }
 
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: scannerTab.id },
       func: async () => {
-        const rows = Array.from(document.querySelectorAll('a[href*="/direct/t/"]'));
-        const threads = [];
+        // Wait up to 5 seconds for threads to appear in DOM after React hydration
+        let rows = [];
+        for (let attempt = 0; attempt < 10; attempt++) {
+          rows = Array.from(document.querySelectorAll('a[href*="/direct/t/"], div[role="listitem"] a[href*="/direct/t/"], div[role="row"] a[href*="/direct/t/"], div[role="button"][tabindex="0"]'));
+          if (rows.length > 0) break;
+          await new Promise(r => setTimeout(r, 500));
+        }
 
-        for (const row of rows.slice(0, 30)) {
+        const threads = [];
+        for (const row of rows.slice(0, 40)) {
           try {
-            const href = row.getAttribute('href') || '';
+            const anchor = row.tagName === 'A' ? row : (row.querySelector('a[href*="/direct/t/"]') || row);
+            const href = anchor.getAttribute('href') || row.getAttribute('href') || '';
             const fullText = row.innerText || '';
             const lines = fullText.split('\n').map(l => l.trim()).filter(Boolean);
             
@@ -824,7 +831,7 @@ async function handleCommand(msg) {
       const fullUrl = threadUrl.startsWith("http") ? threadUrl : `https://www.instagram.com${threadUrl}`;
       await chrome.tabs.update(scannerTab.id, { url: fullUrl });
       await waitForTabLoaded(scannerTab.id, 12000);
-      await new Promise(r => setTimeout(r, 2500));
+      await new Promise(r => setTimeout(r, 2000));
     }
 
     const [result] = await chrome.scripting.executeScript({
@@ -833,30 +840,104 @@ async function handleCommand(msg) {
         const composer = document.querySelector('div[contenteditable="true"][role="textbox"], textarea[placeholder*="Message"]');
         const chatPane = composer ? (composer.closest('div[role="main"]') || document.body) : document.body;
         
+        let bubbles = [];
+        for (let i = 0; i < 6; i++) {
+          bubbles = Array.from(chatPane.querySelectorAll('div[dir="auto"], span[dir="auto"]')).filter(el => {
+            if (composer && composer.contains(el)) return false;
+            if (el.closest('header') || el.closest('nav') || el.closest('[role="navigation"]')) return false;
+            const txt = el.innerText?.trim();
+            if (!txt || txt === "Message..." || txt === "View Profile" || txt === "Search" || txt === "Primary" || txt === "General" || txt === "Requests") return false;
+            if (txt.includes("followers") || txt.includes("posts") || txt.includes("You follow each other") || txt.includes("You don't follow each other") || txt.includes("Instagram") || txt.includes("Followed by")) return false;
+            return txt.length > 1;
+          });
+          if (bubbles.length > 0) break;
+          await new Promise(r => setTimeout(r, 400));
+        }
+
+        if (bubbles.length === 0) {
+          return { has_reply: false, inbound_messages: [], outbound_messages: [], all_messages: [] };
+        }
+
+        const allMessages = bubbles.map(b => {
+          const comp = window.getComputedStyle(b.parentElement || b);
+          const isRight = comp.justifyContent === 'flex-end' || comp.textAlign === 'right' || comp.alignSelf === 'flex-end' || b.closest('div[style*="justify-content: flex-end"]') !== null;
+          return {
+            text: b.innerText.trim(),
+            is_outbound: isRight,
+            is_inbound: !isRight
+          };
+        });
+
+        const inboundMessages = allMessages.filter(m => m.is_inbound).map(m => m.text);
+        const outboundMessages = allMessages.filter(m => m.is_outbound).map(m => m.text);
+        const lastBubble = bubbles[bubbles.length - 1];
+        const lastText = lastBubble.innerText.trim();
+
+        return {
+          has_reply: inboundMessages.length > 0,
+          text: inboundMessages.length > 0 ? inboundMessages[inboundMessages.length - 1] : lastText,
+          is_inbound: inboundMessages.length > 0,
+          inbound_messages: inboundMessages,
+          outbound_messages: outboundMessages,
+          all_messages: allMessages,
+          bubbles_count: bubbles.length
+        };
+      }
+    });
+
+    return { success: true, data: result?.result || {} };
+  }
+
+  if (action === "INSPECT_CONVERSATION") {
+    const targetTab = (payload?.worker === "scanner") ? (await getScannerTab()) : tab;
+    if (!targetTab || !targetTab.id) return { success: false, error: "No target tab found" };
+
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId: targetTab.id },
+      func: async () => {
+        // If not inside DM thread, attempt to click Message button
+        if (!window.location.href.includes("/direct/t/")) {
+          const buttons = Array.from(document.querySelectorAll('div[role="button"], button, a[role="button"]'));
+          const msgBtn = buttons.find(b => {
+            const t = (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase();
+            return t === "message" || t === "send message" || t.startsWith("message") || Boolean(b.querySelector('svg[aria-label="Direct"], svg[aria-label="Message"]'));
+          });
+          if (msgBtn) {
+            msgBtn.click();
+            await new Promise(r => setTimeout(r, 2000));
+          }
+        }
+
+        const composer = document.querySelector('div[contenteditable="true"][role="textbox"], textarea[placeholder*="Message"]');
+        const chatPane = composer ? (composer.closest('div[role="main"]') || document.body) : document.body;
+
         const bubbles = Array.from(chatPane.querySelectorAll('div[dir="auto"], span[dir="auto"]')).filter(el => {
           if (composer && composer.contains(el)) return false;
           if (el.closest('header') || el.closest('nav') || el.closest('[role="navigation"]')) return false;
           const txt = el.innerText?.trim();
-          if (!txt || txt === "Message..." || txt === "View Profile" || txt === "Search" || txt === "Primary" || txt === "General" || txt === "Requests") return false;
+          if (!txt || txt === "Message..." || txt === "View Profile" || txt === "View profile" || txt === "Search" || txt === "Primary" || txt === "General" || txt === "Requests") return false;
+          if (txt.includes("followers") || txt.includes("posts") || txt.includes("You follow each other") || txt.includes("You don't follow each other") || txt.includes("Instagram") || txt.includes("Followed by")) return false;
           return txt.length > 1;
         });
 
-        if (bubbles.length === 0) {
-          return { has_reply: false };
-        }
+        const allMessages = bubbles.map(b => {
+          const comp = window.getComputedStyle(b.parentElement || b);
+          const isRight = comp.justifyContent === 'flex-end' || comp.textAlign === 'right' || comp.alignSelf === 'flex-end' || b.closest('div[style*="justify-content: flex-end"]') !== null;
+          return {
+            text: b.innerText.trim(),
+            is_outbound: isRight,
+            is_inbound: !isRight
+          };
+        });
 
-        const lastBubble = bubbles[bubbles.length - 1];
-        const lastText = lastBubble.innerText.trim();
-
-        // Check if last bubble is inbound (not sent by us)
-        const computed = window.getComputedStyle(lastBubble.parentElement || lastBubble);
-        const isRightAligned = computed.justifyContent === 'flex-end' || computed.textAlign === 'right' || computed.alignSelf === 'flex-end';
+        const inboundMessages = allMessages.filter(m => m.is_inbound).map(m => m.text);
+        const outboundMessages = allMessages.filter(m => m.is_outbound).map(m => m.text);
 
         return {
-          has_reply: true,
-          text: lastText,
-          is_inbound: !isRightAligned,
-          bubbles_count: bubbles.length
+          has_messages: allMessages.length > 0,
+          inbound_messages: inboundMessages,
+          outbound_messages: outboundMessages,
+          all_messages: allMessages
         };
       }
     });

@@ -263,8 +263,97 @@ class ReplyScannerWorker:
                                     pt.updated_at = now
 
                                 logger.info(f"[ReplyScanner] Human reply detected from {matched_contact.name}: {inbound_text[:80]}")
+
+                            # Check for external messages sent from our end
+                            outbound_msgs = inspect_res.get("data", {}).get("outbound_messages", [])
+                            if outbound_msgs:
+                                expected_copies = [
+                                    (matched_contact.message or "").strip().lower(),
+                                    (matched_contact.custom_message or "").strip().lower(),
+                                    (matched_contact.followup_1_message or "").strip().lower(),
+                                    (matched_contact.followup_2_message or "").strip().lower(),
+                                    "hey! just following up on my previous message",
+                                    "hey! one final quick check-in"
+                                ]
+                                def is_expected_system_msg(m_text: str) -> bool:
+                                    clean = m_text.strip().lower()
+                                    if not clean or len(clean) < 3:
+                                        return True
+                                    return any(exp in clean or clean in exp or clean[:25] in exp for exp in expected_copies if exp)
+
+                                ext_outbounds = [m for m in outbound_msgs if not is_expected_system_msg(m)]
+                                if ext_outbounds:
+                                    ext_snip = ext_outbounds[-1]
+                                    logger.warning(f"[ReplyScanner] External outbound message detected for {matched_contact.name}: '{ext_snip}'")
+                                    matched_contact.notes = ((matched_contact.notes or "") + f" [External message: {ext_snip[:50]}]").strip()
+                                    fu_stmt = select(Task).where(
+                                        and_(
+                                            Task.contact_id == matched_contact.id,
+                                            Task.status.in_([TaskStatus.READY.value, TaskStatus.QUEUED.value])
+                                        )
+                                    )
+                                    pending_tasks = (await session.execute(fu_stmt)).scalars().all()
+                                    for pt in pending_tasks:
+                                        pt.status = TaskStatus.MANUAL_REVIEW.value
+                                        pt.manual_review_reason = f"[EXTERNAL_MESSAGE_DETECTED] External message sent from our end not in system sequence: '{ext_snip[:70]}...'. Verify in Queue."
+                                        pt.updated_at = now
                         else:
-                            # No reply yet
+                            # Thread snippet indicates no inbound reply, but check if there are pending follow-ups today
+                            # Inspect conversation to ensure no external manual message or unread inbound message was missed
+                            fu_check_stmt = select(Task).where(
+                                and_(
+                                    Task.contact_id == matched_contact.id,
+                                    Task.status.in_([TaskStatus.READY.value, TaskStatus.QUEUED.value]),
+                                    Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"])
+                                )
+                            )
+                            pending_fus = (await session.execute(fu_check_stmt)).scalars().all()
+                            if pending_fus and thread_href:
+                                try:
+                                    inspect_res = await extension_bridge.inspect_thread_reply(thread_href)
+                                    if inspect_res.get("success") and inspect_res.get("data"):
+                                        idata = inspect_res["data"]
+                                        inbound_list = idata.get("inbound_messages", [])
+                                        outbound_list = idata.get("outbound_messages", [])
+                                        if inbound_list:
+                                            # Actually has inbound message
+                                            inbound_msg = inbound_list[-1]
+                                            matched_contact.replied_status = "YES"
+                                            matched_contact.auto_reply_message = inbound_msg
+                                            matched_contact.reply_detected_at = now
+                                            for pt in pending_fus:
+                                                pt.status = TaskStatus.MANUAL_REVIEW.value
+                                                pt.manual_review_reason = f"[REPLY_RECEIVED] Inbound message detected: '{inbound_msg[:70]}...'. Review required."
+                                                pt.updated_at = now
+                                            human_count += 1
+                                        elif outbound_list:
+                                            # Check external outbound messages
+                                            expected_copies = [
+                                                (matched_contact.message or "").strip().lower(),
+                                                (matched_contact.custom_message or "").strip().lower(),
+                                                (matched_contact.followup_1_message or "").strip().lower(),
+                                                (matched_contact.followup_2_message or "").strip().lower(),
+                                                "hey! just following up on my previous message",
+                                                "hey! one final quick check-in"
+                                            ]
+                                            def is_exp(m_text: str) -> bool:
+                                                clean = m_text.strip().lower()
+                                                if not clean or len(clean) < 3:
+                                                    return True
+                                                return any(exp in clean or clean in exp or clean[:25] in exp for exp in expected_copies if exp)
+
+                                            ext_out = [m for m in outbound_list if not is_exp(m)]
+                                            if ext_out:
+                                                ext_snip = ext_out[-1]
+                                                matched_contact.notes = ((matched_contact.notes or "") + f" [External message: {ext_snip[:50]}]").strip()
+                                                for pt in pending_fus:
+                                                    pt.status = TaskStatus.MANUAL_REVIEW.value
+                                                    pt.manual_review_reason = f"[EXTERNAL_MESSAGE_DETECTED] External message sent from our end not in system sequence: '{ext_snip[:70]}...'. Verify in Queue."
+                                                    pt.updated_at = now
+                                except Exception as err:
+                                    logger.warning(f"[ReplyScanner] Secondary thread check failed for {matched_contact.name}: {err}")
+
+                            # No reply confirmed
                             no_reply += 1
                             if matched_contact.replied_status == "UNKNOWN":
                                 matched_contact.replied_status = "NO_REPLY"

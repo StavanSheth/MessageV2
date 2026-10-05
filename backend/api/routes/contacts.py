@@ -29,7 +29,18 @@ class BulkTemplateRequest(BaseModel):
     default_message: Optional[str] = None
     followup_1_message: Optional[str] = None
     followup_2_message: Optional[str] = None
+    followup_1_delay_days: Optional[int] = None
+    followup_2_delay_days: Optional[int] = None
     apply_to_all: bool = False
+    reschedule_existing: bool = False
+
+class FollowupScheduleRequest(BaseModel):
+    followup_1_scheduled_at: Optional[str] = None
+    followup_1_status: Optional[str] = None
+    followup_1_delay_days: Optional[int] = None
+    followup_2_scheduled_at: Optional[str] = None
+    followup_2_status: Optional[str] = None
+    followup_2_delay_days: Optional[int] = None
 
 @router.get("")
 async def list_contacts(limit: int = 1000, offset: int = 0, db: AsyncSession = Depends(get_db)):
@@ -90,10 +101,18 @@ async def list_contacts(limit: int = 1000, offset: int = 0, db: AsyncSession = D
             "custom_message": c.message,
             "followup_1_message": c.followup_1_message or "Hey! Just wanted to follow up on my previous message.",
             "followup_2_message": c.followup_2_message or "Hey! One last quick check-in before I close this thread.",
+            "followup_1_delay_days": c.followup_1_delay_days or 3,
+            "followup_2_delay_days": c.followup_2_delay_days or 5,
             "expected_followers": c.expected_followers,
             "verification_status": "VERIFIED" if (task_msg and task_msg.status == "COMPLETED") else "PENDING",
             "has_replied": c.replied_status == "YES",
             "replied_status": c.replied_status,
+            "auto_reply_message": c.auto_reply_message,
+            "extracted_phone": c.extracted_phone,
+            "extracted_email": c.extracted_email,
+            "extracted_link": c.extracted_link,
+            "last_checked_reply_at": format_datetime_readable(c.last_checked_reply_at),
+            "reply_detected_at": format_datetime_readable(c.reply_detected_at),
             "notes": c.notes,
             # 1st Message tracking
             "first_message_status": m1_status,
@@ -118,23 +137,72 @@ async def get_message_templates():
     return {
         "default_message": settings.DEFAULT_MESSAGE,
         "followup_1_message": "Hey! Just following up on my previous message — would love to connect!",
-        "followup_2_message": "Hey! One final quick check-in — let me know if you'd like more details."
+        "followup_2_message": "Hey! One final quick check-in — let me know if you'd like more details.",
+        "followup_1_delay_days": 3,
+        "followup_2_delay_days": 5
     }
 
 @router.post("/templates/apply")
 async def apply_bulk_templates(req: BulkTemplateRequest, db: AsyncSession = Depends(get_db)):
-    """Apply updated outreach message templates across contacts."""
+    """Apply updated outreach message templates and follow-up intervals across contacts."""
     repo = ContactRepository(db)
-    updated_count = await repo.update_bulk_templates(
+    res = await repo.update_bulk_templates(
         default_message=req.default_message,
         followup_1_message=req.followup_1_message,
         followup_2_message=req.followup_2_message,
-        apply_to_all=req.apply_to_all
+        followup_1_delay_days=req.followup_1_delay_days,
+        followup_2_delay_days=req.followup_2_delay_days,
+        apply_to_all=req.apply_to_all,
+        reschedule_existing=req.reschedule_existing
     )
     return {
         "status": "success",
-        "updated_contacts_count": updated_count,
-        "message": f"Successfully updated outreach message templates for {updated_count} contacts"
+        "updated_contacts_count": res["updated_contacts_count"],
+        "rescheduled_tasks_count": res["rescheduled_tasks_count"],
+        "message": f"Updated {res['updated_contacts_count']} contacts and rescheduled {res['rescheduled_tasks_count']} pending follow-ups."
+    }
+
+@router.put("/{contact_id}/followup_schedule")
+async def update_contact_followup_schedule(contact_id: str, req: FollowupScheduleRequest, db: AsyncSession = Depends(get_db)):
+    """Customize follow-up schedule (dates, status, and interval delays) for an individual contact."""
+    from dateutil import parser as dt_parser
+    repo = ContactRepository(db)
+
+    fu1_dt = None
+    if req.followup_1_scheduled_at:
+        try:
+            fu1_dt = dt_parser.parse(req.followup_1_scheduled_at)
+            if fu1_dt.tzinfo is None:
+                fu1_dt = fu1_dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "Invalid date format for followup_1_scheduled_at")
+
+    fu2_dt = None
+    if req.followup_2_scheduled_at:
+        try:
+            fu2_dt = dt_parser.parse(req.followup_2_scheduled_at)
+            if fu2_dt.tzinfo is None:
+                fu2_dt = fu2_dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "Invalid date format for followup_2_scheduled_at")
+
+    contact = await repo.update_followup_schedule(
+        contact_id=contact_id,
+        followup_1_scheduled_at=fu1_dt,
+        followup_1_status=req.followup_1_status,
+        followup_1_delay_days=req.followup_1_delay_days,
+        followup_2_scheduled_at=fu2_dt,
+        followup_2_status=req.followup_2_status,
+        followup_2_delay_days=req.followup_2_delay_days
+    )
+    if not contact:
+        raise HTTPException(404, "Contact not found")
+
+    return {
+        "status": "success",
+        "contact_id": contact_id,
+        "followup_1_delay_days": contact.followup_1_delay_days,
+        "followup_2_delay_days": contact.followup_2_delay_days
     }
 
 @router.put("/{contact_id}/messages")

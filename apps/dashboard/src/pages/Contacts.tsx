@@ -12,12 +12,32 @@ import {
   fetchMessageTemplates, 
   applyBulkTemplates,
   deleteContact,
-  triggerReplyScan
+  triggerReplyScan,
+  updateFollowupSchedule
 } from '../services/api';
 
 interface ContactsProps {
   contacts: Contact[];
   onRefresh: () => void;
+}
+
+function toDatetimeLocalValue(dateStr?: string | null): string {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr);
+    if (!isNaN(d.getTime())) {
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      const year = d.getFullYear();
+      const month = pad(d.getMonth() + 1);
+      const day = pad(d.getDate());
+      const hours = pad(d.getHours());
+      const minutes = pad(d.getMinutes());
+      return `${year}-${month}-${day}T${hours}:${minutes}`;
+    }
+    return '';
+  } catch {
+    return '';
+  }
 }
 
 function formatDisplayDate(dateStr?: string | null): string {
@@ -60,7 +80,13 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
   const [editForm, setEditForm] = useState({
     message: '',
     followup_1_message: '',
+    followup_1_delay_days: 3,
+    followup_1_scheduled_at: '',
+    followup_1_status: 'SCHEDULED',
     followup_2_message: '',
+    followup_2_delay_days: 5,
+    followup_2_scheduled_at: '',
+    followup_2_status: 'SCHEDULED',
   });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editSuccessMsg, setEditSuccessMsg] = useState('');
@@ -70,8 +96,11 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
   const [templateForm, setTemplateForm] = useState({
     default_message: '',
     followup_1_message: '',
+    followup_1_delay_days: 3,
     followup_2_message: '',
+    followup_2_delay_days: 5,
     apply_to_all: true,
+    reschedule_existing: false,
   });
   const [isSavingTemplates, setIsSavingTemplates] = useState(false);
   const [templateSuccessMsg, setTemplateSuccessMsg] = useState('');
@@ -85,8 +114,11 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
       setTemplateForm({
         default_message: t.default_message || 'Hey! Saw your profile and loved your content. Wanted to connect!',
         followup_1_message: t.followup_1_message || 'Hey! Just following up on my previous message — would love to connect!',
+        followup_1_delay_days: t.followup_1_delay_days ?? 3,
         followup_2_message: t.followup_2_message || "Hey! One final quick check-in — let me know if you'd like more details.",
+        followup_2_delay_days: t.followup_2_delay_days ?? 5,
         apply_to_all: true,
+        reschedule_existing: false,
       });
     } catch (e) {
       console.error('Failed to fetch templates', e);
@@ -98,13 +130,13 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
     setIsSavingTemplates(true);
     setTemplateSuccessMsg('');
     try {
-      await applyBulkTemplates(templateForm);
-      setTemplateSuccessMsg('Templates applied successfully!');
+      const res = await applyBulkTemplates(templateForm);
+      setTemplateSuccessMsg(res.message || 'Templates and follow-up schedules updated successfully!');
       onRefresh();
       setTimeout(() => {
         setIsTemplateModalOpen(false);
         setTemplateSuccessMsg('');
-      }, 1200);
+      }, 1500);
     } catch (err: any) {
       alert(`Error applying templates: ${err.message}`);
     } finally {
@@ -117,7 +149,13 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
     setEditForm({
       message: c.message || c.custom_message || 'Hey! Saw your profile and loved your work.',
       followup_1_message: c.followup_1_message || 'Hey! Just following up on my previous message.',
+      followup_1_delay_days: c.followup_1_delay_days ?? 3,
+      followup_1_scheduled_at: toDatetimeLocalValue(c.followup_1_scheduled_at),
+      followup_1_status: c.followup_1_status || 'SCHEDULED',
       followup_2_message: c.followup_2_message || 'Hey! One last quick check-in before I close this thread.',
+      followup_2_delay_days: c.followup_2_delay_days ?? 5,
+      followup_2_scheduled_at: toDatetimeLocalValue(c.followup_2_scheduled_at),
+      followup_2_status: c.followup_2_status || 'SCHEDULED',
     });
     setEditSuccessMsg('');
   };
@@ -128,15 +166,29 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
     setIsSavingEdit(true);
     setEditSuccessMsg('');
     try {
-      await updateContactMessages(editingContact.id, editForm);
-      setEditSuccessMsg('Messages updated successfully!');
+      await updateContactMessages(editingContact.id, {
+        message: editForm.message,
+        followup_1_message: editForm.followup_1_message,
+        followup_2_message: editForm.followup_2_message,
+      });
+
+      await updateFollowupSchedule(editingContact.id, {
+        followup_1_scheduled_at: editForm.followup_1_scheduled_at ? new Date(editForm.followup_1_scheduled_at).toISOString() : null,
+        followup_1_status: editForm.followup_1_status,
+        followup_1_delay_days: Number(editForm.followup_1_delay_days) || 3,
+        followup_2_scheduled_at: editForm.followup_2_scheduled_at ? new Date(editForm.followup_2_scheduled_at).toISOString() : null,
+        followup_2_status: editForm.followup_2_status,
+        followup_2_delay_days: Number(editForm.followup_2_delay_days) || 5,
+      });
+
+      setEditSuccessMsg('Sequence and schedule updated successfully!');
       onRefresh();
       setTimeout(() => {
         setEditingContact(null);
         setEditSuccessMsg('');
       }, 1000);
     } catch (err: any) {
-      alert(`Error updating messages: ${err.message}`);
+      alert(`Error updating sequence: ${err.message}`);
     } finally {
       setIsSavingEdit(false);
     }
@@ -939,13 +991,13 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
               </div>
 
               {/* Follow-Up 1 - Indigo Theme */}
-              <div className="bg-indigo-950/15 border border-indigo-500/25 p-3.5 rounded-xl space-y-1.5">
+              <div className="bg-indigo-950/15 border border-indigo-500/25 p-3.5 rounded-xl space-y-2">
                 <label className="block text-indigo-300 font-bold flex items-center justify-between">
                   <span className="flex items-center space-x-1.5">
                     <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>2. Follow-Up 1 (+3 Days)</span>
+                    <span>2. Follow-Up 1</span>
                   </span>
-                  <span className="text-gray-500 font-normal">Dispatches if no reply after 3 days</span>
+                  <span className="text-gray-500 font-normal">Default delay: {editForm.followup_1_delay_days} days after initial outreach</span>
                 </label>
                 <textarea
                   rows={2}
@@ -954,16 +1006,53 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                   placeholder="Enter Follow-Up 1 message..."
                   className="w-full bg-gray-950 border border-gray-800 rounded-xl p-3 text-white focus:outline-none focus:border-indigo-500 resize-none font-sans"
                 />
+                
+                {/* Follow-Up 1 Schedule & Controls */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 border-t border-indigo-500/20">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-400 mb-1">Delay (Days)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={90}
+                      value={editForm.followup_1_delay_days}
+                      onChange={(e) => setEditForm({ ...editForm, followup_1_delay_days: parseInt(e.target.value, 10) || 3 })}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-400 mb-1">Custom Scheduled Date/Time</label>
+                    <input
+                      type="datetime-local"
+                      value={editForm.followup_1_scheduled_at}
+                      onChange={(e) => setEditForm({ ...editForm, followup_1_scheduled_at: e.target.value })}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2 py-1.5 text-white focus:outline-none focus:border-indigo-500 text-[11px]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-400 mb-1">Task Status</label>
+                    <select
+                      value={editForm.followup_1_status}
+                      onChange={(e) => setEditForm({ ...editForm, followup_1_status: e.target.value })}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2 py-1.5 text-white focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="SCHEDULED">Scheduled / Ready</option>
+                      <option value="PAUSED">Paused</option>
+                      <option value="CANCELLED">Cancelled</option>
+                      <option value="COMPLETED">Completed</option>
+                    </select>
+                  </div>
+                </div>
               </div>
 
               {/* Follow-Up 2 - Purple Theme */}
-              <div className="bg-purple-950/15 border border-purple-500/25 p-3.5 rounded-xl space-y-1.5">
+              <div className="bg-purple-950/15 border border-purple-500/25 p-3.5 rounded-xl space-y-2">
                 <label className="block text-purple-300 font-bold flex items-center justify-between">
                   <span className="flex items-center space-x-1.5">
                     <Calendar className="w-3.5 h-3.5 text-purple-400" />
-                    <span>3. Follow-Up 2 (+5 Days)</span>
+                    <span>3. Follow-Up 2</span>
                   </span>
-                  <span className="text-gray-500 font-normal">Dispatches if still no reply after 5 days</span>
+                  <span className="text-gray-500 font-normal">Default delay: {editForm.followup_2_delay_days} days after Follow-Up 1</span>
                 </label>
                 <textarea
                   rows={2}
@@ -972,6 +1061,43 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                   placeholder="Enter Follow-Up 2 message..."
                   className="w-full bg-gray-950 border border-gray-800 rounded-xl p-3 text-white focus:outline-none focus:border-purple-500 resize-none font-sans"
                 />
+
+                {/* Follow-Up 2 Schedule & Controls */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 border-t border-purple-500/20">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-400 mb-1">Delay (Days)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={90}
+                      value={editForm.followup_2_delay_days}
+                      onChange={(e) => setEditForm({ ...editForm, followup_2_delay_days: parseInt(e.target.value, 10) || 5 })}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-400 mb-1">Custom Scheduled Date/Time</label>
+                    <input
+                      type="datetime-local"
+                      value={editForm.followup_2_scheduled_at}
+                      onChange={(e) => setEditForm({ ...editForm, followup_2_scheduled_at: e.target.value })}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2 py-1.5 text-white focus:outline-none focus:border-purple-500 text-[11px]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-400 mb-1">Task Status</label>
+                    <select
+                      value={editForm.followup_2_status}
+                      onChange={(e) => setEditForm({ ...editForm, followup_2_status: e.target.value })}
+                      className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2 py-1.5 text-white focus:outline-none focus:border-purple-500"
+                    >
+                      <option value="SCHEDULED">Scheduled / Ready</option>
+                      <option value="PAUSED">Paused</option>
+                      <option value="CANCELLED">Cancelled</option>
+                      <option value="COMPLETED">Completed</option>
+                    </select>
+                  </div>
+                </div>
               </div>
 
               <div className="flex items-center justify-end space-x-3 pt-3 border-t border-gray-800">
@@ -988,7 +1114,7 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                   className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-xl text-xs font-bold transition shadow-lg shadow-indigo-600/30 cursor-pointer disabled:opacity-50"
                 >
                   <Save className="w-3.5 h-3.5" />
-                  <span>{isSavingEdit ? 'Saving...' : 'Save Sequence'}</span>
+                  <span>{isSavingEdit ? 'Saving...' : 'Save Sequence & Schedule'}</span>
                 </button>
               </div>
             </form>
@@ -1004,10 +1130,10 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
               <div>
                 <h3 className="text-lg font-bold text-white flex items-center space-x-2">
                   <Sliders className="w-5 h-5 text-indigo-400" />
-                  <span>Outreach Sequence Templates</span>
+                  <span>Outreach Sequence Templates & Timing</span>
                 </h3>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  Configure default outreach copy for initial messages and automated follow-ups.
+                  Configure default outreach copy and automated follow-up intervals for all contacts.
                 </p>
               </div>
               <button
@@ -1039,11 +1165,25 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                 />
               </div>
 
-              <div className="bg-indigo-950/15 border border-indigo-500/25 p-3.5 rounded-xl space-y-1.5">
-                <label className="block text-indigo-300 font-bold flex items-center space-x-1.5">
-                  <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Follow-Up 1 Default Message (+3 Days)</span>
-                </label>
+              <div className="bg-indigo-950/15 border border-indigo-500/25 p-3.5 rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-indigo-300 font-bold flex items-center space-x-1.5">
+                    <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Follow-Up 1 Default Message</span>
+                  </label>
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-gray-400 text-[11px]">Interval:</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={90}
+                      value={templateForm.followup_1_delay_days}
+                      onChange={(e) => setTemplateForm({ ...templateForm, followup_1_delay_days: parseInt(e.target.value, 10) || 3 })}
+                      className="w-16 bg-gray-950 border border-gray-800 rounded px-2 py-0.5 text-white font-mono text-center focus:outline-none focus:border-indigo-500"
+                    />
+                    <span className="text-gray-400 text-[11px]">days</span>
+                  </div>
+                </div>
                 <textarea
                   rows={2}
                   value={templateForm.followup_1_message}
@@ -1052,11 +1192,25 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                 />
               </div>
 
-              <div className="bg-purple-950/15 border border-purple-500/25 p-3.5 rounded-xl space-y-1.5">
-                <label className="block text-purple-300 font-bold flex items-center space-x-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-purple-400" />
-                  <span>Follow-Up 2 Default Message (+5 Days)</span>
-                </label>
+              <div className="bg-purple-950/15 border border-purple-500/25 p-3.5 rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-purple-300 font-bold flex items-center space-x-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Follow-Up 2 Default Message</span>
+                  </label>
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-gray-400 text-[11px]">Interval:</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={90}
+                      value={templateForm.followup_2_delay_days}
+                      onChange={(e) => setTemplateForm({ ...templateForm, followup_2_delay_days: parseInt(e.target.value, 10) || 5 })}
+                      className="w-16 bg-gray-950 border border-gray-800 rounded px-2 py-0.5 text-white font-mono text-center focus:outline-none focus:border-purple-500"
+                    />
+                    <span className="text-gray-400 text-[11px]">days</span>
+                  </div>
+                </div>
                 <textarea
                   rows={2}
                   value={templateForm.followup_2_message}
@@ -1065,17 +1219,33 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, onRefresh }) => {
                 />
               </div>
 
-              <div className="p-3.5 rounded-xl bg-gray-950/90 border border-gray-800 flex items-center space-x-3">
-                <input
-                  type="checkbox"
-                  id="apply_to_all"
-                  checked={templateForm.apply_to_all}
-                  onChange={(e) => setTemplateForm({ ...templateForm, apply_to_all: e.target.checked })}
-                  className="w-4 h-4 rounded text-indigo-600 bg-gray-900 border-gray-700 focus:ring-0 cursor-pointer"
-                />
-                <label htmlFor="apply_to_all" className="text-gray-300 font-semibold cursor-pointer">
-                  Apply to all contacts in database (overwrites custom templates)
-                </label>
+              {/* Options */}
+              <div className="space-y-2.5 p-3.5 rounded-xl bg-gray-950/90 border border-gray-800">
+                <div className="flex items-center space-x-3">
+                  <input
+                    type="checkbox"
+                    id="apply_to_all"
+                    checked={templateForm.apply_to_all}
+                    onChange={(e) => setTemplateForm({ ...templateForm, apply_to_all: e.target.checked })}
+                    className="w-4 h-4 rounded text-indigo-600 bg-gray-900 border-gray-700 focus:ring-0 cursor-pointer"
+                  />
+                  <label htmlFor="apply_to_all" className="text-gray-300 font-semibold cursor-pointer">
+                    Apply template text & delay intervals across all contacts
+                  </label>
+                </div>
+
+                <div className="flex items-center space-x-3 pt-2 border-t border-gray-800/80">
+                  <input
+                    type="checkbox"
+                    id="reschedule_existing"
+                    checked={templateForm.reschedule_existing}
+                    onChange={(e) => setTemplateForm({ ...templateForm, reschedule_existing: e.target.checked })}
+                    className="w-4 h-4 rounded text-indigo-600 bg-gray-900 border-gray-700 focus:ring-0 cursor-pointer"
+                  />
+                  <label htmlFor="reschedule_existing" className="text-indigo-300 font-semibold cursor-pointer">
+                    Recalculate & reschedule all pending/queued follow-up tasks using new intervals
+                  </label>
+                </div>
               </div>
 
               <div className="flex items-center justify-end space-x-3 pt-3 border-t border-gray-800">

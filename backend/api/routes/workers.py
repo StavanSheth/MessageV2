@@ -45,8 +45,17 @@ async def get_screenshot(filename: str):
     return {"error": "Screenshot not found"}
 
 @router.get("/api/browser/stream")
-async def browser_stream():
-    """MJPEG continuous live video stream directly from the isolated Instagram tab."""
+@router.get("/api/browser/stream/outreach")
+async def browser_stream_outreach(worker: str = "outreach"):
+    """MJPEG continuous live video stream for Worker 1 (Outreach Dispatcher Tab)."""
+    return await _stream_worker(worker="outreach")
+
+@router.get("/api/browser/stream/replies")
+async def browser_stream_replies():
+    """MJPEG continuous live video stream for Worker 2 (Reply Scanner Tab)."""
+    return await _stream_worker(worker="scanner")
+
+async def _stream_worker(worker: str = "outreach"):
     from backend.automation.extension_bridge import extension_bridge
     import asyncio
 
@@ -59,12 +68,12 @@ async def browser_stream():
     async def frame_generator():
         last_sent = None
         while True:
-            # 1. First priority: live frame from extension screencast
-            frame = await extension_bridge.wait_for_next_frame(timeout=0.6)
+            # 1. First priority: live frame from extension screencast for this worker
+            frame = await extension_bridge.wait_for_next_frame(worker=worker, timeout=0.6)
             if not frame:
-                # 2. Secondary priority: active capture screenshot
-                frame = await extension_bridge.capture_screenshot()
-            if not frame:
+                # 2. Secondary priority: active capture screenshot for this worker tab
+                frame = await extension_bridge.capture_screenshot(worker=worker)
+            if not frame and worker == "outreach":
                 # 3. Third priority: Playwright/CDP screenshot if available
                 bw = instagram_worker.browser_worker
                 target_url = instagram_worker.current_instagram if instagram_worker.status.value == "RUNNING" else None
@@ -99,10 +108,10 @@ async def browser_stream():
     )
 
 @router.get("/api/browser/live_feed")
-async def get_browser_live_feed():
+async def get_browser_live_feed(worker: str = "outreach"):
     from backend.automation.extension_bridge import extension_bridge
     if extension_bridge.is_connected:
-        ext_bytes = await extension_bridge.capture_screenshot()
+        ext_bytes = await extension_bridge.capture_screenshot(worker=worker)
         if ext_bytes:
             return Response(
                 content=ext_bytes,
@@ -110,17 +119,22 @@ async def get_browser_live_feed():
                 headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
             )
 
-    bw = instagram_worker.browser_worker
-    target_url = instagram_worker.current_instagram if instagram_worker.status.value == "RUNNING" else None
-    img_bytes = await bw.capture_live_screenshot(target_url=target_url)
-    if img_bytes:
-        return Response(
-            content=img_bytes,
-            media_type="image/jpeg",
-            headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
-        )
+    if worker == "outreach":
+        bw = instagram_worker.browser_worker
+        target_url = instagram_worker.current_instagram if instagram_worker.status.value == "RUNNING" else None
+        img_bytes = await bw.capture_live_screenshot(target_url=target_url)
+        if img_bytes:
+            return Response(
+                content=img_bytes,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+            )
     # If no live page, return latest file from screenshots dir if available
-    screenshots = sorted(list(SCREENSHOTS_DIR.glob("*.jpg")) + list(SCREENSHOTS_DIR.glob("*.png")), key=os.path.getmtime, reverse=True)
+    target_pattern = f"*{worker}*.jpg" if worker in ("scanner", "outreach") else "*.jpg"
+    matched_shots = list(SCREENSHOTS_DIR.glob(target_pattern))
+    if not matched_shots:
+        matched_shots = list(SCREENSHOTS_DIR.glob("*.jpg")) + list(SCREENSHOTS_DIR.glob("*.png"))
+    screenshots = sorted(matched_shots, key=os.path.getmtime, reverse=True)
     if screenshots:
         ext = screenshots[0].suffix.lower()
         media_type = "image/jpeg" if ext in [".jpg", ".jpeg"] else "image/png"

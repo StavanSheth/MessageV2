@@ -19,8 +19,14 @@ class ExtensionBridgeManager:
         self._pending_requests: Dict[str, asyncio.Future] = {}
         self._latest_screenshot_data: Optional[bytes] = None
         self._latest_screenshot_time: float = 0.0
+        self._latest_outreach_data: Optional[bytes] = None
+        self._latest_outreach_time: float = 0.0
+        self._latest_scanner_data: Optional[bytes] = None
+        self._latest_scanner_time: float = 0.0
         self._capture_lock: asyncio.Lock = asyncio.Lock()
         self._frame_event: asyncio.Event = asyncio.Event()
+        self._outreach_frame_event: asyncio.Event = asyncio.Event()
+        self._scanner_frame_event: asyncio.Event = asyncio.Event()
 
     @property
     def is_connected(self) -> bool:
@@ -36,9 +42,20 @@ class ExtensionBridgeManager:
                 try:
                     data = json.loads(text)
                     if data.get("type") == "LIVE_FRAME" and data.get("data"):
+                        worker_tag = data.get("worker", "outreach")
                         raw_bytes = base64.b64decode(data["data"])
+                        now = time.time()
+                        if worker_tag == "scanner":
+                            self._latest_scanner_data = raw_bytes
+                            self._latest_scanner_time = now
+                            self._scanner_frame_event.set()
+                        else:
+                            self._latest_outreach_data = raw_bytes
+                            self._latest_outreach_time = now
+                            self._outreach_frame_event.set()
+
                         self._latest_screenshot_data = raw_bytes
-                        self._latest_screenshot_time = time.time()
+                        self._latest_screenshot_time = now
                         self._frame_event.set()
                         continue
 
@@ -58,13 +75,15 @@ class ExtensionBridgeManager:
                     future.set_exception(ConnectionError("Extension disconnected"))
             self._pending_requests.clear()
 
-    async def wait_for_next_frame(self, timeout: float = 1.0) -> Optional[bytes]:
-        self._frame_event.clear()
+    async def wait_for_next_frame(self, worker: str = "outreach", timeout: float = 0.6) -> Optional[bytes]:
+        evt = self._scanner_frame_event if worker in ("scanner", "replies") else self._outreach_frame_event
+        data = self._latest_scanner_data if worker in ("scanner", "replies") else self._latest_outreach_data
+        evt.clear()
         try:
-            await asyncio.wait_for(self._frame_event.wait(), timeout=timeout)
-            return self._latest_screenshot_data
+            await asyncio.wait_for(evt.wait(), timeout=timeout)
+            return self._latest_scanner_data if worker in ("scanner", "replies") else self._latest_outreach_data
         except asyncio.TimeoutError:
-            return self._latest_screenshot_data
+            return data or self._latest_screenshot_data
 
     async def start_screencast(self) -> Dict[str, Any]:
         if not self.is_connected:
@@ -140,22 +159,27 @@ class ExtensionBridgeManager:
             return {"success": False, "error": "Extension not connected"}
         return await self.send_command("RELOAD_EXTENSION", timeout=3.0)
 
-    async def capture_screenshot(self) -> Optional[bytes]:
-        if not self.is_connected:
-            return self._latest_screenshot_data
-
+    async def capture_screenshot(self, worker: str = "outreach") -> Optional[bytes]:
+        is_scanner = worker in ("scanner", "replies")
+        cached_data = self._latest_scanner_data if is_scanner else self._latest_outreach_data
+        cached_time = self._latest_scanner_time if is_scanner else self._latest_outreach_time
         now = time.time()
         # Fast return cached frame if fresh (< 0.8s)
-        if self._latest_screenshot_data and (now - self._latest_screenshot_time < 0.8):
-            return self._latest_screenshot_data
+        if cached_data and (now - cached_time < 0.8):
+            return cached_data
+
+        if not self.is_connected:
+            return cached_data or self._latest_screenshot_data
 
         async with self._capture_lock:
-            # Re-check after acquiring lock in case another task just refreshed it
-            if self._latest_screenshot_data and (time.time() - self._latest_screenshot_time < 0.8):
-                return self._latest_screenshot_data
+            cached_data = self._latest_scanner_data if is_scanner else self._latest_outreach_data
+            cached_time = self._latest_scanner_time if is_scanner else self._latest_outreach_time
+            if cached_data and (time.time() - cached_time < 0.8):
+                return cached_data
 
             try:
-                res = await self.send_command("CAPTURE_SCREENSHOT", timeout=3.0)
+                target_tag = "scanner" if is_scanner else "outreach"
+                res = await self.send_command("CAPTURE_SCREENSHOT", payload={"worker": target_tag}, timeout=3.0)
                 if not res.get("success"):
                     logger.warning(f"[ExtensionBridge] CAPTURE_SCREENSHOT failed: {res.get('error')}")
                 elif res.get("dataUrl"):
@@ -163,17 +187,23 @@ class ExtensionBridgeManager:
                     if "," in data_url:
                         b64_data = data_url.split(",", 1)[1]
                         raw_bytes = base64.b64decode(b64_data)
+                        if is_scanner:
+                            self._latest_scanner_data = raw_bytes
+                            self._latest_scanner_time = time.time()
+                        else:
+                            self._latest_outreach_data = raw_bytes
+                            self._latest_outreach_time = time.time()
                         self._latest_screenshot_data = raw_bytes
                         self._latest_screenshot_time = time.time()
                         try:
-                            latest_path = SCREENSHOTS_DIR / "latest_live.jpg"
-                            latest_path.write_bytes(raw_bytes)
+                            filename = f"latest_{target_tag}.jpg"
+                            (SCREENSHOTS_DIR / filename).write_bytes(raw_bytes)
                         except Exception:
                             pass
                         return raw_bytes
             except Exception as e:
                 logger.warning(f"[ExtensionBridge] Screenshot capture exception: {e}")
-        return self._latest_screenshot_data
+        return cached_data or self._latest_screenshot_data
 
     async def prepare_and_send(self, message: str, check_history: bool = True, task_type: str = "MESSAGE") -> Tuple[bool, ResultCode, str, bool, bool]:
         """Returns (success, code, reason, already_messaged, dm_restricted)"""

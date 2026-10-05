@@ -92,27 +92,18 @@ function waitForTabLoaded(tabId, timeoutMs = 15000) {
   });
 }
 
-// Dedicated automation tab isolation
-let automationTabId = null;
-let isScreencasting = false;
-let currentScreencastTabId = null;
+// Dedicated automation tabs isolation for Worker 1 & Worker 2
+let outreachTabId = null;
+let scannerTabId = null;
+let attachedDebuggerTabs = new Set();
 
-async function ensureScreencast(tabId) {
+async function ensureScreencastForTab(tabId, workerTag = "outreach") {
   if (!chrome.debugger) return;
-  if (isScreencasting && currentScreencastTabId === tabId) return;
-
-  if (isScreencasting && currentScreencastTabId && currentScreencastTabId !== tabId) {
-    try {
-      await chrome.debugger.detach({ tabId: currentScreencastTabId });
-    } catch (e) {}
-    isScreencasting = false;
-    currentScreencastTabId = null;
-  }
+  if (attachedDebuggerTabs.has(tabId)) return;
 
   try {
     await chrome.debugger.attach({ tabId }, "1.3");
-    currentScreencastTabId = tabId;
-    isScreencasting = true;
+    attachedDebuggerTabs.add(tabId);
     await chrome.debugger.sendCommand({ tabId }, "Page.startScreencast", {
       format: "jpeg",
       quality: 60,
@@ -120,18 +111,21 @@ async function ensureScreencast(tabId) {
       maxHeight: 720,
       everyNthFrame: 1
     });
-    console.log("[MessageV2 Extension] Live screencast started on isolated tab:", tabId);
+    console.log(`[MessageV2 Extension] Live screencast started on ${workerTag} tab:`, tabId);
   } catch (err) {
-    console.log("[MessageV2 Extension] Could not start screencast on tab:", tabId, err);
+    console.log(`[MessageV2 Extension] Screencast notice on ${workerTag} tab:`, tabId, err);
   }
 }
 
 if (chrome.debugger) {
   chrome.debugger.onEvent.addListener((source, method, params) => {
     if (method === "Page.screencastFrame" && params.data) {
+      const workerTag = (source.tabId === scannerTabId) ? "scanner" : "outreach";
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
           type: "LIVE_FRAME",
+          worker: workerTag,
+          tabId: source.tabId,
           data: params.data
         }));
       }
@@ -144,60 +138,102 @@ if (chrome.debugger) {
   });
 
   chrome.debugger.onDetach.addListener((source, reason) => {
-    console.log("[MessageV2 Extension] Screencast detached:", reason);
-    if (source.tabId === currentScreencastTabId) {
-      isScreencasting = false;
-      currentScreencastTabId = null;
-    }
+    console.log("[MessageV2 Extension] Screencast detached from tab:", source.tabId, reason);
+    attachedDebuggerTabs.delete(source.tabId);
   });
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (tabId === automationTabId) {
-    console.log("[MessageV2 Extension] Automation tab was closed. Resetting allocation.");
-    automationTabId = null;
-    isScreencasting = false;
-    currentScreencastTabId = null;
+  if (tabId === outreachTabId) {
+    console.log("[MessageV2 Extension] Outreach tab was closed. Resetting allocation.");
+    outreachTabId = null;
+    attachedDebuggerTabs.delete(tabId);
+  }
+  if (tabId === scannerTabId) {
+    console.log("[MessageV2 Extension] Scanner tab was closed. Resetting allocation.");
+    scannerTabId = null;
+    attachedDebuggerTabs.delete(tabId);
   }
 });
 
-// Find or start the dedicated Instagram tab in background
-async function getInstagramTab() {
-  // 1. If we already hold a dedicated tab, verify it's still alive
-  if (automationTabId !== null) {
+// Worker 1 Outreach Tab (Instagram Profiles & Composer)
+async function getOutreachTab() {
+  if (outreachTabId !== null) {
     try {
-      const existing = await chrome.tabs.get(automationTabId);
+      const existing = await chrome.tabs.get(outreachTabId);
       if (existing && !existing.discarded) {
         if (existing.status === "loading") {
           await waitForTabLoaded(existing.id, 10000);
         }
-        ensureScreencast(existing.id).catch(() => {});
+        ensureScreencastForTab(existing.id, "outreach").catch(() => {});
         return existing;
       }
     } catch (e) {
-      automationTabId = null;
+      outreachTabId = null;
     }
   }
 
-  // 2. Look for any existing Instagram tab to adopt
+  // Find an existing Instagram tab that is NOT the scanner tab
   const tabs = await chrome.tabs.query({ url: ["*://*.instagram.com/*", "*://instagram.com/*"] });
-  if (tabs.length > 0) {
-    automationTabId = tabs[0].id;
-    const tab = tabs[0];
-    if (tab.status === "loading") {
-      await waitForTabLoaded(tab.id, 10000);
+  for (const t of tabs) {
+    if (t.id !== scannerTabId && (!t.url || !t.url.includes("/direct/inbox"))) {
+      outreachTabId = t.id;
+      ensureScreencastForTab(outreachTabId, "outreach").catch(() => {});
+      return t;
     }
-    ensureScreencast(tab.id).catch(() => {});
-    return tab;
   }
 
-  // 3. Otherwise, create a dedicated background tab without stealing user focus (active: false)
-  console.log("[MessageV2 Extension] Creating dedicated automation tab in background...");
+  // Create dedicated Outreach tab in background
+  console.log("[MessageV2 Extension] Creating dedicated Outreach tab (Tab A)...");
   const newTab = await chrome.tabs.create({ url: "https://www.instagram.com/", active: false });
-  automationTabId = newTab.id;
+  outreachTabId = newTab.id;
   await waitForTabLoaded(newTab.id, 15000);
-  ensureScreencast(newTab.id).catch(() => {});
+  ensureScreencastForTab(newTab.id, "outreach").catch(() => {});
   return newTab;
+}
+
+// Worker 2 Reply Scanner Tab (/direct/inbox/)
+async function getScannerTab() {
+  if (scannerTabId !== null) {
+    try {
+      const existing = await chrome.tabs.get(scannerTabId);
+      if (existing && !existing.discarded) {
+        if (existing.status === "loading") {
+          await waitForTabLoaded(existing.id, 10000);
+        }
+        ensureScreencastForTab(existing.id, "scanner").catch(() => {});
+        return existing;
+      }
+    } catch (e) {
+      scannerTabId = null;
+    }
+  }
+
+  // Look for an existing direct/inbox tab
+  const tabs = await chrome.tabs.query({ url: ["*://*.instagram.com/direct/*", "*://instagram.com/direct/*"] });
+  for (const t of tabs) {
+    if (t.id !== outreachTabId) {
+      scannerTabId = t.id;
+      ensureScreencastForTab(scannerTabId, "scanner").catch(() => {});
+      return t;
+    }
+  }
+
+  // Create dedicated Scanner tab in background
+  console.log("[MessageV2 Extension] Creating dedicated Reply Scanner tab (Tab B)...");
+  const newTab = await chrome.tabs.create({ url: "https://www.instagram.com/direct/inbox/", active: false });
+  scannerTabId = newTab.id;
+  await waitForTabLoaded(newTab.id, 15000);
+  ensureScreencastForTab(newTab.id, "scanner").catch(() => {});
+  return newTab;
+}
+
+// Router helper to select proper tab
+async function getTargetTab(action, payload, msg) {
+  if (msg?.worker === "scanner" || msg?.target === "scanner" || payload?.worker === "scanner" || payload?.target === "scanner" || action === "SCAN_INBOX_REPLIES" || action === "INSPECT_THREAD_REPLY") {
+    return await getScannerTab();
+  }
+  return await getOutreachTab();
 }
 
 async function handleCommand(msg) {
@@ -216,30 +252,32 @@ async function handleCommand(msg) {
   }
 
   if (action === "START_SCREENCAST") {
-    const tab = await getInstagramTab();
-    if (tab && tab.id) {
-      await ensureScreencast(tab.id);
-      return { success: true, screencasting: isScreencasting, tabId: tab.id };
+    const tabA = await getOutreachTab();
+    if (tabA && tabA.id) {
+      await ensureScreencastForTab(tabA.id, "outreach");
     }
-    return { success: false, error: "No tab found" };
+    const tabB = await getScannerTab();
+    if (tabB && tabB.id) {
+      await ensureScreencastForTab(tabB.id, "scanner");
+    }
+    return { success: true, screencasting: true, outreachTabId, scannerTabId };
   }
 
   if (action === "CAPTURE_SCREENSHOT") {
     try {
-      const tab = await getInstagramTab();
+      const targetWorker = (payload && payload.worker) || msg.worker || (msg.target === "scanner" ? "scanner" : "outreach");
+      const tab = (targetWorker === "scanner") ? await getScannerTab() : await getOutreachTab();
 
       // 1. Isolated tab capture via Debugger (captures THIS tab exclusively, even in background)
       if (chrome.debugger && tab && tab.id) {
         try {
-          if (!isScreencasting || currentScreencastTabId !== tab.id) {
-            await ensureScreencast(tab.id);
-          }
+          await ensureScreencastForTab(tab.id, targetWorker);
           const shot = await chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", {
             format: "jpeg",
             quality: 65
           });
           if (shot && shot.data) {
-            return { success: true, dataUrl: "data:image/jpeg;base64," + shot.data };
+            return { success: true, dataUrl: "data:image/jpeg;base64," + shot.data, worker: targetWorker };
           }
         } catch (dbgErr) {
           console.log("[MessageV2 Extension] Debugger capture fallback to window:", dbgErr);
@@ -286,16 +324,16 @@ async function handleCommand(msg) {
           }
         });
       });
-      return { success: true, dataUrl };
+      return { success: true, dataUrl, worker: targetWorker };
     } catch (err) {
       console.log("[MessageV2 Extension] captureVisibleTab error:", err);
       return { success: false, error: String(err) };
     }
   }
 
-  const tab = await getInstagramTab();
+  const tab = await getTargetTab(action, payload, msg);
   if (!tab || !tab.id) {
-    return { success: false, error: "No Instagram tab found" };
+    return { success: false, error: "No target Instagram tab found" };
   }
 
   if (action === "GET_STATE" || action === "CHECK_LOGIN") {
@@ -583,17 +621,17 @@ async function handleCommand(msg) {
   }
 
   if (action === "SCAN_INBOX_REPLIES") {
-    const tab = await getInstagramTab();
-    if (!tab || !tab.id) return { success: false, error: "No Instagram tab found" };
+    const scannerTab = await getScannerTab();
+    if (!scannerTab || !scannerTab.id) return { success: false, error: "No Scanner tab found" };
 
-    if (!tab.url || !tab.url.includes("/direct/")) {
-      await chrome.tabs.update(tab.id, { url: "https://www.instagram.com/direct/inbox/" });
-      await waitForTabLoaded(tab.id, 12000);
+    if (!scannerTab.url || !scannerTab.url.includes("/direct/")) {
+      await chrome.tabs.update(scannerTab.id, { url: "https://www.instagram.com/direct/inbox/" });
+      await waitForTabLoaded(scannerTab.id, 12000);
       await new Promise(r => setTimeout(r, 2500));
     }
 
     const [result] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId: scannerTab.id },
       func: async () => {
         const rows = Array.from(document.querySelectorAll('a[href*="/direct/t/"]'));
         const threads = [];
@@ -628,18 +666,18 @@ async function handleCommand(msg) {
 
   if (action === "INSPECT_THREAD_REPLY") {
     const threadUrl = payload.thread_url;
-    const tab = await getInstagramTab();
-    if (!tab || !tab.id) return { success: false, error: "No Instagram tab found" };
+    const scannerTab = await getScannerTab();
+    if (!scannerTab || !scannerTab.id) return { success: false, error: "No Scanner tab found" };
 
-    if (threadUrl && !tab.url.includes(threadUrl)) {
+    if (threadUrl && !scannerTab.url.includes(threadUrl)) {
       const fullUrl = threadUrl.startsWith("http") ? threadUrl : `https://www.instagram.com${threadUrl}`;
-      await chrome.tabs.update(tab.id, { url: fullUrl });
-      await waitForTabLoaded(tab.id, 12000);
+      await chrome.tabs.update(scannerTab.id, { url: fullUrl });
+      await waitForTabLoaded(scannerTab.id, 12000);
       await new Promise(r => setTimeout(r, 2500));
     }
 
     const [result] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId: scannerTab.id },
       func: async () => {
         const composer = document.querySelector('div[contenteditable="true"][role="textbox"], textarea[placeholder*="Message"]');
         const chatPane = composer ? (composer.closest('div[role="main"]') || document.body) : document.body;

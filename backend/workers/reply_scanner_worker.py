@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 class ReplyScannerWorker:
     def __init__(self):
         self.status = "IDLE"  # IDLE, SCANNING, ERROR
+        self.current_stage = "IDLE"  # IDLE, OPENING_INBOX, SCANNING_THREADS, INSPECTING_THREAD, CLASSIFYING_REPLY, EXTRACTING_ENTITIES, UPDATING_RECORDS, COMPLETED
+        self.current_target: Optional[Dict[str, Any]] = None
         self.last_scanned_at: Optional[datetime] = None
         self.stats = {
             "total_scanned": 0,
@@ -33,6 +35,8 @@ class ReplyScannerWorker:
     def get_status(self) -> Dict[str, Any]:
         return {
             "status": self.status,
+            "current_stage": self.current_stage,
+            "current_target": self.current_target,
             "last_scanned_at": self.last_scanned_at.isoformat() if self.last_scanned_at else None,
             "stats": self.stats,
             "is_connected": extension_bridge.is_connected
@@ -48,6 +52,7 @@ class ReplyScannerWorker:
 
         async with self._lock:
             self.status = "SCANNING"
+            self.current_stage = "OPENING_INBOX"
             now = datetime.now(timezone.utc)
             scanned_count = 0
             auto_count = 0
@@ -56,9 +61,11 @@ class ReplyScannerWorker:
 
             try:
                 logger.info("[ReplyScanner] Starting Instagram inbox reply audit...")
+                self.current_stage = "SCANNING_THREADS"
                 res = await extension_bridge.scan_inbox_replies()
                 if not res.get("success"):
                     self.status = "IDLE"
+                    self.current_stage = "IDLE"
                     return {"success": False, "error": res.get("error", "Failed to scan inbox")}
 
                 threads = res.get("threads", [])
@@ -94,6 +101,15 @@ class ReplyScannerWorker:
                         scanned_count += 1
                         matched_contact.last_checked_reply_at = now
 
+                        self.current_stage = "INSPECTING_THREAD"
+                        self.current_target = {
+                            "name": matched_contact.name,
+                            "username": matched_contact.username,
+                            "thread_href": thread_href,
+                            "snippet": snippet,
+                            "has_reply": has_reply
+                        }
+
                         if has_reply:
                             # Contact sent an inbound message! Inspect thread for full message text
                             inspect_res = await extension_bridge.inspect_thread_reply(thread_href)
@@ -101,9 +117,15 @@ class ReplyScannerWorker:
                             if inspect_res.get("success") and inspect_res.get("data", {}).get("text"):
                                 inbound_text = inspect_res["data"]["text"]
 
-                            # Run entity extraction
+                            # Run classification & entity extraction
+                            self.current_stage = "CLASSIFYING_REPLY"
                             extracted = entity_extractor.extract_all(inbound_text)
 
+                            self.current_stage = "EXTRACTING_ENTITIES"
+                            self.current_target["entities"] = extracted
+                            self.current_target["full_text"] = inbound_text
+
+                            self.current_stage = "UPDATING_RECORDS"
                             if extracted["is_automated"]:
                                 auto_count += 1
                                 matched_contact.replied_status = "AUTOMATED_MESSAGE"
@@ -149,6 +171,7 @@ class ReplyScannerWorker:
 
                     await session.commit()
 
+                self.current_stage = "COMPLETED"
                 self.last_scanned_at = now
                 self.stats["total_scanned"] += scanned_count
                 self.stats["automated_found"] += auto_count
@@ -176,5 +199,6 @@ class ReplyScannerWorker:
                 return {"success": False, "error": str(e)}
             finally:
                 self.status = "IDLE"
+                self.current_stage = "IDLE"
 
 reply_scanner_worker = ReplyScannerWorker()

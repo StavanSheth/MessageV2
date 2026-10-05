@@ -58,7 +58,9 @@ export interface Contact {
   message?: string;
   custom_message?: string;
   followup_1_message?: string;
+  followup_1_delay_days?: number;
   followup_2_message?: string;
+  followup_2_delay_days?: number;
   expected_followers?: number;
   extracted_followers?: number;
   verification_status: string;

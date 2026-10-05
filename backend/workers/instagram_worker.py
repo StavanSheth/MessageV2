@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.models import Task, Contact, Message, Error
@@ -270,16 +270,33 @@ class InstagramWorker:
 
                 task = await self._claim_next_task()
                 if not task:
-                    # Check if there are any READY tasks left in the queue
+                    # Check if there are any READY tasks left in the queue or scheduled in future
                     async with AsyncSessionLocal() as session:
                         repo = TaskRepository(session)
                         counts = await repo.count_by_status()
                         ready_count = counts.get("READY", 0)
-                    if ready_count == 0:
-                        logger.info("[Worker] All ready tasks in the queue have been processed.")
+
+                        now = datetime.now(timezone.utc)
+                        future_stmt = select(func.min(Task.scheduled_at)).where(
+                            and_(Task.status == TaskStatus.READY.value, Task.scheduled_at > now)
+                        )
+                        next_due = (await session.execute(future_stmt)).scalar_one_or_none()
+
+                    if ready_count == 0 or (ready_count > 0 and next_due is not None):
+                        msg = (
+                            f"Outreach batch completed! All currently due contacts have been messaged. "
+                            f"Next follow-up is scheduled for {next_due.strftime('%b %d, %Y, %I:%M %p UTC') if next_due else 'N/A'}."
+                        ) if next_due else "All contacts and follow-ups in the queue have been completed!"
+                        logger.info(f"[Worker] {msg}")
                         self.status = WorkerStatus.IDLE
                         self.stage = AutomationStage.COMPLETED
+                        self.last_event = msg
                         await self._update_worker_db(status="IDLE", current_stage="COMPLETED")
+                        await event_bus.publish(
+                            EventCode.WORKER_COMPLETED,
+                            worker_id=WORKER_ID,
+                            payload={"message": msg, "next_due": next_due.isoformat() if next_due else None}
+                        )
                         await event_bus.publish_state(await self.health())
                         break
                     else:

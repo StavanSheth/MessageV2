@@ -3,10 +3,16 @@ import {
   Activity, CheckCircle2, ShieldCheck, Eye, Clock, 
   Send, AlertCircle, Sparkles, UserCheck, Terminal, Compass,
   ExternalLink, Loader2, RefreshCw, Play, Pause, Square,
-  Bot, ShieldAlert
+  Bot, ShieldAlert, Phone, Mail, Link2, LayoutGrid, Layers,
+  Check, User
 } from 'lucide-react';
 import { LiveAutomationState } from '../types';
-import { openBrowserWindow, triggerReplyScan, fetchReplyScannerStatus } from '../services/api';
+import { 
+  openBrowserWindow, 
+  triggerReplyScan, 
+  fetchReplyScannerStatus,
+  fetchChromeProfiles 
+} from '../services/api';
 
 interface LiveAutomationViewProps {
   state: LiveAutomationState;
@@ -23,7 +29,7 @@ interface LiveAutomationViewProps {
   onStop?: () => void;
 }
 
-const STAGES = [
+const OUTREACH_STAGES = [
   { key: 'CHECKING_LOGIN', label: 'Login Check', aliases: ['INITIALIZING'] },
   { key: 'OPENING_PROFILE', label: 'Open Profile', aliases: ['WAITING_FOR_PROFILE'] },
   { key: 'VERIFYING', label: 'Verify Identity', aliases: ['EXTRACTING_PROFILE', 'CLAIMING_TASK'] },
@@ -31,6 +37,15 @@ const STAGES = [
   { key: 'OPENING_COMPOSER', label: 'Type Message', aliases: ['PREPARING_MESSAGE'] },
   { key: 'SENDING_MESSAGE', label: 'Send Message', aliases: [] },
   { key: 'DETECTING_RESULT', label: 'Confirm Result', aliases: ['COMPLETED'] },
+];
+
+const SCANNER_STAGES = [
+  { key: 'OPENING_INBOX', label: 'Open Inbox', aliases: [] },
+  { key: 'SCANNING_THREADS', label: 'Scan Threads', aliases: [] },
+  { key: 'INSPECTING_THREAD', label: 'Inspect Thread', aliases: [] },
+  { key: 'CLASSIFYING_REPLY', label: 'Classify Reply', aliases: [] },
+  { key: 'EXTRACTING_ENTITIES', label: 'Extract Entities', aliases: [] },
+  { key: 'UPDATING_RECORDS', label: 'Update Records', aliases: ['COMPLETED'] },
 ];
 
 export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
@@ -54,18 +69,46 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   const effectiveCustomInput = customBatchInput !== undefined
     ? customBatchInput
     : (batchLimit ? String(batchLimit) : '8');
-  const currentStageIndex = STAGES.findIndex(
-    (s) => s.key === state.stage || s.aliases.includes(state.stage)
-  );
-  const [liveTick, setLiveTick] = useState(Date.now());
-  const [feedError, setFeedError] = useState(false);
-  const [streamError, setStreamError] = useState(false);
+
+  // View Mode: 'dual' (Side-by-Side), 'outreach' (Worker 1 only), 'scanner' (Worker 2 only)
+  const [viewMode, setViewMode] = useState<'dual' | 'outreach' | 'scanner'>('dual');
+
+  // Active Chrome profile
+  const [activeProfileName, setActiveProfileName] = useState<string>('Default');
+
+  // Stream state for Worker 1 (Outreach)
+  const [outreachTick, setOutreachTick] = useState(Date.now());
+  const [outreachStreamError, setOutreachStreamError] = useState(false);
+  const [outreachFeedError, setOutreachFeedError] = useState(false);
+
+  // Stream state for Worker 2 (Scanner)
+  const [scannerTick, setScannerTick] = useState(Date.now());
+  const [scannerStreamError, setScannerStreamError] = useState(false);
+  const [scannerFeedError, setScannerFeedError] = useState(false);
+
   const [isOpeningBrowser, setIsOpeningBrowser] = useState(false);
   const [extensionNeedsReload, setExtensionNeedsReload] = useState(false);
 
   // Worker 2 (Reply Scanner) State
   const [scannerStatus, setScannerStatus] = useState<{
     status: string;
+    current_stage?: string;
+    current_target?: {
+      name?: string;
+      username?: string;
+      thread_href?: string;
+      snippet?: string;
+      has_reply?: boolean;
+      full_text?: string;
+      entities?: {
+        phone?: string | null;
+        email?: string | null;
+        link?: string | null;
+        is_automated?: boolean;
+        confidence?: number;
+        indicators?: string[];
+      };
+    } | null;
     last_scanned_at: string | null;
     stats: {
       total_scanned: number;
@@ -75,9 +118,20 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     };
     is_connected: boolean;
   } | null>(null);
+
   const [isScanning, setIsScanning] = useState(false);
   const [scanFeedback, setScanFeedback] = useState<string | null>(null);
 
+  // Fetch active Chrome profile
+  useEffect(() => {
+    fetchChromeProfiles().then((res) => {
+      if (res?.active_profile?.name) {
+        setActiveProfileName(res.active_profile.name);
+      }
+    }).catch(() => {});
+  }, []);
+
+  // Poll Worker 2 status
   useEffect(() => {
     const fetchStatus = async () => {
       try {
@@ -89,18 +143,18 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
       } catch (e) {}
     };
     fetchStatus();
-    const timer = setInterval(fetchStatus, 4000);
+    const timer = setInterval(fetchStatus, 3000);
     return () => clearInterval(timer);
   }, [isScanning]);
 
   const handleTriggerScan = async () => {
     setIsScanning(true);
-    setScanFeedback('Worker 2 is scanning Instagram Direct Inbox...');
+    setScanFeedback('Worker 2 is scanning Instagram Direct Inbox (Tab B)...');
     try {
       const res = await triggerReplyScan();
       setScanFeedback(
         res.success 
-          ? `Scanned ${res.scanned_count} conversations. Found ${res.automated_found} auto-replies, ${res.human_replies_found} human.` 
+          ? `Scanned ${res.scanned_count} conversations. Found ${res.automated_found} auto-replies, ${res.human_replies_found} human leads.` 
           : (res.error || 'Scan finished.')
       );
       const updated = await fetchReplyScannerStatus();
@@ -109,7 +163,7 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
       setScanFeedback(`Scan error: ${err.message}`);
     } finally {
       setIsScanning(false);
-      setTimeout(() => setScanFeedback(null), 6000);
+      setTimeout(() => setScanFeedback(null), 7000);
     }
   };
 
@@ -128,25 +182,18 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
       } catch (e) {}
     };
     checkCapture();
-    const testTimer = setInterval(checkCapture, 4000);
+    const testTimer = setInterval(checkCapture, 5000);
     return () => clearInterval(testTimer);
   }, []);
 
+  // Periodic tick for snapshot refresh fallbacks
   useEffect(() => {
     const timer = setInterval(() => {
-      setLiveTick(Date.now());
-    }, 2000);
+      setOutreachTick(Date.now());
+      setScannerTick(Date.now());
+    }, 2500);
     return () => clearInterval(timer);
   }, []);
-
-  useEffect(() => {
-    if (streamError) {
-      const retryTimer = setTimeout(() => {
-        setStreamError(false);
-      }, 10000);
-      return () => clearTimeout(retryTimer);
-    }
-  }, [streamError]);
 
   const handleOpenChrome = async () => {
     setIsOpeningBrowser(true);
@@ -160,50 +207,65 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     }
   };
 
+  // Outreach current stage index
+  const outreachStageIndex = OUTREACH_STAGES.findIndex(
+    (s) => s.key === state.stage || s.aliases.includes(state.stage)
+  );
+
+  // Scanner current stage index
+  const scannerCurrentStage = scannerStatus?.current_stage || (scannerStatus?.status === 'SCANNING' ? 'SCANNING_THREADS' : 'IDLE');
+  const scannerStageIndex = SCANNER_STAGES.findIndex(
+    (s) => s.key === scannerCurrentStage || s.aliases.includes(scannerCurrentStage)
+  );
+
   const screenshotUrl = state.latest_screenshot
     ? `/screenshots/${state.latest_screenshot}`
     : null;
 
   return (
     <div className="space-y-6">
-      {/* Top Banner: Status + Worker Info */}
-      <div className="bg-gradient-to-r from-gray-900 via-indigo-950/40 to-gray-900 border border-indigo-500/20 rounded-2xl p-6 shadow-2xl relative overflow-hidden">
+      {/* Top Banner: Status + Profile Info + View Switcher */}
+      <div className="bg-gradient-to-r from-gray-900 via-indigo-950/40 to-gray-900 border border-indigo-500/20 rounded-2xl p-5 shadow-2xl relative overflow-hidden">
         <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
 
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5 relative z-10">
           <div>
-            <div className="flex items-center space-x-3 mb-2">
+            <div className="flex items-center space-x-3 mb-1.5">
               <span className="p-2 rounded-lg bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
                 <Activity className="w-5 h-5 animate-pulse" />
               </span>
-              <h2 className="text-2xl font-black text-white tracking-tight">Live Automation Control</h2>
+              <h2 className="text-2xl font-black text-white tracking-tight">Dual-Worker Automation Deck</h2>
             </div>
-            <p className="text-sm text-gray-400 max-w-xl">
-              Real-time feed of the active visible Playwright Chrome session. Watch identity verification, DOM interactions, and message dispatch.
+            <p className="text-xs text-gray-400 max-w-xl">
+              Coordinated dual Playwright Chrome automation. Worker 1 executes targeted cold outreach on Tab A, while Worker 2 continuously audits direct inbox replies and extracts contact leads on Tab B.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <div className="bg-gray-800/80 border border-gray-700/60 rounded-xl px-4 py-2.5">
-              <span className="text-[10px] text-gray-400 uppercase tracking-wider block font-semibold">Active Worker</span>
-              <span className="text-sm font-bold text-gray-100">{state.worker_name || 'Worker-01'}</span>
+            {/* Active Chrome Profile Indicator */}
+            <div className="bg-gray-800/80 border border-gray-700/60 rounded-xl px-3.5 py-2 flex items-center space-x-2">
+              <User className="w-4 h-4 text-indigo-400" />
+              <div>
+                <span className="text-[10px] text-gray-400 uppercase tracking-wider block font-semibold">Chrome Profile</span>
+                <span className="text-xs font-bold text-white">{activeProfileName}</span>
+              </div>
             </div>
 
-            <div className="bg-gray-800/80 border border-gray-700/60 rounded-xl px-4 py-2.5">
+            {/* Browser Status */}
+            <div className="bg-gray-800/80 border border-gray-700/60 rounded-xl px-3.5 py-2">
               <span className="text-[10px] text-gray-400 uppercase tracking-wider block font-semibold">Browser Engine</span>
-              <span className={`text-sm font-bold flex items-center space-x-1.5 ${
-                state.browser_status === 'CONNECTED'
-                  ? 'text-emerald-400'
-                  : 'text-gray-400'
+              <span className={`text-xs font-bold flex items-center space-x-1.5 ${
+                state.browser_status === 'CONNECTED' ? 'text-emerald-400' : 'text-gray-400'
               }`}>
                 <span className={`w-2 h-2 rounded-full ${state.browser_status === 'CONNECTED' ? 'bg-emerald-400 animate-pulse' : 'bg-gray-500'}`} />
                 <span>{state.browser_status || 'DISCONNECTED'}</span>
               </span>
             </div>
 
-            <div className="bg-gray-800/80 border border-gray-700/60 rounded-xl px-4 py-2.5">
+            {/* Instagram Session */}
+            <div className="bg-gray-800/80 border border-gray-700/60 rounded-xl px-3.5 py-2">
               <span className="text-[10px] text-gray-400 uppercase tracking-wider block font-semibold">Instagram Session</span>
-              <span className={`text-sm font-bold flex items-center space-x-1.5 ${
+              <span className={`text-xs font-bold flex items-center space-x-1.5 ${
                 state.instagram_login_status === 'LOGGED_IN'
                   ? 'text-emerald-400'
                   : state.instagram_login_status === 'LOGIN_REQUIRED' || state.instagram_login_status === 'CHALLENGE'
@@ -220,57 +282,101 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                 <span>{state.instagram_login_status || 'UNKNOWN'}</span>
               </span>
             </div>
+
+            {/* Open Chrome Button */}
+            <button
+              type="button"
+              onClick={handleOpenChrome}
+              disabled={isOpeningBrowser}
+              title="Open or focus visible Chrome window"
+              className="inline-flex items-center space-x-1.5 text-xs font-bold px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white transition active:scale-95 cursor-pointer disabled:opacity-50 shadow"
+            >
+              {isOpeningBrowser ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ExternalLink className="w-3.5 h-3.5" />}
+              <span>Open Chrome</span>
+            </button>
           </div>
         </div>
 
-        {/* Dynamic Stepper Bar */}
-        <div className="mt-8 pt-6 border-t border-gray-800/80">
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
-            {STAGES.map((s, idx) => {
-              const isPast = currentStageIndex > idx;
-              const isCurrent = state.stage === s.key;
-              return (
-                <div
-                  key={s.key}
-                  className={`flex flex-col items-center p-2 rounded-lg border text-center transition-all ${
-                    isCurrent
-                      ? 'bg-indigo-600/30 border-indigo-400 text-indigo-300 shadow-md shadow-indigo-500/20 scale-105'
-                      : isPast
-                      ? 'bg-emerald-950/20 border-emerald-500/40 text-emerald-400'
-                      : 'bg-gray-900/40 border-gray-800 text-gray-500'
-                  }`}
-                >
-                  <div className="flex items-center space-x-1 mb-1">
-                    {isPast ? (
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                    ) : isCurrent ? (
-                      <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />
-                    ) : (
-                      <span className="w-2 h-2 rounded-full bg-gray-600" />
-                    )}
-                    <span className="text-[10px] font-mono font-bold">Step {idx + 1}</span>
-                  </div>
-                  <span className="text-xs font-semibold truncate w-full">{s.label}</span>
-                </div>
-              );
-            })}
+        {/* View Switcher Tabs */}
+        <div className="mt-5 pt-4 border-t border-gray-800/80 flex items-center justify-between flex-wrap gap-3">
+          <div className="inline-flex p-1 rounded-xl bg-gray-950/80 border border-gray-800">
+            <button
+              onClick={() => setViewMode('dual')}
+              className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                viewMode === 'dual'
+                  ? 'bg-indigo-600 text-white shadow'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span>Side-by-Side Dual View</span>
+            </button>
+            <button
+              onClick={() => setViewMode('outreach')}
+              className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                viewMode === 'outreach'
+                  ? 'bg-indigo-600 text-white shadow'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <Send className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Worker 1: Outreach (Tab A)</span>
+            </button>
+            <button
+              onClick={() => setViewMode('scanner')}
+              className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                viewMode === 'scanner'
+                  ? 'bg-purple-600 text-white shadow'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <Bot className="w-3.5 h-3.5 text-purple-400" />
+              <span>Worker 2: Reply Scanner (Tab B)</span>
+            </button>
+          </div>
+
+          <div className="flex items-center space-x-3 text-xs text-gray-400">
+            <span className="flex items-center space-x-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              <span>Tab A: Profiles & DMs</span>
+            </span>
+            <span className="flex items-center space-x-1.5">
+              <span className="w-2 h-2 rounded-full bg-purple-400" />
+              <span>Tab B: Direct Inbox</span>
+            </span>
           </div>
         </div>
       </div>
 
-      {/* Dual Coordinated Worker Control Dock */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Worker 1: Outreach Dispatcher */}
-        <div className="bg-gray-900/90 border border-gray-800 rounded-2xl p-4 shadow-lg flex flex-col justify-between relative overflow-hidden">
-          <div className="flex items-start justify-between">
+      {extensionNeedsReload && (
+        <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-center justify-between">
+          <div className="flex items-center space-x-2.5">
+            <RefreshCw className="w-4 h-4 text-amber-400 shrink-0 animate-spin" />
+            <span>
+              Extension update ready: In your Chrome browser, go to <strong className="text-white underline">chrome://extensions</strong> and click <strong>🔄 Reload</strong> on <em>MessageV2 Automation Bridge</em> to stream both live isolated windows.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* WORKER 1: OUTREACH DISPATCHER DECK (TAB A)                                 */}
+      {/* ========================================================================= */}
+      {(viewMode === 'dual' || viewMode === 'outreach') && (
+        <div className="bg-gray-900/90 border border-indigo-500/30 rounded-2xl p-6 shadow-2xl space-y-6 relative overflow-hidden">
+          {/* Deck Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-gray-800 gap-3">
             <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
                 <Send className="w-5 h-5" />
               </div>
               <div>
-                <div className="flex items-center space-x-2">
-                  <h4 className="text-sm font-bold text-white">Worker 1: Outreach Dispatcher</h4>
-                  <span className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                <div className="flex items-center space-x-2.5">
+                  <h3 className="text-lg font-bold text-white">Worker 1: Outreach Dispatcher</h3>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                    Tab A: instagram.com/profile
+                  </span>
+                  <span className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
                     state.status === 'RUNNING'
                       ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                       : state.status === 'PAUSED'
@@ -282,28 +388,400 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  Sequential cold outreach & follow-up messenger with instant DM restriction detection.
+                  Automated cold outreach and scheduled follow-ups with instant DM restriction detection.
                 </p>
               </div>
             </div>
+
+            <div className="flex items-center space-x-3 text-xs text-gray-400">
+              <span>Processed this session: <strong className="text-white font-mono">{state.batch_sent_count ?? 0}</strong></span>
+              {state.current_contact && (
+                <span className="px-2 py-1 rounded bg-gray-800 text-indigo-300 font-mono text-xs font-semibold">
+                  @{state.current_contact.username}
+                </span>
+              )}
+            </div>
           </div>
-          <div className="mt-3 pt-3 border-t border-gray-800/80 flex items-center justify-between text-xs text-gray-400">
-            <span>Processed this session: <strong className="text-white font-mono">{state.batch_sent_count ?? 0}</strong></span>
-            <span className="font-mono text-[11px] text-gray-400">{state.current_contact ? `@${state.current_contact.username}` : 'No active target'}</span>
+
+          {/* Worker 1: 7-Stage Dynamic Stepper */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs uppercase font-bold text-gray-400 tracking-wider">Outreach Execution Pipeline (7 Steps)</span>
+              <span className="text-xs text-indigo-400 font-mono font-semibold">
+                {outreachStageIndex >= 0 ? `Step ${outreachStageIndex + 1} of 7: ${OUTREACH_STAGES[outreachStageIndex].label}` : 'Stage: Idle'}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+              {OUTREACH_STAGES.map((s, idx) => {
+                const isPast = outreachStageIndex > idx;
+                const isCurrent = state.stage === s.key || s.aliases.includes(state.stage);
+                return (
+                  <div
+                    key={s.key}
+                    className={`flex flex-col items-center p-2 rounded-xl border text-center transition-all ${
+                      isCurrent
+                        ? 'bg-indigo-600/30 border-indigo-400 text-indigo-300 shadow-md shadow-indigo-500/20 scale-105'
+                        : isPast
+                        ? 'bg-emerald-950/20 border-emerald-500/40 text-emerald-400'
+                        : 'bg-gray-950/60 border-gray-800 text-gray-500'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-1 mb-1">
+                      {isPast ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : isCurrent ? (
+                        <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />
+                      ) : (
+                        <span className="w-2 h-2 rounded-full bg-gray-600" />
+                      )}
+                      <span className="text-[10px] font-mono font-bold">Step {idx + 1}</span>
+                    </div>
+                    <span className="text-xs font-semibold truncate w-full">{s.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Worker 1: Batch Dispatch Toolbar */}
+          <div className="p-4 rounded-xl bg-gray-950/80 border border-gray-800 flex flex-col lg:flex-row items-center justify-between gap-4">
+            <div className="flex items-center space-x-3 w-full lg:w-auto">
+              <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex flex-col items-center justify-center text-indigo-400 shrink-0">
+                <span className="font-black text-base leading-none">{state.batch_sent_count ?? 0}</span>
+                <span className="text-[8px] uppercase font-bold text-gray-400">Sent</span>
+              </div>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs font-bold text-white">Batch Target:</span>
+                  <span className="text-xs font-mono font-bold text-indigo-400">
+                    {state.batch_sent_count ?? 0} / {(state.status === 'RUNNING' || state.status === 'PAUSED' ? state.batch_limit : batchLimit) === null ? 'All' : `${(state.status === 'RUNNING' || state.status === 'PAUSED' ? state.batch_limit : batchLimit)} contacts`}
+                  </span>
+                  {state.batch_limit && (state.batch_sent_count ?? 0) >= state.batch_limit && (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse">
+                      BATCH COMPLETE
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-gray-400 mt-0.5">
+                  Anti-spam pacing: {state.delay_seconds || 15}s delay between sends. When all initial or follow-up tasks are done, Worker 1 cleanly stops.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 justify-end w-full lg:w-auto">
+              <span className="text-xs text-gray-400 font-semibold mr-1">Batch:</span>
+              {[
+                { label: '1', val: 1 },
+                { label: '3', val: 3 },
+                { label: '5', val: 5 },
+                { label: '10', val: 10 },
+                { label: '25', val: 25 },
+                { label: '50', val: 50 },
+                { label: 'All', val: null },
+              ].map((opt) => {
+                const isSelected = !effectiveIsCustom && batchLimit === opt.val;
+                return (
+                  <button
+                    key={String(opt.label)}
+                    type="button"
+                    onClick={() => onSetBatchPreset ? onSetBatchPreset(opt.val) : setBatchLimit?.(opt.val)}
+                    className={`px-2 py-1 text-xs font-bold rounded-lg border transition cursor-pointer ${
+                      isSelected
+                        ? 'bg-indigo-600 border-indigo-400 text-white shadow'
+                        : 'bg-gray-900 border-gray-800 text-gray-400 hover:text-white hover:border-gray-700'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+
+              <div className="flex items-center space-x-1 bg-gray-900 border border-gray-800 rounded-lg px-2 py-0.5">
+                <input
+                  type="text"
+                  value={effectiveCustomInput}
+                  onChange={(e) => {
+                    onChangeCustom?.(e.target.value);
+                    const parsed = parseInt(e.target.value, 10);
+                    if (!isNaN(parsed) && parsed > 0) {
+                      setBatchLimit?.(parsed);
+                    }
+                  }}
+                  className="w-12 bg-transparent text-xs font-bold text-center text-white focus:outline-none"
+                  placeholder="Custom"
+                />
+                <span className="text-[10px] text-gray-500">qty</span>
+              </div>
+
+              {state.status !== 'RUNNING' && state.status !== 'PAUSED' && (
+                <button
+                  onClick={() => onStart?.(effectiveIsCustom ? (parseInt(effectiveCustomInput, 10) || 5) : batchLimit)}
+                  className="ml-1 flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/30 transition hover:scale-105 active:scale-95 cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5 fill-white" />
+                  <span>Start Batch</span>
+                </button>
+              )}
+
+              {state.status === 'RUNNING' && onPause && (
+                <button
+                  onClick={onPause}
+                  className="ml-1 flex items-center space-x-1.5 bg-amber-600 hover:bg-amber-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition active:scale-95 cursor-pointer"
+                >
+                  <Pause className="w-3.5 h-3.5 fill-white" />
+                  <span>Pause</span>
+                </button>
+              )}
+
+              {state.status === 'PAUSED' && onResume && (
+                <button
+                  onClick={onResume}
+                  className="ml-1 flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition active:scale-95 cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5 fill-white" />
+                  <span>Resume</span>
+                </button>
+              )}
+
+              {(state.status === 'RUNNING' || state.status === 'PAUSED') && onStop && (
+                <button
+                  onClick={onStop}
+                  className="flex items-center space-x-1 bg-rose-600 hover:bg-rose-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition active:scale-95 cursor-pointer"
+                >
+                  <Square className="w-3 h-3 fill-white" />
+                  <span>Stop</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Worker 1: 3-Column Grid (Target Profile + Verification Radar + Live Capture) */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            {/* Col 1: Current Target Profile */}
+            <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-gray-800">
+                <div className="flex items-center space-x-2">
+                  <UserCheck className="w-4 h-4 text-emerald-400" />
+                  <h4 className="font-bold text-white text-sm">Current Target Profile</h4>
+                </div>
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-gray-800 text-gray-300">
+                  {state.current_task_id ? `Task #${state.current_task_id.slice(0, 8)}` : 'No Active Task'}
+                </span>
+              </div>
+
+              {state.current_contact ? (
+                <div className="space-y-3 text-xs">
+                  <div>
+                    <span className="text-gray-400 block text-[11px]">Recipient Name</span>
+                    <p className="text-base font-bold text-white mt-0.5">{state.current_contact.name || 'N/A'}</p>
+                  </div>
+
+                  <div>
+                    <span className="text-gray-400 block text-[11px]">Instagram Profile</span>
+                    <a
+                      href={state.current_contact.instagram_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sm font-mono font-semibold text-emerald-400 hover:underline inline-flex items-center space-x-1 mt-0.5"
+                    >
+                      <span>@{state.current_contact.username}</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+
+                  <div>
+                    <span className="text-gray-400 block text-[11px]">Outreach Message</span>
+                    <div className="mt-1 p-3 bg-gray-900 border border-gray-800 rounded-xl text-gray-200 font-sans leading-relaxed">
+                      "{state.current_contact.custom_message || state.current_contact.message || 'Hey'}"
+                    </div>
+                  </div>
+
+                  {state.current_url && (
+                    <div>
+                      <span className="text-gray-400 block text-[11px]">Active Tab URL</span>
+                      <p className="text-[11px] font-mono text-gray-400 truncate mt-0.5 bg-gray-900 px-2 py-1 rounded border border-gray-800">
+                        {state.current_url}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="pt-2 border-t border-gray-800">
+                    <span className="text-[10px] text-gray-400 uppercase font-bold block mb-1">Last System Event</span>
+                    <p className="text-[11px] font-mono text-emerald-300 bg-black/40 p-2 rounded border border-gray-800 truncate">
+                      {state.last_event || 'Awaiting task activity...'}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="py-12 text-center text-gray-500">
+                  <Compass className="w-8 h-8 mx-auto text-gray-600 mb-2 opacity-60" />
+                  <p className="text-xs">Worker 1 is currently waiting or idle.</p>
+                  <p className="text-[11px] text-gray-600 mt-0.5">Start a batch to dispatch messages.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Col 2: Identity Verification Radar */}
+            <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-4 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-3 border-b border-gray-800">
+                  <div className="flex items-center space-x-2">
+                    <ShieldCheck className="w-4 h-4 text-indigo-400" />
+                    <h4 className="font-bold text-white text-sm">Identity Verification Radar</h4>
+                  </div>
+                  {state.verification && (
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                      state.verification.decision === 'HIGH_CONFIDENCE'
+                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                        : state.verification.decision === 'MEDIUM_CONFIDENCE'
+                        ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                        : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                    }`}>
+                      {state.verification.decision}
+                    </span>
+                  )}
+                </div>
+
+                {state.verification ? (
+                  <div className="mt-4 space-y-4">
+                    <div className="bg-gray-900 p-4 rounded-xl border border-gray-800 text-center">
+                      <span className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Match Confidence Score</span>
+                      <div className="text-3xl font-black text-white mt-0.5">
+                        {(state.verification.confidence * 100).toFixed(0)}%
+                      </div>
+                      <p className="text-[11px] text-gray-400 mt-1">
+                        {state.verification.reason}
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <span className="text-[10px] text-gray-400 uppercase tracking-wider font-bold block">
+                        Verification Signals Evaluated
+                      </span>
+                      {state.verification.signals && state.verification.signals.length > 0 ? (
+                        state.verification.signals.map((sig, i) => (
+                          <div key={i} className="bg-gray-900/80 border border-gray-800 p-2.5 rounded-lg flex items-center justify-between text-xs">
+                            <div>
+                              <span className="font-semibold text-gray-200 capitalize">{sig.name}</span>
+                              <span className="text-[10px] text-gray-500 block">{sig.notes || 'Signal evaluated'}</span>
+                            </div>
+                            <span className={`font-mono font-bold ${
+                              sig.score >= 0.8 ? 'text-emerald-400' : sig.score >= 0.5 ? 'text-amber-400' : 'text-rose-400'
+                            }`}>
+                              {(sig.score * 100).toFixed(0)}%
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-xs text-gray-500 italic">No detailed signals available.</p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="py-12 text-center text-gray-500">
+                    <ShieldCheck className="w-8 h-8 mx-auto text-gray-600 mb-2 opacity-50" />
+                    <p className="text-xs">Awaiting profile inspection.</p>
+                    <p className="text-[11px] text-gray-600 mt-0.5">Multi-signal verification populates once profile loads.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Col 3: Visible Chrome Capture (Tab A) */}
+            <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-3 flex flex-col justify-between">
+              <div className="flex items-center justify-between pb-3 border-b border-gray-800">
+                <div className="flex items-center space-x-2">
+                  <Eye className="w-4 h-4 text-emerald-400" />
+                  <h4 className="font-bold text-white text-sm">Visible Chrome Capture (Tab A)</h4>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="flex items-center space-x-1 text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>Live Stream</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOutreachStreamError(false);
+                      setOutreachFeedError(false);
+                      setOutreachTick(Date.now());
+                    }}
+                    title="Reconnect Tab A video stream"
+                    className="p-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="relative rounded-xl overflow-hidden border border-gray-800 bg-black aspect-video flex items-center justify-center shadow-inner">
+                <img
+                  src={outreachStreamError ? `/api/browser/live_feed?worker=outreach&t=${outreachTick}` : "/api/browser/stream/outreach"}
+                  alt="Visible Chrome Tab A Stream"
+                  className="w-full h-full object-contain"
+                  onError={() => {
+                    if (!outreachStreamError) {
+                      setOutreachStreamError(true);
+                    } else {
+                      setOutreachFeedError(true);
+                    }
+                  }}
+                  onLoad={() => setOutreachFeedError(false)}
+                />
+                {outreachFeedError && screenshotUrl && (
+                  <img
+                    src={screenshotUrl}
+                    alt="Current Browser Screenshot"
+                    className="absolute inset-0 w-full h-full object-contain"
+                  />
+                )}
+                {outreachFeedError && !screenshotUrl && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-gray-950">
+                    <Eye className="w-6 h-6 text-emerald-400 mb-1 opacity-80 animate-pulse" />
+                    <p className="text-xs text-gray-200 font-semibold">Tab A: Instagram Outreach</p>
+                    <p className="text-[10px] text-gray-500 mt-0.5">Streaming live isolated outreach tab.</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-gray-400 pt-1">
+                <span className="text-emerald-400 font-mono text-[10px] flex items-center space-x-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
+                  <span>Tab A screencast attached</span>
+                </span>
+                <a
+                  href={outreachStreamError ? `/api/browser/live_feed?worker=outreach&t=${outreachTick}` : "/api/browser/stream/outreach"}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-indigo-400 hover:underline inline-flex items-center space-x-1"
+                >
+                  <span>Open Full Video</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+            </div>
           </div>
         </div>
+      )}
 
-        {/* Worker 2: Reply Scanner & Entity Extractor */}
-        <div className="bg-gray-900/90 border border-gray-800 rounded-2xl p-4 shadow-lg flex flex-col justify-between relative overflow-hidden">
-          <div className="flex items-start justify-between">
+      {/* ========================================================================= */}
+      {/* WORKER 2: REPLY SCANNER & ENTITY EXTRACTOR DECK (TAB B)                   */}
+      {/* ========================================================================= */}
+      {(viewMode === 'dual' || viewMode === 'scanner') && (
+        <div className="bg-gray-900/90 border border-purple-500/30 rounded-2xl p-6 shadow-2xl space-y-6 relative overflow-hidden">
+          {/* Deck Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-gray-800 gap-3">
             <div className="flex items-center space-x-3">
               <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-500/30 flex items-center justify-center text-purple-400">
                 <Bot className="w-5 h-5" />
               </div>
               <div>
-                <div className="flex items-center space-x-2">
-                  <h4 className="text-sm font-bold text-white">Worker 2: Reply Scanner & Extractor</h4>
-                  <span className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                <div className="flex items-center space-x-2.5">
+                  <h3 className="text-lg font-bold text-white">Worker 2: Reply Scanner & Lead Extractor</h3>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                    Tab B: instagram.com/direct/inbox
+                  </span>
+                  <span className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
                     scannerStatus?.status === 'SCANNING' || isScanning
                       ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
                       : 'bg-gray-800 text-gray-400 border border-gray-700'
@@ -313,490 +791,312 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  Scans Direct Inbox, classifies auto-responders vs human leads, extracts phones, emails & links.
+                  Independent inbox auditor. Classifies bot auto-replies vs high-intent human leads, extracts phones, emails, and links.
                 </p>
               </div>
             </div>
-            <button
-              onClick={handleTriggerScan}
-              disabled={isScanning || scannerStatus?.status === 'SCANNING' || state.status === 'RUNNING'}
-              className="flex items-center space-x-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition shadow hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 shrink-0"
-              title={state.status === 'RUNNING' ? 'Pause Worker 1 before running inbox scan' : 'Scan Instagram inbox for replies now'}
-            >
-              {isScanning || scannerStatus?.status === 'SCANNING' ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Scanning...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Scan Inbox</span>
-                </>
-              )}
-            </button>
-          </div>
-          <div className="mt-3 pt-3 border-t border-gray-800/80 flex items-center justify-between text-xs text-gray-400">
-            <span>
-              {scannerStatus?.last_scanned_at ? `Last scan: ${scannerStatus.last_scanned_at}` : 'Ready for scan'}
-            </span>
-            {scanFeedback && (
-              <span className="text-[11px] text-purple-300 font-semibold animate-pulse truncate max-w-[200px]">
-                {scanFeedback}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
 
-      {/* Batch Control & Sequential Queue Dispatcher */}
-      <div className="bg-gradient-to-r from-gray-900 via-gray-900/90 to-gray-900 border border-gray-800 rounded-2xl p-5 shadow-xl">
-        <div className="flex flex-col lg:flex-row items-center justify-between gap-5">
-          {/* Left: Batch Progress & Queue Status */}
-          <div className="flex items-center space-x-4 w-full lg:w-auto">
-            <div className="w-12 h-12 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex flex-col items-center justify-center text-indigo-400">
-              <span className="font-black text-lg leading-none">{state.batch_sent_count ?? 0}</span>
-              <span className="text-[9px] uppercase font-bold text-gray-400 mt-0.5">Sent</span>
-            </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <span className="text-sm font-bold text-white">Batch Target:</span>
-                <span className="text-xs font-mono font-bold text-indigo-400">
-                  {state.batch_sent_count ?? 0} / {(state.status === 'RUNNING' || state.status === 'PAUSED' ? state.batch_limit : batchLimit) === null ? 'Entire List (All)' : `${(state.status === 'RUNNING' || state.status === 'PAUSED' ? state.batch_limit : batchLimit)} contacts`}
-                </span>
-                {state.batch_limit && (state.batch_sent_count ?? 0) >= state.batch_limit && (
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse">
-                    BATCH COMPLETE (PAUSED)
-                  </span>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={handleTriggerScan}
+                disabled={isScanning || scannerStatus?.status === 'SCANNING'}
+                className="flex items-center space-x-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white px-4 py-2 rounded-xl text-xs font-bold transition shadow hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50"
+              >
+                {isScanning || scannerStatus?.status === 'SCANNING' ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Scanning Inbox...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>Scan Inbox Now</span>
+                  </>
                 )}
-                {state.status === 'RUNNING' && (
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center space-x-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
-                    <span>SEQUENTIAL RUN ACTIVE</span>
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-gray-400 mt-1">
-                Safe anti-spam pacing: {state.delay_seconds || 15}s delay between sends. Exceptions for invalid profiles, private DMs, or timeouts are automatically handled and skipped without interrupting the queue.
-              </p>
+              </button>
             </div>
           </div>
 
-          {/* Right: Quick Batch Selector & Buttons */}
-          <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto justify-end">
-            <span className="text-xs text-gray-400 font-semibold mr-1">Batch Size:</span>
-            {[
-              { label: '1', val: 1 },
-              { label: '3', val: 3 },
-              { label: '5', val: 5 },
-              { label: '10', val: 10 },
-              { label: '25', val: 25 },
-              { label: '50', val: 50 },
-              { label: '100', val: 100 },
-              { label: 'All', val: null },
-            ].map((opt) => {
-              const isSelected = !effectiveIsCustom && batchLimit === opt.val;
-              return (
-                <button
-                  key={opt.label}
-                  disabled={state.status === 'RUNNING'}
-                  onClick={() => {
-                    if (onSetBatchPreset) {
-                      onSetBatchPreset(opt.val);
-                    } else {
-                      setBatchLimit?.(opt.val);
-                    }
-                  }}
-                  className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${
-                    isSelected
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30 ring-1 ring-indigo-400'
-                      : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                  } disabled:opacity-50 cursor-pointer`}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-
-            {/* Custom Number Input */}
-            <div
-              className={`flex items-center space-x-1.5 rounded-lg px-2.5 py-1 transition border ${
-                effectiveIsCustom
-                  ? 'bg-indigo-950/80 border-indigo-500 ring-2 ring-indigo-400/50 shadow-md shadow-indigo-500/20'
-                  : 'bg-gray-950/80 border-gray-700/80 hover:border-gray-600'
-              }`}
-            >
-              <button
-                type="button"
-                disabled={state.status === 'RUNNING'}
-                onClick={() => {
-                  if (onSelectCustom) {
-                    onSelectCustom();
-                  } else {
-                    const parsed = parseInt(effectiveCustomInput, 10) || 5;
-                    setBatchLimit?.(parsed);
-                  }
-                }}
-                className={`text-[11px] font-semibold transition cursor-pointer ${
-                  effectiveIsCustom ? 'text-indigo-300 font-bold' : 'text-gray-400 hover:text-gray-200'
-                }`}
-              >
-                Custom:
-              </button>
-              <input
-                type="number"
-                min="1"
-                max="5000"
-                disabled={state.status === 'RUNNING'}
-                placeholder="Qty"
-                value={effectiveCustomInput}
-                onFocus={() => {
-                  if (onSelectCustom) {
-                    onSelectCustom();
-                  } else {
-                    const parsed = parseInt(effectiveCustomInput, 10) || 5;
-                    setBatchLimit?.(parsed);
-                  }
-                }}
-                onChange={(e) => {
-                  if (onChangeCustom) {
-                    onChangeCustom(e.target.value);
-                  } else {
-                    const val = parseInt(e.target.value, 10);
-                    if (val > 0) {
-                      setBatchLimit?.(val);
-                    }
-                  }
-                }}
-                className={`w-14 bg-gray-900 border text-xs font-bold rounded px-1.5 py-0.5 focus:outline-none text-center ${
-                  effectiveIsCustom
-                    ? 'border-indigo-400 text-indigo-200 bg-gray-950'
-                    : 'border-gray-700 text-gray-300'
-                }`}
-                title="Type any custom number of recipients to send in this batch"
-              />
-              <span className="text-[10px] text-gray-400">qty</span>
-            </div>
-
-            {state.status !== 'RUNNING' && state.status !== 'PAUSED' && (
-              <button
-                onClick={() => onStart?.(effectiveIsCustom ? (parseInt(effectiveCustomInput, 10) || 5) : batchLimit)}
-                className="ml-2 flex items-center space-x-1.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white px-4 py-1.5 rounded-lg text-xs font-bold shadow-lg shadow-emerald-600/30 transition hover:scale-105 active:scale-95 cursor-pointer"
-              >
-                <Play className="w-3.5 h-3.5 fill-white" />
-                <span>Start Batch ({effectiveIsCustom ? (parseInt(effectiveCustomInput, 10) || 5) : (batchLimit === null ? 'All' : batchLimit)})</span>
-              </button>
-            )}
-
-            {state.status === 'RUNNING' && onPause && (
-              <button
-                onClick={onPause}
-                className="ml-2 flex items-center space-x-1.5 bg-amber-600 hover:bg-amber-500 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold shadow transition active:scale-95 cursor-pointer"
-              >
-                <Pause className="w-3.5 h-3.5 fill-white" />
-                <span>Pause</span>
-              </button>
-            )}
-
-            {state.status === 'PAUSED' && onResume && (
-              <button
-                onClick={onResume}
-                className="ml-2 flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold shadow transition active:scale-95 cursor-pointer"
-              >
-                <Play className="w-3.5 h-3.5 fill-white" />
-                <span>Resume</span>
-              </button>
-            )}
-
-            {(state.status === 'RUNNING' || state.status === 'PAUSED') && onStop && (
-              <button
-                onClick={onStop}
-                className="flex items-center space-x-1 bg-rose-600 hover:bg-rose-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow transition active:scale-95 cursor-pointer"
-              >
-                <Square className="w-3 h-3 fill-white" />
-                <span>Stop</span>
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Main Grid: Target Contact Card + Verification Signals + Screenshot Preview */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Target Contact & Message */}
-        <div className="space-y-6">
-          <div className="bg-gray-900/80 border border-gray-800 rounded-2xl p-6 shadow-xl">
-            <div className="flex items-center justify-between pb-4 border-b border-gray-800">
-              <div className="flex items-center space-x-2">
-                <UserCheck className="w-5 h-5 text-indigo-400" />
-                <h3 className="font-bold text-white text-base">Current Target</h3>
-              </div>
-              <span className="text-xs font-mono px-2.5 py-1 rounded bg-gray-800 text-gray-300">
-                {state.current_task_id ? `Task #${state.current_task_id.slice(0, 8)}` : 'No Active Task'}
+          {/* Worker 2: 6-Stage Dynamic Stepper */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs uppercase font-bold text-gray-400 tracking-wider">Reply Audit Pipeline (6 Steps)</span>
+              <span className="text-xs text-purple-400 font-mono font-semibold">
+                {scannerStageIndex >= 0 ? `Step ${scannerStageIndex + 1} of 6: ${SCANNER_STAGES[scannerStageIndex].label}` : 'Stage: Standby'}
               </span>
             </div>
-
-            {state.current_contact ? (
-              <div className="mt-5 space-y-4">
-                <div>
-                  <span className="text-xs text-gray-400 block font-medium">Recipient Name</span>
-                  <p className="text-lg font-bold text-white mt-0.5">{state.current_contact.name || 'N/A'}</p>
-                </div>
-
-                <div>
-                  <span className="text-xs text-gray-400 block font-medium">Instagram Handle</span>
-                  <a
-                    href={state.current_contact.instagram_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-base font-mono font-semibold text-indigo-400 hover:text-indigo-300 transition-colors inline-block mt-0.5"
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+              {SCANNER_STAGES.map((s, idx) => {
+                const isPast = scannerStageIndex > idx;
+                const isCurrent = scannerCurrentStage === s.key || s.aliases.includes(scannerCurrentStage);
+                return (
+                  <div
+                    key={s.key}
+                    className={`flex flex-col items-center p-2 rounded-xl border text-center transition-all ${
+                      isCurrent
+                        ? 'bg-purple-600/30 border-purple-400 text-purple-300 shadow-md shadow-purple-500/20 scale-105'
+                        : isPast
+                        ? 'bg-emerald-950/20 border-emerald-500/40 text-emerald-400'
+                        : 'bg-gray-950/60 border-gray-800 text-gray-500'
+                    }`}
                   >
-                    @{state.current_contact.username}
-                  </a>
-                </div>
-
-                <div>
-                  <span className="text-xs text-gray-400 block font-medium">Custom Message Body</span>
-                  <div className="mt-1.5 p-3.5 bg-gray-950/80 border border-gray-800 rounded-xl text-sm text-gray-200 font-sans leading-relaxed">
-                    "{state.current_contact.custom_message || 'Hey'}"
+                    <div className="flex items-center space-x-1 mb-1">
+                      {isPast ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : isCurrent ? (
+                        <span className="w-2 h-2 rounded-full bg-purple-400 animate-ping" />
+                      ) : (
+                        <span className="w-2 h-2 rounded-full bg-gray-600" />
+                      )}
+                      <span className="text-[10px] font-mono font-bold">Step {idx + 1}</span>
+                    </div>
+                    <span className="text-xs font-semibold truncate w-full">{s.label}</span>
                   </div>
-                </div>
+                );
+              })}
+            </div>
+          </div>
 
-                {state.current_url && (
-                  <div>
-                    <span className="text-xs text-gray-400 block font-medium">Browser Current URL</span>
-                    <p className="text-xs font-mono text-gray-400 truncate mt-0.5 bg-gray-950 px-2 py-1.5 rounded border border-gray-800/80">
-                      {state.current_url}
-                    </p>
-                  </div>
+          {/* Worker 2: Stats Toolbar */}
+          <div className="p-3.5 rounded-xl bg-gray-950/80 border border-gray-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex flex-wrap items-center gap-4">
+              <span className="text-gray-400">
+                Audited: <strong className="text-white font-mono">{scannerStatus?.stats.total_scanned ?? 0}</strong>
+              </span>
+              <span className="text-amber-400">
+                Auto-Replies: <strong className="text-white font-mono">{scannerStatus?.stats.automated_found ?? 0}</strong>
+              </span>
+              <span className="text-emerald-400">
+                Human Replies: <strong className="text-white font-mono">{scannerStatus?.stats.human_replies_found ?? 0}</strong>
+              </span>
+              <span className="text-gray-400">
+                No Reply: <strong className="text-white font-mono">{scannerStatus?.stats.no_reply_count ?? 0}</strong>
+              </span>
+            </div>
+
+            <div className="flex items-center space-x-3 text-gray-400">
+              {scannerStatus?.last_scanned_at && (
+                <span>Last Scan: <strong className="text-gray-200">{scannerStatus.last_scanned_at}</strong></span>
+              )}
+              {scanFeedback && (
+                <span className="text-purple-300 font-semibold animate-pulse">{scanFeedback}</span>
+              )}
+            </div>
+          </div>
+
+          {/* Worker 2: 3-Column Grid (Target Thread + Entity Extraction Radar + Live Capture Tab B) */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            {/* Col 1: Current Target Thread */}
+            <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-gray-800">
+                <div className="flex items-center space-x-2">
+                  <UserCheck className="w-4 h-4 text-purple-400" />
+                  <h4 className="font-bold text-white text-sm">Inspected Inbox Thread</h4>
+                </div>
+                {scannerStatus?.current_target?.has_reply !== undefined && (
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    scannerStatus.current_target.has_reply
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                      : 'bg-gray-800 text-gray-400'
+                  }`}>
+                    {scannerStatus.current_target.has_reply ? 'REPLY RECEIVED' : 'OUTBOUND ONLY'}
+                  </span>
                 )}
               </div>
-            ) : (
-              <div className="py-12 text-center text-gray-500">
-                <Compass className="w-10 h-10 mx-auto text-gray-600 mb-2 opacity-60" />
-                <p className="text-sm">Worker is currently waiting or idle.</p>
-                <p className="text-xs text-gray-600 mt-1">Start a run to process queued contacts.</p>
-              </div>
-            )}
-          </div>
 
-          {/* Last Activity Card */}
-          <div className="bg-gray-900/80 border border-gray-800 rounded-2xl p-5 shadow-xl">
-            <div className="flex items-center space-x-2 mb-3">
-              <Terminal className="w-4 h-4 text-emerald-400" />
-              <h4 className="text-xs uppercase tracking-wider font-bold text-gray-300">Last System Event</h4>
-            </div>
-            <p className="text-sm font-mono text-emerald-300/90 bg-black/40 p-3 rounded-lg border border-gray-800 leading-snug">
-              {state.last_event || 'No recent events recorded.'}
-            </p>
-            {state.last_error && (
-              <div className="mt-3 p-3 rounded-lg bg-rose-950/40 border border-rose-800/50 text-xs font-mono text-rose-300">
-                Error: {state.last_error}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Middle Column: Multi-Signal Verification Radar */}
-        <div className="space-y-6">
-          <div className="bg-gray-900/80 border border-gray-800 rounded-2xl p-6 shadow-xl flex flex-col h-full">
-            <div className="flex items-center justify-between pb-4 border-b border-gray-800">
-              <div className="flex items-center space-x-2">
-                <ShieldCheck className="w-5 h-5 text-indigo-400" />
-                <h3 className="font-bold text-white text-base">Identity Verification</h3>
-              </div>
-              {state.verification && (
-                <span
-                  className={`text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wider ${
-                    state.verification.decision === 'HIGH_CONFIDENCE'
-                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                      : state.verification.decision === 'MEDIUM_CONFIDENCE'
-                      ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                      : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                  }`}
-                >
-                  {state.verification.decision}
-                </span>
-              )}
-            </div>
-
-            {state.verification ? (
-              <div className="mt-5 space-y-6 flex-1 flex flex-col justify-between">
-                {/* Score Gauge */}
-                <div className="bg-gradient-to-b from-gray-950 to-gray-900 p-5 rounded-xl border border-gray-800 text-center">
-                  <span className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Confidence Score</span>
-                  <div className="text-4xl font-black text-white mt-1">
-                    {(state.verification.confidence * 100).toFixed(0)}%
+              {scannerStatus?.current_target ? (
+                <div className="space-y-3 text-xs">
+                  <div>
+                    <span className="text-gray-400 block text-[11px]">Contact / Account</span>
+                    <p className="text-base font-bold text-white mt-0.5">{scannerStatus.current_target.name || 'Instagram User'}</p>
+                    {scannerStatus.current_target.username && (
+                      <span className="text-purple-400 font-mono text-xs">@{scannerStatus.current_target.username}</span>
+                    )}
                   </div>
-                  <p className="text-xs text-gray-400 mt-1 max-w-xs mx-auto">
-                    {state.verification.reason}
-                  </p>
-                </div>
 
-                {/* Signals breakdown */}
-                <div className="space-y-3">
-                  <span className="text-xs text-gray-400 uppercase tracking-wider font-semibold block">
-                    Verification Signals
-                  </span>
-                  {state.verification.signals && state.verification.signals.length > 0 ? (
-                    state.verification.signals.map((sig, i) => (
-                      <div
-                        key={i}
-                        className="bg-gray-950/70 border border-gray-800/80 p-3 rounded-lg flex items-center justify-between"
+                  <div>
+                    <span className="text-gray-400 block text-[11px]">Latest Inbound Message</span>
+                    <div className="mt-1 p-3 bg-gray-900 border border-gray-800 rounded-xl text-gray-200 font-sans leading-relaxed">
+                      "{scannerStatus.current_target.full_text || scannerStatus.current_target.snippet || 'No message text available'}"
+                    </div>
+                  </div>
+
+                  {scannerStatus.current_target.thread_href && (
+                    <div>
+                      <span className="text-gray-400 block text-[11px]">Direct Thread URL</span>
+                      <a
+                        href={`https://www.instagram.com${scannerStatus.current_target.thread_href}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[11px] font-mono text-purple-400 hover:underline truncate block mt-0.5 bg-gray-900 px-2 py-1 rounded border border-gray-800"
                       >
-                        <div>
-                          <div className="flex items-center space-x-2">
-                            <span className="text-xs font-bold text-gray-200 capitalize">{sig.name}</span>
-                            <span className="text-[10px] text-gray-500">weight: {sig.weight}</span>
-                          </div>
-                          <span className="text-[11px] text-gray-400 mt-0.5 block">{sig.notes || 'Signal evaluated'}</span>
-                        </div>
-                        <div className="text-right">
-                          <span
-                            className={`text-xs font-mono font-bold ${
-                              sig.score >= 0.8
-                                ? 'text-emerald-400'
-                                : sig.score >= 0.5
-                                ? 'text-amber-400'
-                                : 'text-rose-400'
-                            }`}
-                          >
-                            {(sig.score * 100).toFixed(0)}%
-                          </span>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-xs text-gray-500 italic">No detailed signal records available.</p>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="py-16 text-center text-gray-500 flex-1 flex flex-col items-center justify-center">
-                <ShieldCheck className="w-10 h-10 mx-auto text-gray-600 mb-2 opacity-50" />
-                <p className="text-sm font-medium">Awaiting profile navigation</p>
-                <p className="text-xs text-gray-600 mt-1">Signals will populate once target profile loads in browser.</p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right Column: Screenshot & Browser View */}
-        <div className="space-y-6">
-          <div className="bg-gray-900/80 border border-gray-800 rounded-2xl p-6 shadow-xl flex flex-col h-full">
-            <div className="flex items-center justify-between pb-4 border-b border-gray-800">
-              <div className="flex items-center space-x-2">
-                <Eye className="w-5 h-5 text-indigo-400" />
-                <h3 className="font-bold text-white text-base">Visible Chrome Capture</h3>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="flex items-center space-x-1.5 text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span>Live Sync</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFeedError(false);
-                    setLiveTick(Date.now());
-                  }}
-                  title="Force refresh screen capture"
-                  className="inline-flex items-center space-x-1 text-[11px] font-semibold px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition active:scale-95 cursor-pointer"
-                >
-                  <RefreshCw className="w-3 h-3" />
-                  <span>Sync</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleOpenChrome}
-                  disabled={isOpeningBrowser}
-                  title="Open or focus Chrome on your desktop"
-                  className="inline-flex items-center space-x-1 text-[11px] font-bold px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white transition active:scale-95 cursor-pointer disabled:opacity-50"
-                >
-                  {isOpeningBrowser ? <Loader2 className="w-3 h-3 animate-spin" /> : <ExternalLink className="w-3 h-3" />}
-                  <span>Open Chrome</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="mt-5 flex-1 flex flex-col justify-center">
-              {extensionNeedsReload && (
-                <div className="p-3 mb-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <RefreshCw className="w-4 h-4 text-amber-400 shrink-0 animate-spin" />
-                    <span>
-                      Extension update ready: In your Chrome browser, go to <strong className="text-white underline">chrome://extensions</strong> and click <strong>🔄 Reload</strong> on <em>MessageV2 Automation Bridge</em> to stream your live window.
-                    </span>
-                  </div>
-                </div>
-              )}
-              <div className="space-y-3">
-                <div className="relative rounded-xl overflow-hidden border border-gray-700/80 bg-gray-950 aspect-video flex items-center justify-center shadow-inner">
-                  <img
-                    src={streamError ? `/api/browser/live_feed?t=${liveTick}` : "/api/browser/stream"}
-                    alt="Visible Chrome Isolated Live Stream"
-                    className="w-full h-full object-contain"
-                    onError={() => {
-                      if (!streamError) {
-                        setStreamError(true);
-                      } else {
-                        setFeedError(true);
-                      }
-                    }}
-                    onLoad={() => {
-                      setFeedError(false);
-                    }}
-                  />
-                  {feedError && screenshotUrl && (
-                    <img
-                      src={screenshotUrl}
-                      alt="Current Browser Screenshot"
-                      className="absolute inset-0 w-full h-full object-contain"
-                    />
-                  )}
-                  {feedError && !screenshotUrl && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-gray-950">
-                      <Eye className="w-8 h-8 text-indigo-400 mb-2 opacity-80 animate-pulse" />
-                      <p className="text-xs text-gray-200 font-semibold">Active Instagram Automation Tab</p>
-                      <p className="text-[11px] text-gray-400 mt-1 max-w-xs">
-                        Streaming live isolated Instagram tab.
-                      </p>
+                        {scannerStatus.current_target.thread_href}
+                      </a>
                     </div>
                   )}
                 </div>
-                <div className="flex items-center justify-between text-xs text-gray-400 px-1">
-                  <span className="flex items-center space-x-1.5 text-emerald-400 font-mono text-[11px]">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block mr-1" />
-                    {!streamError ? "Isolated Live Video Stream (Real-Time)" : "Live session sync (2s auto-refresh)"}
-                  </span>
-                  <div className="flex items-center space-x-3">
-                    <button
-                      onClick={() => {
-                        setStreamError(false);
-                        setFeedError(false);
-                        setLiveTick(Date.now());
-                      }}
-                      title="Reconnect live stream"
-                      className="text-gray-400 hover:text-white transition flex items-center space-x-1 text-[11px] cursor-pointer"
-                    >
-                      <RefreshCw className="w-3 h-3 text-indigo-400" />
-                      <span>Refresh Stream</span>
-                    </button>
-                    <a
-                      href={streamError ? `/api/browser/live_feed?t=${liveTick}` : "/api/browser/stream"}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-indigo-400 hover:underline flex items-center space-x-1 text-[11px]"
-                    >
-                      <span>Open Full Stream</span>
-                    </a>
-                  </div>
+              ) : (
+                <div className="py-12 text-center text-gray-500">
+                  <Compass className="w-8 h-8 mx-auto text-gray-600 mb-2 opacity-60" />
+                  <p className="text-xs">No active thread under inspection.</p>
+                  <p className="text-[11px] text-gray-600 mt-0.5">Click "Scan Inbox Now" to audit Direct Inbox.</p>
                 </div>
+              )}
+            </div>
+
+            {/* Col 2: Entity Extraction Radar */}
+            <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-4 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-3 border-b border-gray-800">
+                  <div className="flex items-center space-x-2">
+                    <ShieldAlert className="w-4 h-4 text-purple-400" />
+                    <h4 className="font-bold text-white text-sm">Entity Extraction Radar</h4>
+                  </div>
+                  {scannerStatus?.current_target?.entities?.is_automated !== undefined && (
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      scannerStatus.current_target.entities.is_automated
+                        ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                        : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                    }`}>
+                      {scannerStatus.current_target.entities.is_automated ? 'AUTO-RESPONDER / BOT' : 'HUMAN LEAD'}
+                    </span>
+                  )}
+                </div>
+
+                {scannerStatus?.current_target?.entities ? (
+                  <div className="mt-4 space-y-3 text-xs">
+                    {/* Phone */}
+                    <div className="p-3 bg-gray-900 rounded-xl border border-gray-800 flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <Phone className="w-4 h-4 text-emerald-400" />
+                        <div>
+                          <span className="text-[10px] text-gray-400 block font-semibold">Extracted Phone</span>
+                          <span className="font-mono font-bold text-white">
+                            {scannerStatus.current_target.entities.phone || 'None detected'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Email */}
+                    <div className="p-3 bg-gray-900 rounded-xl border border-gray-800 flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <Mail className="w-4 h-4 text-indigo-400" />
+                        <div>
+                          <span className="text-[10px] text-gray-400 block font-semibold">Extracted Email</span>
+                          <span className="font-mono font-bold text-white">
+                            {scannerStatus.current_target.entities.email || 'None detected'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Website / Link */}
+                    <div className="p-3 bg-gray-900 rounded-xl border border-gray-800 flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <Link2 className="w-4 h-4 text-purple-400" />
+                        <div>
+                          <span className="text-[10px] text-gray-400 block font-semibold">Extracted Website / Link</span>
+                          <span className="font-mono font-bold text-white truncate max-w-[200px] block">
+                            {scannerStatus.current_target.entities.link || 'None detected'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Indicators */}
+                    {scannerStatus.current_target.entities.indicators && scannerStatus.current_target.entities.indicators.length > 0 && (
+                      <div className="pt-2 border-t border-gray-800">
+                        <span className="text-[10px] text-gray-400 uppercase font-bold block mb-1">Bot Detection Signals</span>
+                        <div className="flex flex-wrap gap-1">
+                          {scannerStatus.current_target.entities.indicators.map((ind, idx) => (
+                            <span key={idx} className="px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[10px]">
+                              {ind}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="py-12 text-center text-gray-500">
+                    <Bot className="w-8 h-8 mx-auto text-gray-600 mb-2 opacity-50" />
+                    <p className="text-xs">No entities extracted yet.</p>
+                    <p className="text-[11px] text-gray-600 mt-0.5">Extracts phone, email, and links when replies are scanned.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Col 3: Visible Chrome Capture (Tab B) */}
+            <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-5 space-y-3 flex flex-col justify-between">
+              <div className="flex items-center justify-between pb-3 border-b border-gray-800">
+                <div className="flex items-center space-x-2">
+                  <Eye className="w-4 h-4 text-purple-400" />
+                  <h4 className="font-bold text-white text-sm">Visible Chrome Capture (Tab B)</h4>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="flex items-center space-x-1 text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+                    <span>Live Stream</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setScannerStreamError(false);
+                      setScannerFeedError(false);
+                      setScannerTick(Date.now());
+                    }}
+                    title="Reconnect Tab B video stream"
+                    className="p-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="relative rounded-xl overflow-hidden border border-gray-800 bg-black aspect-video flex items-center justify-center shadow-inner">
+                <img
+                  src={scannerStreamError ? `/api/browser/live_feed?worker=scanner&t=${scannerTick}` : "/api/browser/stream/replies"}
+                  alt="Visible Chrome Tab B Stream"
+                  className="w-full h-full object-contain"
+                  onError={() => {
+                    if (!scannerStreamError) {
+                      setScannerStreamError(true);
+                    } else {
+                      setScannerFeedError(true);
+                    }
+                  }}
+                  onLoad={() => setScannerFeedError(false)}
+                />
+                {scannerFeedError && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-gray-950">
+                    <Bot className="w-6 h-6 text-purple-400 mb-1 opacity-80 animate-pulse" />
+                    <p className="text-xs text-gray-200 font-semibold">Tab B: Instagram Direct Inbox</p>
+                    <p className="text-[10px] text-gray-500 mt-0.5">Streaming live isolated inbox tab.</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-gray-400 pt-1">
+                <span className="text-purple-400 font-mono text-[10px] flex items-center space-x-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping inline-block" />
+                  <span>Tab B screencast attached</span>
+                </span>
+                <a
+                  href={scannerStreamError ? `/api/browser/live_feed?worker=scanner&t=${scannerTick}` : "/api/browser/stream/replies"}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-purple-400 hover:underline inline-flex items-center space-x-1"
+                >
+                  <span>Open Full Video</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

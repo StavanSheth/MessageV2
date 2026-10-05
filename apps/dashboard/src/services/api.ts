@@ -87,6 +87,8 @@ export async function fetchMessageTemplates(): Promise<{
   default_message: string;
   followup_1_message: string;
   followup_2_message: string;
+  followup_1_delay_days: number;
+  followup_2_delay_days: number;
 }> {
   const res = await fetch(`${BASE_URL}/api/contacts/templates`);
   return res.json();
@@ -96,7 +98,10 @@ export async function applyBulkTemplates(data: {
   default_message?: string;
   followup_1_message?: string;
   followup_2_message?: string;
+  followup_1_delay_days?: number;
+  followup_2_delay_days?: number;
   apply_to_all?: boolean;
+  reschedule_existing?: boolean;
 }): Promise<any> {
   const res = await fetch(`${BASE_URL}/api/contacts/templates/apply`, {
     method: 'POST',
@@ -106,6 +111,29 @@ export async function applyBulkTemplates(data: {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || 'Failed to apply templates');
+  }
+  return res.json();
+}
+
+export async function updateFollowupSchedule(
+  contactId: string,
+  data: {
+    followup_1_scheduled_at?: string | null;
+    followup_1_status?: string | null;
+    followup_1_delay_days?: number | null;
+    followup_2_scheduled_at?: string | null;
+    followup_2_status?: string | null;
+    followup_2_delay_days?: number | null;
+  }
+): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/contacts/${contactId}/followup_schedule`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to update follow-up schedule');
   }
   return res.json();
 }
@@ -228,6 +256,23 @@ export async function triggerReplyScan(): Promise<{
 
 export async function fetchReplyScannerStatus(): Promise<{
   status: string;
+  current_stage?: string;
+  current_target?: {
+    name?: string;
+    username?: string;
+    thread_href?: string;
+    snippet?: string;
+    has_reply?: boolean;
+    full_text?: string;
+    entities?: {
+      phone?: string | null;
+      email?: string | null;
+      link?: string | null;
+      is_automated?: boolean;
+      confidence?: number;
+      indicators?: string[];
+    };
+  } | null;
   last_scanned_at: string | null;
   stats: {
     total_scanned: number;

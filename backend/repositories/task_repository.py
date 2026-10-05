@@ -1,6 +1,6 @@
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import select, update, and_, or_, func
+from sqlalchemy import select, update, and_, or_, func, case
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database.models import Task, Contact, Message, Error
@@ -140,11 +140,33 @@ class TaskRepository:
         await self.session.commit()
         return await self.get_by_id(task_id)
 
-    async def list_tasks(self, status: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Task]:
-        stmt = select(Task).options(selectinload(Task.contact)).order_by(Task.created_at.desc())
+    async def list_tasks(self, status: Optional[str] = None, limit: int = 2000, offset: int = 0) -> List[Task]:
+        stmt = select(Task).options(selectinload(Task.contact))
         if status:
             stmt = stmt.where(Task.status == status)
-        stmt = stmt.limit(limit).offset(offset)
+            if status == TaskStatus.COMPLETED.value:
+                stmt = stmt.order_by(Task.completed_at.desc(), Task.updated_at.desc())
+            elif status in (TaskStatus.READY.value, TaskStatus.QUEUED.value):
+                stmt = stmt.order_by(Task.priority.desc(), Task.scheduled_at.asc())
+            else:
+                stmt = stmt.order_by(Task.updated_at.desc(), Task.created_at.desc())
+        else:
+            status_rank = case(
+                (Task.status == TaskStatus.RUNNING.value, 0),
+                (Task.status == TaskStatus.READY.value, 1),
+                (Task.status == TaskStatus.QUEUED.value, 1),
+                (Task.status == TaskStatus.RETRY_WAIT.value, 2),
+                (Task.status == TaskStatus.MANUAL_REVIEW.value, 3),
+                (Task.status == TaskStatus.RECONCILING.value, 3),
+                (Task.status == TaskStatus.COMPLETED.value, 4),
+                (Task.status == TaskStatus.CANCELLED.value, 5),
+                (Task.status == TaskStatus.SKIPPED.value, 6),
+                else_=7
+            )
+            stmt = stmt.order_by(status_rank, Task.priority.desc(), Task.scheduled_at.asc(), Task.completed_at.desc(), Task.created_at.desc())
+
+        if limit and limit > 0:
+            stmt = stmt.limit(limit).offset(offset)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 

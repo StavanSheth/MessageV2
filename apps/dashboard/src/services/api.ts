@@ -228,8 +228,12 @@ export async function getHardwareCapabilities(): Promise<{
   return res.json();
 }
 
-export async function fetchTasks(): Promise<Task[]> {
-  const res = await fetch(`${BASE_URL}/api/tasks`);
+export async function fetchTasks(limit: number = 2000, status?: string): Promise<Task[]> {
+  const params = new URLSearchParams();
+  if (limit) params.set('limit', limit.toString());
+  if (status) params.set('status', status);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(`${BASE_URL}/api/tasks${qs}`);
   return res.json();
 }
 

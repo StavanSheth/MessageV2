@@ -20,7 +20,7 @@ def format_datetime_readable(dt: Optional[datetime]) -> Optional[str]:
     return dt.strftime("%a, %d %b %Y, %H:%M:%S UTC")
 
 @router.get("")
-async def list_tasks(status: str = None, limit: int = 200, offset: int = 0, db: AsyncSession = Depends(get_db)):
+async def list_tasks(status: str = None, limit: int = 2000, offset: int = 0, db: AsyncSession = Depends(get_db)):
     repo = TaskRepository(db)
     tasks = await repo.list_tasks(status=status, limit=limit, offset=offset)
 

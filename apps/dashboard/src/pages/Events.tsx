@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { History, Terminal, Eye, Image as ImageIcon, ExternalLink, Filter } from 'lucide-react';
 import { EventLog } from '../types';
+import { formatDisplayDate } from '../utils/date';
 
 interface EventsProps {
   events: EventLog[];
@@ -39,44 +40,52 @@ export const Events: React.FC<EventsProps> = ({ events }) => {
             </thead>
             <tbody className="divide-y divide-gray-800/60 text-xs">
               {events.length > 0 ? (
-                events.map((ev) => (
-                  <tr key={ev.id} className="hover:bg-gray-800/30 transition-colors">
-                    <td className="py-3.5 px-6 text-gray-400 font-mono text-[11px] whitespace-nowrap">
-                      {new Date(ev.created_at).toLocaleTimeString()}
-                    </td>
-                    <td className="py-3.5 px-6">
-                      <span className="font-mono text-indigo-400 bg-indigo-950/40 border border-indigo-500/30 px-2 py-0.5 rounded text-[11px]">
-                        {ev.event_code}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-6 text-gray-300 font-semibold text-[11px]">
-                      {ev.stage || 'GLOBAL'}
-                    </td>
-                    <td className="py-3.5 px-6 text-gray-300 max-w-md font-sans">
-                      {ev.message}
-                    </td>
-                    <td className="py-3.5 px-6 text-right space-x-2 whitespace-nowrap">
-                      {ev.screenshot_path && (
-                        <button
-                          onClick={() => setSelectedScreenshot(`/screenshots/${ev.screenshot_path}`)}
-                          className="inline-flex items-center space-x-1 px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 text-[11px] font-semibold"
-                        >
-                          <ImageIcon className="w-3 h-3 text-indigo-400" />
-                          <span>Screen</span>
-                        </button>
-                      )}
-                      {ev.payload_json && Object.keys(ev.payload_json).length > 0 && (
-                        <button
-                          onClick={() => setSelectedPayload(ev.payload_json)}
-                          className="inline-flex items-center space-x-1 px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 text-[11px] font-semibold"
-                        >
-                          <Terminal className="w-3 h-3 text-emerald-400" />
-                          <span>Data</span>
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))
+                events.map((ev) => {
+                  const payloadObj = ev.payload_json || (ev as any).payload;
+                  const displayTime = formatDisplayDate(ev.created_at || (ev as any).timestamp);
+                  const displayDesc = ev.message || payloadObj?.message || payloadObj?.reason || (payloadObj ? JSON.stringify(payloadObj) : '—');
+                  const displayStage = ev.stage || payloadObj?.stage || (ev as any).category || 'GLOBAL';
+                  const screenshotPath = ev.screenshot_path || payloadObj?.screenshot_path;
+
+                  return (
+                    <tr key={ev.id} className="hover:bg-gray-800/30 transition-colors">
+                      <td className="py-3.5 px-6 text-gray-400 font-mono text-[11px] whitespace-nowrap">
+                        {displayTime}
+                      </td>
+                      <td className="py-3.5 px-6">
+                        <span className="font-mono text-indigo-400 bg-indigo-950/40 border border-indigo-500/30 px-2 py-0.5 rounded text-[11px]">
+                          {ev.event_code}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-6 text-gray-300 font-semibold text-[11px]">
+                        {displayStage}
+                      </td>
+                      <td className="py-3.5 px-6 text-gray-300 max-w-md font-sans">
+                        {displayDesc}
+                      </td>
+                      <td className="py-3.5 px-6 text-right space-x-2 whitespace-nowrap">
+                        {screenshotPath && (
+                          <button
+                            onClick={() => setSelectedScreenshot(`/screenshots/${screenshotPath}`)}
+                            className="inline-flex items-center space-x-1 px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 text-[11px] font-semibold cursor-pointer"
+                          >
+                            <ImageIcon className="w-3 h-3 text-indigo-400" />
+                            <span>Screen</span>
+                          </button>
+                        )}
+                        {payloadObj && Object.keys(payloadObj).length > 0 && (
+                          <button
+                            onClick={() => setSelectedPayload(payloadObj)}
+                            className="inline-flex items-center space-x-1 px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 text-[11px] font-semibold cursor-pointer"
+                          >
+                            <Terminal className="w-3 h-3 text-emerald-400" />
+                            <span>Data</span>
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
               ) : (
                 <tr>
                   <td colSpan={5} className="py-12 text-center text-gray-500">

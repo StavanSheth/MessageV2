@@ -41,7 +41,8 @@ class TaskRepository:
         return result.scalar_one_or_none()
 
     async def claim_next_ready(self, worker_id: str, task_types: Optional[List[str]] = None,
-                               lease_duration_seconds: int = 300) -> Optional[Task]:
+                               lease_duration_seconds: int = 300,
+                               random_order: bool = False) -> Optional[Task]:
         """Atomically find and claim the next ready task or expired lease."""
         now = datetime.now(timezone.utc)
         type_cond = [Task.type.in_(task_types)] if task_types else []
@@ -58,10 +59,12 @@ class TaskRepository:
             *type_cond
         )
 
+        order_by_args = [func.random()] if random_order else [Task.priority.desc(), Task.scheduled_at.asc()]
+
         stmt = (
             select(Task.id)
             .where(or_(ready_cond, expired_lease_cond))
-            .order_by(Task.priority.desc(), Task.scheduled_at.asc())
+            .order_by(*order_by_args)
             .limit(1)
         )
         task_id = (await self.session.execute(stmt)).scalar_one_or_none()
@@ -225,4 +228,21 @@ class TaskRepository:
             TaskStatus.CANCELLED,
             manual_review_reason=f"Rejected: {reason}"
         )
+
+    async def bulk_set_selection(self, task_ids: List[str], selected: bool) -> int:
+        """Bulk include (READY) or exclude/pause (PAUSED) tasks."""
+        if not task_ids:
+            return 0
+        new_status = TaskStatus.READY.value if selected else TaskStatus.PAUSED.value
+        values = {
+            "status": new_status,
+            "updated_at": datetime.now(timezone.utc),
+            "lease_owner": None,
+            "lease_expires_at": None
+        }
+        stmt = update(Task).where(Task.id.in_(task_ids)).values(**values)
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return result.rowcount
+
 

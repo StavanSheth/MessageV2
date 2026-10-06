@@ -12,7 +12,7 @@ export async function fetchAutomationStatus(): Promise<LiveAutomationState> {
   return res.json();
 }
 
-export async function startAutomation(options?: { batch_limit?: number | null; delay_seconds?: number }): Promise<{ status: string }> {
+export async function startAutomation(options?: { batch_limit?: number | null; delay_seconds?: number; random_order?: boolean }): Promise<{ status: string }> {
   const res = await fetch(`${BASE_URL}/api/automation/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -534,11 +534,11 @@ export async function launchChromeLive(profileId?: string): Promise<any> {
 // Worker 3 & Coordinator API Clients
 // ─────────────────────────────────────────────────────────────
 
-export async function startWorker3(batchLimit?: number | null, delaySeconds?: number): Promise<any> {
+export async function startWorker3(batchLimit?: number | null, delaySeconds?: number, randomOrder?: boolean): Promise<any> {
   const res = await fetch(`${BASE_URL}/api/automation/worker3/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ batch_limit: batchLimit, delay_seconds: delaySeconds }),
+    body: JSON.stringify({ batch_limit: batchLimit, delay_seconds: delaySeconds, random_order: randomOrder }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -633,7 +633,13 @@ export async function stopRepliesWorker(): Promise<any> {
 // Unified Master Controls (All Workers: Start, Pause, Resume, Stop)
 // ─────────────────────────────────────────────────────────────
 
-export async function startAllWorkers(options?: { batch_limit?: number | null; delay_seconds?: number }): Promise<any> {
+export async function startAllWorkers(options?: {
+  batch_limit?: number | null;
+  delay_seconds?: number;
+  random_order?: boolean;
+  random_order_worker1?: boolean;
+  random_order_worker3?: boolean;
+}): Promise<any> {
   const res = await fetch(`${BASE_URL}/api/automation/all/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -642,6 +648,41 @@ export async function startAllWorkers(options?: { batch_limit?: number | null; d
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || 'Failed to start all workers');
+  }
+  return res.json();
+}
+
+export async function setWorkerRandomOrder(
+  worker: 'worker1' | 'worker3' | 'all',
+  enabled: boolean
+): Promise<{ status: string; random_order: boolean }> {
+  const endpoint = worker === 'all'
+    ? `${BASE_URL}/api/automation/all/random_order`
+    : `${BASE_URL}/api/automation/${worker}/random_order`;
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to set random order');
+  }
+  return res.json();
+}
+
+export async function bulkSetTaskSelection(
+  taskIds: string[],
+  selected: boolean
+): Promise<{ status: string; updated_count: number; new_status: string }> {
+  const res = await fetch(`${BASE_URL}/api/tasks/bulk-selection`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_ids: taskIds, selected }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to update selection');
   }
   return res.json();
 }

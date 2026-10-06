@@ -256,6 +256,18 @@ async def toggle_task_pause(task_id: str, db: AsyncSession = Depends(get_db)):
     updated = await repo.update_task(task_id, status=new_status)
     return {"task_id": task_id, "status": updated.status if updated else new_status}
 
+class BulkSelectionRequest(BaseModel):
+    task_ids: List[str]
+    selected: bool
+
+@router.post("/bulk-selection")
+async def bulk_task_selection(req: BulkSelectionRequest, db: AsyncSession = Depends(get_db)):
+    """Bulk include (READY) or exclude/pause (PAUSED) tasks for workers."""
+    repo = TaskRepository(db)
+    count = await repo.bulk_set_selection(req.task_ids, req.selected)
+    status_str = "READY" if req.selected else "PAUSED"
+    return {"status": "ok", "updated_count": count, "new_status": status_str}
+
 class FollowUpReviewRequest(BaseModel):
     task_ids: Optional[List[str]] = None
     contact_ids: Optional[List[str]] = None

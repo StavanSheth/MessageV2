@@ -31,6 +31,8 @@ interface NavbarProps {
   anyPaused?: boolean;
   activeWorkersCount?: number;
   needsAttention: boolean;
+  isRandomOrder?: boolean;
+  onToggleRandomOrder?: (val: boolean) => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -58,6 +60,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   anyPaused,
   activeWorkersCount,
   needsAttention,
+  isRandomOrder = false,
+  onToggleRandomOrder,
 }) => {
   const isRunning = anyRunning !== undefined ? anyRunning : workerStatus === 'RUNNING';
   const isPaused = anyPaused !== undefined ? anyPaused : workerStatus === 'PAUSED';
@@ -153,6 +157,27 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span>ATTENTION NEEDED</span>
             </div>
           )}
+
+          {/* Random Order Master Toggle (All Workers) */}
+          <label
+            className={`flex items-center space-x-1.5 border rounded-xl px-2.5 py-1.5 shadow-inner cursor-pointer select-none transition-all ${
+              isRandomOrder
+                ? 'bg-[#d49237]/20 border-[#d49237]/60 text-[#fcfbf7]'
+                : 'bg-gray-900/90 border-gray-700/80 text-gray-300 hover:border-gray-600'
+            }`}
+            title="Randomize person/task dispatch order for all workers. Toggle anytime before start or while running/paused."
+          >
+            <input
+              type="checkbox"
+              checked={!!isRandomOrder}
+              onChange={(e) => onToggleRandomOrder?.(e.target.checked)}
+              className="w-3.5 h-3.5 accent-[#d49237] rounded cursor-pointer"
+            />
+            <span className="text-[11px] font-semibold flex items-center gap-1">
+              <span>🎲</span>
+              <span>Random Order</span>
+            </span>
+          </label>
 
           {/* Batch Selector */}
           <div className="flex items-center space-x-1.5 bg-gray-900/90 border border-gray-700/80 rounded-xl px-2.5 py-1.5 shadow-inner">

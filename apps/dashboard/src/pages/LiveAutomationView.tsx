@@ -23,7 +23,8 @@ import {
   fetchWorker3Status,
   makeFollowupsDueNow,
   fetchCoordinatorStatus,
-  setCoordinatorMode
+  setCoordinatorMode,
+  setWorkerRandomOrder
 } from '../services/api';
 
 interface LiveAutomationViewProps {
@@ -192,6 +193,36 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   const [isScanning, setIsScanning] = useState(false);
   const [scanFeedback, setScanFeedback] = useState<string | null>(null);
 
+  // Per-worker Random Order states
+  const [worker1RandomOrder, setWorker1RandomOrder] = useState<boolean>(state.random_order ?? false);
+  const [worker3RandomOrder, setWorker3RandomOrder] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (state.random_order !== undefined) {
+      setWorker1RandomOrder(state.random_order);
+    }
+  }, [state.random_order]);
+
+  const handleToggleWorker1RandomOrder = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const checked = e.target.checked;
+    setWorker1RandomOrder(checked);
+    try {
+      await setWorkerRandomOrder('worker1', checked);
+    } catch (err) {
+      console.warn('Could not update Worker 1 random order:', err);
+    }
+  };
+
+  const handleToggleWorker3RandomOrder = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const checked = e.target.checked;
+    setWorker3RandomOrder(checked);
+    try {
+      await setWorkerRandomOrder('worker3', checked);
+    } catch (err) {
+      console.warn('Could not update Worker 3 random order:', err);
+    }
+  };
+
   // Fetch active Chrome profile
   useEffect(() => {
     fetchChromeProfiles().then((res) => {
@@ -216,7 +247,12 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
             setIsScanning(false);
           }
         }
-        if (w3) setWorker3Status(w3);
+        if (w3) {
+          setWorker3Status(w3);
+          if (w3.random_order !== undefined) {
+            setWorker3RandomOrder(w3.random_order);
+          }
+        }
         if (coord) setCoordinatorStatus(coord);
       } catch (e) {}
     };
@@ -228,7 +264,7 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   const handleStartWorker3 = async () => {
     try {
       setWorker3ActionLoading(true);
-      await startWorker3(worker3BatchLimit, 15);
+      await startWorker3(worker3BatchLimit, 15, worker3RandomOrder);
       const updated = await fetchWorker3Status();
       setWorker3Status(updated);
       const coord = await fetchCoordinatorStatus();
@@ -735,6 +771,27 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                   @{state.current_contact.username}
                 </span>
               )}
+
+              {/* Worker 1 Random Order Toggle */}
+              <label
+                className={`flex items-center space-x-1.5 border rounded-xl px-2.5 py-1 shadow-inner cursor-pointer select-none transition-all ${
+                  worker1RandomOrder
+                    ? 'bg-indigo-500/20 border-indigo-500/60 text-indigo-200'
+                    : 'bg-gray-900/90 border-gray-800 text-gray-400 hover:border-gray-700'
+                }`}
+                title="Randomize contact/task claiming order for Worker 1 (Outreach). Can toggle before start or while running/paused."
+              >
+                <input
+                  type="checkbox"
+                  checked={worker1RandomOrder}
+                  onChange={handleToggleWorker1RandomOrder}
+                  className="w-3 h-3 accent-indigo-500 rounded cursor-pointer"
+                />
+                <span className="text-[11px] font-semibold flex items-center gap-1">
+                  <span>🎲</span>
+                  <span>Random Order</span>
+                </span>
+              </label>
 
               {/* Individual Worker 1 Start / Pause Controls */}
               {state.status === 'RUNNING' && !state.is_paused ? (
@@ -1818,6 +1875,27 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
                 <span className="text-gray-600 px-1">•</span>
                 Sent: <strong className="text-white font-bold">{worker3Status?.batch_sent_count || 0}</strong>
               </span>
+
+              {/* Worker 3 Random Order Toggle */}
+              <label
+                className={`flex items-center space-x-1.5 border rounded-xl px-2.5 py-1 shadow-inner cursor-pointer select-none transition-all ${
+                  worker3RandomOrder
+                    ? 'bg-amber-500/20 border-amber-500/60 text-amber-200'
+                    : 'bg-gray-900/90 border-gray-800 text-gray-400 hover:border-gray-700'
+                }`}
+                title="Randomize follow-up contact/task claiming order for Worker 3. Can toggle before start or while running/paused."
+              >
+                <input
+                  type="checkbox"
+                  checked={worker3RandomOrder}
+                  onChange={handleToggleWorker3RandomOrder}
+                  className="w-3 h-3 accent-amber-500 rounded cursor-pointer"
+                />
+                <span className="text-[11px] font-semibold flex items-center gap-1">
+                  <span>🎲</span>
+                  <span>Random Order</span>
+                </span>
+              </label>
 
               {/* Individual Worker 3 Start / Pause Controls in Deck Header */}
               {worker3Status?.status === 'RUNNING' && !worker3Status?.is_paused ? (

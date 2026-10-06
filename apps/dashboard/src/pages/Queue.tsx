@@ -8,7 +8,7 @@ import {
   Edit3, Pause, Save
 } from 'lucide-react';
 import { Task, TaskStatus, LiveAutomationState } from '../types';
-import { retryTask, cancelTask, retryAllTasks, deleteTask, confirmFollowups, cancelFollowups, updateTask, toggleTaskPause, updateContactMessages, updateFollowupSchedule } from '../services/api';
+import { retryTask, cancelTask, retryAllTasks, deleteTask, confirmFollowups, cancelFollowups, updateTask, toggleTaskPause, bulkSetTaskSelection, updateContactMessages, updateFollowupSchedule } from '../services/api';
 import { DateFilterMode, matchesDateFilter, formatDisplayDate, toDatetimeLocalValue } from '../utils/date';
 import { getStatusBadgeClass } from '../components/common/StatusBadge';
 
@@ -258,6 +258,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [isRetryingAll, setIsRetryingAll] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isBulkSelecting, setIsBulkSelecting] = useState(false);
 
   // Pagination state
   const [pageSize, setPageSize] = useState<number>(25);
@@ -517,6 +518,51 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
       alert(`Failed to cancel follow-ups: ${e.message}`);
     } finally {
       setIsConfirmingFollowups(false);
+    }
+  };
+
+  const handleTogglePersonSelection = async (task: Task) => {
+    try {
+      setActionLoadingId(task.id);
+      const willBeSelected = task.status === 'PAUSED';
+      await bulkSetTaskSelection([task.id], willBeSelected);
+      await onRefresh();
+    } catch (e: any) {
+      alert(`Could not update selection: ${e.message}`);
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  const handleBulkIncludePage = async (pageTasks: Task[]) => {
+    const eligibleIds = pageTasks
+      .filter((t) => t.status !== 'COMPLETED' && t.status !== 'CANCELLED')
+      .map((t) => t.id);
+    if (eligibleIds.length === 0) return;
+    try {
+      setIsBulkSelecting(true);
+      await bulkSetTaskSelection(eligibleIds, true);
+      await onRefresh();
+    } catch (e: any) {
+      alert(`Could not include tasks: ${e.message}`);
+    } finally {
+      setIsBulkSelecting(false);
+    }
+  };
+
+  const handleBulkExcludePage = async (pageTasks: Task[]) => {
+    const eligibleIds = pageTasks
+      .filter((t) => t.status !== 'COMPLETED' && t.status !== 'CANCELLED')
+      .map((t) => t.id);
+    if (eligibleIds.length === 0) return;
+    try {
+      setIsBulkSelecting(true);
+      await bulkSetTaskSelection(eligibleIds, false);
+      await onRefresh();
+    } catch (e: any) {
+      alert(`Could not exclude tasks: ${e.message}`);
+    } finally {
+      setIsBulkSelecting(false);
     }
   };
 
@@ -1229,29 +1275,102 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
         </div>
       )}
 
+      {/* Person Queue Selection Control Panel (Upcoming / All) */}
+      {(viewMode === 'UPCOMING' || viewMode === 'ALL') && (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-gradient-to-r from-[#061d15] via-[#08231a] to-[#061d15] border border-[#123529] p-4 rounded-2xl shadow-xl backdrop-blur-md">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-xl bg-[#d49237]/15 border border-[#d49237]/35 flex items-center justify-center shrink-0">
+              <Users className="w-5 h-5 text-[#e5a84b]" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-white flex items-center space-x-2">
+                <span>Person / Contact Selection</span>
+                <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                  {readyCount} Active (Ready)
+                </span>
+                {pausedCount > 0 && (
+                  <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                    {pausedCount} Deselected (Paused)
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-gray-300 mt-0.5">
+                Tick or untick any person to include or leave them out from worker dispatch. You can pause workers and edit selections anytime.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => handleBulkIncludePage(paginatedTasks)}
+              disabled={isBulkSelecting}
+              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-700/80 hover:bg-emerald-600 text-white border border-emerald-500/40 shadow-sm transition cursor-pointer disabled:opacity-50"
+              title="Select and include all eligible contacts on this page"
+            >
+              <CheckSquare className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Select / Include All Page</span>
+            </button>
+
+            <button
+              onClick={() => handleBulkExcludePage(paginatedTasks)}
+              disabled={isBulkSelecting}
+              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-700/80 hover:bg-amber-600 text-white border border-amber-500/40 shadow-sm transition cursor-pointer disabled:opacity-50"
+              title="Deselect and exclude all eligible contacts on this page"
+            >
+              <Square className="w-3.5 h-3.5 text-amber-300" />
+              <span>Deselect / Exclude All Page</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main Queue Table */}
       <div className="bg-[#08231a]/70 border border-gray-800/90 rounded-2xl shadow-2xl overflow-hidden backdrop-blur-md">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse min-w-[960px]">
             <thead>
               <tr className="border-b border-gray-800 bg-gray-950/90 text-[11px] font-bold uppercase tracking-wider text-gray-400">
-                {viewMode === 'ISSUES' && (
+                {viewMode !== 'DONE' && (
                   <th className="py-3.5 px-3 w-[4%] text-center">
-                    <button
-                      onClick={() => handleSelectAll(paginatedTasks.map((t) => t.id))}
-                      className="text-gray-400 hover:text-white transition cursor-pointer"
-                      title={
-                        paginatedTasks.length > 0 && paginatedTasks.every((t) => selectedTaskIds.has(t.id))
-                          ? 'Deselect All on Page'
-                          : 'Select All on Page'
-                      }
-                    >
-                      {paginatedTasks.length > 0 && paginatedTasks.every((t) => selectedTaskIds.has(t.id)) ? (
-                        <CheckSquare className="w-4 h-4 text-amber-400" />
-                      ) : (
-                        <Square className="w-4 h-4 text-gray-500" />
-                      )}
-                    </button>
+                    {viewMode === 'ISSUES' ? (
+                      <button
+                        onClick={() => handleSelectAll(paginatedTasks.map((t) => t.id))}
+                        className="text-gray-400 hover:text-white transition cursor-pointer"
+                        title={
+                          paginatedTasks.length > 0 && paginatedTasks.every((t) => selectedTaskIds.has(t.id))
+                            ? 'Deselect All on Page'
+                            : 'Select All on Page'
+                        }
+                      >
+                        {paginatedTasks.length > 0 && paginatedTasks.every((t) => selectedTaskIds.has(t.id)) ? (
+                          <CheckSquare className="w-4 h-4 text-amber-400" />
+                        ) : (
+                          <Square className="w-4 h-4 text-gray-500" />
+                        )}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          const eligible = paginatedTasks.filter((t) => t.status !== 'COMPLETED' && t.status !== 'CANCELLED');
+                          const allActive = eligible.length > 0 && eligible.every((t) => t.status !== 'PAUSED');
+                          if (allActive) {
+                            handleBulkExcludePage(paginatedTasks);
+                          } else {
+                            handleBulkIncludePage(paginatedTasks);
+                          }
+                        }}
+                        disabled={isBulkSelecting}
+                        className="text-gray-400 hover:text-white transition cursor-pointer disabled:opacity-50"
+                        title="Toggle select / include or deselect / exclude all contacts on this page"
+                      >
+                        {paginatedTasks.length > 0 &&
+                        paginatedTasks.filter((t) => t.status !== 'COMPLETED' && t.status !== 'CANCELLED').every((t) => t.status !== 'PAUSED') ? (
+                          <CheckSquare className="w-4 h-4 text-emerald-400" />
+                        ) : (
+                          <Square className="w-4 h-4 text-gray-500" />
+                        )}
+                      </button>
+                    )}
                   </th>
                 )}
                 <th className="py-3.5 px-4 w-[8%] text-center">
@@ -1303,20 +1422,46 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                   const isDoneInRun = runCompletedTaskIds.has(t.id) || (currentRunId && t.run_id === currentRunId);
 
                   return (
-                    <tr key={t.id} className="hover:bg-gray-800/35 transition-colors group">
-                      {/* Selection Checkbox in ISSUES mode */}
-                      {viewMode === 'ISSUES' && (
+                    <tr
+                      key={t.id}
+                      className={`transition-colors group ${
+                        t.status === 'PAUSED'
+                          ? 'opacity-70 bg-gray-950/40 hover:bg-gray-900/50 hover:opacity-100'
+                          : 'hover:bg-gray-800/35'
+                      }`}
+                    >
+                      {/* Selection Checkbox for all non-done modes */}
+                      {viewMode !== 'DONE' && (
                         <td className="py-4 px-3 align-top text-center">
-                          <button
-                            onClick={() => handleToggleSelect(t.id)}
-                            className="text-gray-400 hover:text-white transition cursor-pointer pt-0.5"
-                          >
-                            {selectedTaskIds.has(t.id) ? (
-                              <CheckSquare className="w-4 h-4 text-amber-400" />
-                            ) : (
-                              <Square className="w-4 h-4 text-gray-600 hover:text-gray-400" />
-                            )}
-                          </button>
+                          {viewMode === 'ISSUES' ? (
+                            <button
+                              onClick={() => handleToggleSelect(t.id)}
+                              className="text-gray-400 hover:text-white transition cursor-pointer pt-0.5"
+                            >
+                              {selectedTaskIds.has(t.id) ? (
+                                <CheckSquare className="w-4 h-4 text-amber-400" />
+                              ) : (
+                                <Square className="w-4 h-4 text-gray-600 hover:text-gray-400" />
+                              )}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleTogglePersonSelection(t)}
+                              disabled={actionLoadingId === t.id || isBulkSelecting}
+                              className="text-gray-400 hover:text-white transition cursor-pointer pt-0.5 disabled:opacity-50"
+                              title={
+                                t.status === 'PAUSED'
+                                  ? 'Contact Deselected / Excluded. Click to Select & Include in dispatch queue.'
+                                  : 'Contact Selected / Active. Click to Deselect & Exclude from dispatch queue.'
+                              }
+                            >
+                              {t.status === 'PAUSED' ? (
+                                <Square className="w-4 h-4 text-gray-600 hover:text-emerald-400" />
+                              ) : (
+                                <CheckSquare className="w-4 h-4 text-emerald-400 hover:text-amber-400" />
+                              )}
+                            </button>
+                          )}
                         </td>
                       )}
 
@@ -1441,7 +1586,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                           ) : (
                             <Clock className="w-3 h-3 text-sky-400" />
                           )}
-                          <span>{t.status.replace('_', ' ')}</span>
+                          <span>{t.status === 'PAUSED' ? 'Excluded / Paused' : t.status.replace('_', ' ')}</span>
                         </span>
 
                         <div className="text-[10px] text-gray-400 font-mono pl-1">
@@ -1597,7 +1742,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                 })
               ) : (
                 <tr>
-                  <td colSpan={viewMode === 'ISSUES' ? 8 : 7} className="py-16 text-center text-gray-400">
+                  <td colSpan={viewMode !== 'DONE' ? 8 : 7} className="py-16 text-center text-gray-400">
                     <div className="max-w-sm mx-auto space-y-2">
                       <ListOrdered className="w-8 h-8 text-gray-600 mx-auto" />
                       <div className="font-bold text-white text-sm">

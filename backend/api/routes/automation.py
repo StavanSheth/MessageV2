@@ -21,18 +21,26 @@ router = APIRouter(prefix="/api/automation", tags=["automation"])
 class StartAutomationRequest(BaseModel):
     batch_limit: Optional[int] = None
     delay_seconds: Optional[int] = 15
+    random_order: Optional[bool] = False
+    random_order_worker1: Optional[bool] = None
+    random_order_worker3: Optional[bool] = None
+
+class SetRandomOrderRequest(BaseModel):
+    enabled: bool
 
 @router.post("/start")
 async def start_automation(req: Optional[StartAutomationRequest] = None):
-    """Start the Instagram worker with optional batch limit and delay."""
+    """Start the Instagram worker with optional batch limit, delay, and random order."""
     try:
         batch_limit = req.batch_limit if req else None
         delay_seconds = req.delay_seconds if req else 15
-        await instagram_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds)
+        random_order = req.random_order if (req and req.random_order is not None) else None
+        await instagram_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds, random_order=random_order)
         return {
             "status": "started",
             "batch_limit": batch_limit,
-            "delay_seconds": delay_seconds
+            "delay_seconds": delay_seconds,
+            "random_order": instagram_worker.random_order
         }
     except Exception as e:
         raise HTTPException(500, f"Failed to start worker: {str(e)}")
@@ -250,12 +258,14 @@ async def start_worker3(req: Optional[StartAutomationRequest] = None):
     try:
         batch_limit = req.batch_limit if req else None
         delay_seconds = req.delay_seconds if req else 15
-        await followup_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds)
+        random_order = req.random_order if (req and req.random_order is not None) else None
+        await followup_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds, random_order=random_order)
         return {
             "status": "started",
             "worker_id": "WORKER-03",
             "batch_limit": batch_limit,
-            "delay_seconds": delay_seconds
+            "delay_seconds": delay_seconds,
+            "random_order": followup_worker.random_order
         }
     except Exception as e:
         raise HTTPException(500, f"Failed to start Worker 3: {str(e)}")
@@ -369,6 +379,8 @@ async def start_all_workers(req: Optional[StartAutomationRequest] = None):
 
     batch_limit = req.batch_limit if req else None
     delay_seconds = req.delay_seconds if req else 15
+    w1_rand = req.random_order_worker1 if (req and req.random_order_worker1 is not None) else (req.random_order if (req and req.random_order is not None) else None)
+    w3_rand = req.random_order_worker3 if (req and req.random_order_worker3 is not None) else (req.random_order if (req and req.random_order is not None) else None)
 
     results = {}
 
@@ -399,33 +411,57 @@ async def start_all_workers(req: Optional[StartAutomationRequest] = None):
     mode = coordinator.mode
     if mode == "FOLLOWUP_ONLY":
         try:
-            await followup_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds)
-            results["worker3"] = {"status": "started"}
+            await followup_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds, random_order=w3_rand)
+            results["worker3"] = {"status": "started", "random_order": followup_worker.random_order}
         except Exception as e:
             results["worker3"] = {"error": str(e)}
     elif mode == "COLD_ONLY":
         try:
-            await instagram_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds)
-            results["worker1"] = {"status": "started"}
+            await instagram_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds, random_order=w1_rand)
+            results["worker1"] = {"status": "started", "random_order": instagram_worker.random_order}
         except Exception as e:
             results["worker1"] = {"error": str(e)}
     else:  # BALANCED or MANUAL
         if fu_due > 0:
             logger.info(f"[AllWorkers] Priority: {fu_due} follow-ups are due. Starting Worker 3 first...")
             try:
-                await followup_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds)
-                results["worker3"] = {"status": "started", "priority": "followup"}
+                await followup_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds, random_order=w3_rand)
+                results["worker3"] = {"status": "started", "priority": "followup", "random_order": followup_worker.random_order}
             except Exception as e:
                 results["worker3"] = {"error": str(e)}
         else:
             logger.info(f"[AllWorkers] Priority: No follow-ups due ({cold_due} cold outreach due). Starting Worker 1...")
             try:
-                await instagram_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds)
-                results["worker1"] = {"status": "started", "priority": "outreach"}
+                await instagram_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds, random_order=w1_rand)
+                results["worker1"] = {"status": "started", "priority": "outreach", "random_order": instagram_worker.random_order}
             except Exception as e:
                 results["worker1"] = {"error": str(e)}
 
     return {"status": "started_all", "results": results}
+
+
+@router.post("/random_order")
+@router.post("/all/random_order")
+async def set_all_random_order(req: SetRandomOrderRequest):
+    from backend.workers.instagram_worker import instagram_worker
+    from backend.workers.followup_worker import followup_worker
+    instagram_worker.set_random_order(req.enabled)
+    followup_worker.set_random_order(req.enabled)
+    return {"status": "ok", "random_order": req.enabled}
+
+
+@router.post("/worker1/random_order")
+async def set_worker1_random_order(req: SetRandomOrderRequest):
+    from backend.workers.instagram_worker import instagram_worker
+    instagram_worker.set_random_order(req.enabled)
+    return {"status": "ok", "worker_id": "WORKER-01", "random_order": req.enabled}
+
+
+@router.post("/worker3/random_order")
+async def set_worker3_random_order(req: SetRandomOrderRequest):
+    from backend.workers.followup_worker import followup_worker
+    followup_worker.set_random_order(req.enabled)
+    return {"status": "ok", "worker_id": "WORKER-03", "random_order": req.enabled}
 
 
 @router.post("/all/pause")

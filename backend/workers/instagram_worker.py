@@ -54,6 +54,7 @@ class InstagramWorker:
         self._task: Optional[asyncio.Task] = None
         self._start_time: Optional[datetime] = None
         self.last_scan_at: Optional[str] = None
+        self.random_order: bool = False
 
     @property
     def is_running(self) -> bool:
@@ -63,11 +64,18 @@ class InstagramWorker:
     def is_paused(self) -> bool:
         return self._paused
 
+    def set_random_order(self, enabled: bool) -> None:
+        self.random_order = enabled
+        logger.info(f"[{WORKER_NAME}] Random order selection set to: {enabled}")
+
     # ───────────────────────────────────────────────
     # Control methods
     # ───────────────────────────────────────────────
 
-    async def start(self, batch_limit: Optional[int] = None, delay_seconds: Optional[int] = None) -> None:
+    async def start(self, batch_limit: Optional[int] = None, delay_seconds: Optional[int] = None, random_order: Optional[bool] = None) -> None:
+        if random_order is not None:
+            self.random_order = random_order
+
         if self._paused or self.status == WorkerStatus.PAUSED:
             if batch_limit is not None and batch_limit > 0:
                 self.batch_limit = batch_limit
@@ -205,7 +213,8 @@ class InstagramWorker:
             "delay_seconds": self.delay_between_messages,
             "elapsed_seconds": (datetime.now(timezone.utc) - self._start_time).seconds if self._start_time else 0,
             "last_scan_at": self.last_scan_at,
-            "last_scanned_at": self.last_scan_at
+            "last_scanned_at": self.last_scan_at,
+            "random_order": self.random_order
         }
 
     # ───────────────────────────────────────────────
@@ -481,7 +490,7 @@ class InstagramWorker:
                 st.worker_id = None
             if stuck_tasks:
                 await session.commit()
-            return await repo.claim_next_ready(WORKER_ID, task_types=["MESSAGE"])
+            return await repo.claim_next_ready(WORKER_ID, task_types=["MESSAGE"], random_order=self.random_order)
 
     async def _process_task(self, task, adapter: InstagramAdapter) -> None:
         task_id = task.id

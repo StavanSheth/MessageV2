@@ -20,6 +20,7 @@ import {
   resumeAllWorkers,
   stopAllWorkers,
   fetchAllWorkersStatus,
+  setWorkerRandomOrder,
   fetchContacts,
   fetchTasks,
   fetchSources,
@@ -47,6 +48,16 @@ export function App() {
   const [batchLimit, setBatchLimit] = useState<number | null>(5);
   const [customBatchInput, setCustomBatchInput] = useState<string>('8');
   const [isCustomBatch, setIsCustomBatch] = useState<boolean>(false);
+  const [isRandomOrder, setIsRandomOrder] = useState<boolean>(false);
+
+  const handleToggleRandomOrder = async (val: boolean) => {
+    setIsRandomOrder(val);
+    try {
+      await setWorkerRandomOrder('all', val);
+    } catch (e) {
+      console.warn('Could not update random order on active workers:', e);
+    }
+  };
 
   const handleSetBatchPreset = (val: number | null) => {
     setIsCustomBatch(false);
@@ -116,7 +127,7 @@ export function App() {
       } else if (limitOverride !== undefined) {
         activeLimit = limitOverride;
       }
-      await startAutomation({ batch_limit: activeLimit, delay_seconds: 15 });
+      await startAutomation({ batch_limit: activeLimit, delay_seconds: 15, random_order: isRandomOrder });
       await loadData();
     } catch (e: any) {
       alert(`Could not start automation: ${e.message}`);
@@ -160,7 +171,7 @@ export function App() {
       } else if (limitOverride !== undefined) {
         activeLimit = limitOverride;
       }
-      await startAllWorkers({ batch_limit: activeLimit, delay_seconds: 15 });
+      await startAllWorkers({ batch_limit: activeLimit, delay_seconds: 15, random_order: isRandomOrder });
       await loadData();
     } catch (e: any) {
       alert(`Could not start all workers: ${e.message}`);
@@ -227,6 +238,8 @@ export function App() {
         anyPaused={allWorkersStatus?.any_paused}
         activeWorkersCount={allWorkersStatus?.active_count}
         needsAttention={needsAttention}
+        isRandomOrder={isRandomOrder}
+        onToggleRandomOrder={handleToggleRandomOrder}
       />
 
       {/* Main Content Area */}

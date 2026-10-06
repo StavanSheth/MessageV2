@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Navbar } from './components/Navbar';
 import { AttentionCenter } from './components/AttentionCenter';
 import { LiveAutomationView } from './pages/LiveAutomationView';
@@ -50,6 +50,22 @@ export function App() {
   const [isCustomBatch, setIsCustomBatch] = useState<boolean>(false);
   const [isRandomOrder, setIsRandomOrder] = useState<boolean>(false);
 
+  // Mutation lock to prevent background intervals / in-flight polling from overwriting optimistic actions
+  const isMutatingRef = useRef<boolean>(false);
+  const lastMutationTimeRef = useRef<number>(0);
+
+  const markMutating = () => {
+    isMutatingRef.current = true;
+    lastMutationTimeRef.current = Date.now();
+  };
+
+  const finishMutating = () => {
+    setTimeout(async () => {
+      isMutatingRef.current = false;
+      await loadData(true);
+    }, 450);
+  };
+
   const handleToggleRandomOrder = async (val: boolean) => {
     setIsRandomOrder(val);
     try {
@@ -80,7 +96,7 @@ export function App() {
   };
 
   // Load backend state
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (force = false) => {
     try {
       const [st, cList, tList, sList, eList, allSt] = await Promise.all([
         fetchAutomationStatus().catch(() => null),
@@ -91,12 +107,15 @@ export function App() {
         fetchAllWorkersStatus().catch(() => null),
       ]);
 
-      if (st) setAutomationState(st);
+      const isRecentMutation = !force && (isMutatingRef.current || (Date.now() - lastMutationTimeRef.current < 1400));
+
+      if (st && !isRecentMutation) setAutomationState(st);
+      if (allSt && !isRecentMutation) setAllWorkersStatus(allSt);
+
       if (cList) setContacts(cList);
       if (tList) setTasks(tList);
       if (sList) setSources(sList);
       if (eList) setEvents(eList);
-      if (allSt) setAllWorkersStatus(allSt);
     } catch (e) {
       console.error('Error fetching dashboard data:', e);
     }
@@ -105,15 +124,21 @@ export function App() {
   // Real-time event handling via WebSocket
   const handleWsEvent = useCallback((event: EventLog) => {
     setEvents((prev) => [event, ...prev.slice(0, 199)]);
-    // Reload state on key status changes
-    loadData();
+    // Reload state on key status changes only if no mutation in progress
+    if (!isMutatingRef.current && Date.now() - lastMutationTimeRef.current >= 1400) {
+      loadData();
+    }
   }, [loadData]);
 
   const { isConnected: isWsConnected } = useWebSocket(handleWsEvent);
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 2500);
+    const interval = setInterval(() => {
+      if (!isMutatingRef.current && Date.now() - lastMutationTimeRef.current >= 1400) {
+        loadData();
+      }
+    }, 2500);
     return () => clearInterval(interval);
   }, [loadData]);
 
@@ -132,43 +157,57 @@ export function App() {
         alert("Notice: There are currently 0 contacts in READY status in the queue.\n\nPlease go to the Queue tab to select contacts or re-queue skipped tasks before starting.");
         return;
       }
+      markMutating();
+      setAutomationState((prev) => ({ ...prev, status: 'RUNNING', is_paused: false, is_running: true }));
+      setAllWorkersStatus((prev: any) => prev ? ({ ...prev, any_running: true, any_paused: false, active_count: Math.max((prev.active_count || 0), 1) }) : prev);
       await startAutomation({ batch_limit: activeLimit, delay_seconds: 15, random_order: isRandomOrder });
-      await loadData();
+      finishMutating();
     } catch (e: any) {
+      isMutatingRef.current = false;
       alert(`Could not start automation: ${e.message}`);
+      await loadData(true);
     }
   };
 
   const handlePause = async () => {
-    setAutomationState((prev) => ({ ...prev, status: 'PAUSED', is_paused: true }));
+    markMutating();
+    setAutomationState((prev) => ({ ...prev, status: 'PAUSED', is_paused: true, is_running: false }));
     setAllWorkersStatus((prev: any) => prev ? ({ ...prev, any_running: false, any_paused: true }) : prev);
     try {
       await pauseAutomation();
-      await loadData();
+      finishMutating();
     } catch (e: any) {
+      isMutatingRef.current = false;
       alert(`Could not pause automation: ${e.message}`);
+      await loadData(true);
     }
   };
 
   const handleResume = async () => {
-    setAutomationState((prev) => ({ ...prev, status: 'RUNNING', is_paused: false }));
+    markMutating();
+    setAutomationState((prev) => ({ ...prev, status: 'RUNNING', is_paused: false, is_running: true }));
     setAllWorkersStatus((prev: any) => prev ? ({ ...prev, any_running: true, any_paused: false }) : prev);
     try {
       await resumeAutomation();
-      await loadData();
+      finishMutating();
     } catch (e: any) {
+      isMutatingRef.current = false;
       alert(`Could not resume automation: ${e.message}`);
+      await loadData(true);
     }
   };
 
   const handleStop = async () => {
+    markMutating();
     setAutomationState((prev) => ({ ...prev, status: 'STOPPED', is_paused: false, is_running: false }));
     setAllWorkersStatus((prev: any) => prev ? ({ ...prev, any_running: false, any_paused: false, all_idle: true }) : prev);
     try {
       await stopAutomation();
-      await loadData();
+      finishMutating();
     } catch (e: any) {
+      isMutatingRef.current = false;
       alert(`Could not stop automation: ${e.message}`);
+      await loadData(true);
     }
   };
 
@@ -182,20 +221,25 @@ export function App() {
       } else if (limitOverride !== undefined) {
         activeLimit = limitOverride;
       }
+      markMutating();
       setAllWorkersStatus((prev: any) => ({
         ...prev,
         any_running: true,
         any_paused: false,
         active_count: 2
       }));
+      setAutomationState((prev) => ({ ...prev, status: 'RUNNING', is_paused: false, is_running: true }));
       await startAllWorkers({ batch_limit: activeLimit, delay_seconds: 15, random_order: isRandomOrder });
-      await loadData();
+      finishMutating();
     } catch (e: any) {
+      isMutatingRef.current = false;
       alert(`Could not start all workers: ${e.message}`);
+      await loadData(true);
     }
   };
 
   const handlePauseAll = async () => {
+    markMutating();
     setAllWorkersStatus((prev: any) => ({
       ...prev,
       any_running: false,
@@ -206,29 +250,35 @@ export function App() {
     setAutomationState((prev) => ({ ...prev, status: 'PAUSED', is_paused: true }));
     try {
       await pauseAllWorkers();
-      await loadData();
+      finishMutating();
     } catch (e: any) {
+      isMutatingRef.current = false;
       alert(`Could not pause all workers: ${e.message}`);
+      await loadData(true);
     }
   };
 
   const handleResumeAll = async () => {
+    markMutating();
     setAllWorkersStatus((prev: any) => ({
       ...prev,
       any_running: true,
       any_paused: false,
       active_count: 1
     }));
-    setAutomationState((prev) => ({ ...prev, status: 'RUNNING', is_paused: false }));
+    setAutomationState((prev) => ({ ...prev, status: 'RUNNING', is_paused: false, is_running: true }));
     try {
       await resumeAllWorkers();
-      await loadData();
+      finishMutating();
     } catch (e: any) {
+      isMutatingRef.current = false;
       alert(`Could not resume all workers: ${e.message}`);
+      await loadData(true);
     }
   };
 
   const handleStopAll = async () => {
+    markMutating();
     setAllWorkersStatus((prev: any) => ({
       ...prev,
       any_running: false,
@@ -240,9 +290,11 @@ export function App() {
     setAutomationState((prev) => ({ ...prev, status: 'STOPPED', is_paused: false, is_running: false }));
     try {
       await stopAllWorkers();
-      await loadData();
+      finishMutating();
     } catch (e: any) {
+      isMutatingRef.current = false;
       alert(`Could not stop all workers: ${e.message}`);
+      await loadData(true);
     }
   };
 

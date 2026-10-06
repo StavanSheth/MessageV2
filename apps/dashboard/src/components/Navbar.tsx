@@ -63,8 +63,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   isRandomOrder = false,
   onToggleRandomOrder,
 }) => {
-  const isRunning = Boolean((anyRunning ?? false) || workerStatus === 'RUNNING');
-  const isPaused = Boolean((anyPaused ?? false) || workerStatus === 'PAUSED');
+  const isMasterPaused = Boolean((anyPaused ?? false) || workerStatus === 'PAUSED');
+  const isMasterRunning = Boolean(!isMasterPaused && ((anyRunning ?? false) || workerStatus === 'RUNNING'));
 
   const PRESET_BATCHES = [1, 3, 5, 10, 25, 50, 100];
   const effectiveIsCustom = isCustomBatch !== undefined
@@ -135,17 +135,17 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider bg-gray-900 border border-gray-700">
             <span
               className={`w-2.5 h-2.5 rounded-full ${
-                isRunning
+                isMasterRunning
                   ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)] animate-pulse'
-                  : isPaused
+                  : isMasterPaused
                   ? 'bg-amber-400'
                   : 'bg-gray-500'
               }`}
             />
-            <span className={isRunning ? 'text-emerald-400' : isPaused ? 'text-amber-400' : 'text-gray-400'}>
-              {isRunning
+            <span className={isMasterRunning ? 'text-emerald-400' : isMasterPaused ? 'text-amber-400' : 'text-gray-400'}>
+              {isMasterRunning
                 ? (activeWorkersCount ? `${activeWorkersCount} ACTIVE` : 'RUNNING')
-                : isPaused
+                : isMasterPaused
                 ? 'PAUSED'
                 : 'IDLE'}
             </span>
@@ -250,21 +250,19 @@ export const Navbar: React.FC<NavbarProps> = ({
             <button
               type="button"
               onClick={() => {
-                if (isPaused && onResumeAll) {
-                  onResumeAll();
-                } else if (onStartAll) {
-                  onStartAll(activeBatchLimit);
-                } else if (isPaused) {
-                  onResume();
+                if (isMasterPaused) {
+                  if (onResumeAll) onResumeAll();
+                  else onResume();
                 } else {
-                  onStart(activeBatchLimit);
+                  if (onStartAll) onStartAll(activeBatchLimit);
+                  else onStart(activeBatchLimit);
                 }
               }}
               className="flex items-center space-x-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold shadow-md shadow-emerald-900/30 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-              title="Start or resume all automation agents"
+              title={isMasterPaused ? "Resume all paused automation agents" : "Start all automation agents"}
             >
               <Play className="w-3.5 h-3.5 fill-current text-white" />
-              <span>{isPaused ? 'Resume All' : 'Start / Resume All'}</span>
+              <span>{isMasterPaused ? 'Resume All' : 'Start All'}</span>
             </button>
 
             {/* Pause All Button */}
@@ -274,9 +272,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                 if (onPauseAll) onPauseAll();
                 else onPause();
               }}
-              disabled={!isRunning}
+              disabled={!isMasterRunning}
               className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer ${
-                isRunning
+                isMasterRunning
                   ? 'bg-amber-500 hover:bg-amber-400 text-gray-950 font-black border border-amber-300 shadow-amber-900/40 hover:scale-105'
                   : 'bg-gray-800/60 text-gray-500 border border-gray-700/50 cursor-not-allowed opacity-50'
               }`}
@@ -293,9 +291,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                 if (onStopAll) onStopAll();
                 else onStop();
               }}
-              disabled={!isRunning && !isPaused}
+              disabled={!isMasterRunning && !isMasterPaused}
               className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer ${
-                isRunning || isPaused
+                isMasterRunning || isMasterPaused
                   ? 'bg-rose-600 hover:bg-rose-500 text-white border border-rose-400 shadow-rose-900/40 hover:scale-105'
                   : 'bg-gray-800/60 text-gray-500 border border-gray-700/50 cursor-not-allowed opacity-50'
               }`}

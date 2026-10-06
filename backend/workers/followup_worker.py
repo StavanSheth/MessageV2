@@ -348,7 +348,7 @@ class FollowUpWorker:
                     self.status = WorkerStatus.IDLE
                     self.stage = AutomationStage.COMPLETED
                     await self._update_worker_db(status="IDLE", current_stage="COMPLETED")
-                    await coordinator.release_dm_lock(WORKER_ID)
+                    await coordinator.release_dm_lock(WORKER_ID, auto_resume=False)
                     await event_bus.publish_state(await self.health())
                     break
 
@@ -386,10 +386,11 @@ class FollowUpWorker:
             await self._update_worker_db(status="ERROR")
         finally:
             if not self._paused:
-                self.status = WorkerStatus.STOPPED
-                self.stage = AutomationStage.IDLE
+                if self.status != WorkerStatus.IDLE:
+                    self.status = WorkerStatus.STOPPED
+                    self.stage = AutomationStage.IDLE
+                    await self._update_worker_db(status="STOPPED", current_stage="IDLE")
                 await coordinator.release_dm_lock(WORKER_ID, auto_resume=False)
-                await self._update_worker_db(status="STOPPED", current_stage="IDLE")
                 await event_bus.publish_state(await self.health())
 
     async def _process_followup(self, task: Task, adapter: InstagramAdapter) -> None:

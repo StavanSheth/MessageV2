@@ -452,9 +452,10 @@ class InstagramWorker:
             await event_bus.publish_state(await self.health())
         finally:
             if not self._paused:
-                self.status = WorkerStatus.STOPPED
-                self.stage = AutomationStage.IDLE
-                await self._update_worker_db(status="STOPPED", current_stage="IDLE")
+                if self.status != WorkerStatus.IDLE:
+                    self.status = WorkerStatus.STOPPED
+                    self.stage = AutomationStage.IDLE
+                    await self._update_worker_db(status="STOPPED", current_stage="IDLE")
                 await event_bus.publish_state(await self.health())
 
     async def _check_login_loop(self, adapter: InstagramAdapter) -> None:

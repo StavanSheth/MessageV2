@@ -43,7 +43,7 @@ class DMCoordinator:
         """Clear preempted worker tracker so no worker auto-resumes on manual user action."""
         self.preempted_worker = None
 
-    async def release_dm_lock(self, worker_id: str, auto_resume: bool = True) -> None:
+    async def release_dm_lock(self, worker_id: str, auto_resume: bool = False) -> None:
         """Release the lock when worker idles or stops."""
         if self.active_sender == worker_id:
             logger.info(f"[Coordinator] DM Lock released by {worker_id} (auto_resume={auto_resume})")

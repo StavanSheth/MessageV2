@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Activity, CheckCircle2, ShieldCheck, Eye, Clock, 
   Send, AlertCircle, Sparkles, UserCheck, Terminal, Compass,
@@ -234,9 +234,29 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
     }).catch(() => {});
   }, []);
 
+  // Mutation lock to prevent background intervals / in-flight polling from overwriting optimistic actions
+  const isMutatingWorkerRef = useRef<boolean>(false);
+  const lastWorkerMutationRef = useRef<number>(0);
+
+  const markWorkerMutating = () => {
+    isMutatingWorkerRef.current = true;
+    lastWorkerMutationRef.current = Date.now();
+  };
+
+  const finishWorkerMutating = (fetchFn: () => Promise<void>) => {
+    setTimeout(async () => {
+      isMutatingWorkerRef.current = false;
+      await fetchFn();
+      onRefresh?.();
+    }, 450);
+  };
+
   // Poll Worker 2, Worker 3, and Coordinator status
   useEffect(() => {
-    const fetchAllStatus = async () => {
+    const fetchAllStatus = async (force = false) => {
+      if (!force && (isMutatingWorkerRef.current || Date.now() - lastWorkerMutationRef.current < 1400)) {
+        return;
+      }
       try {
         const [w2, w3, coord] = await Promise.all([
           fetchReplyScannerStatus().catch(() => null),
@@ -259,7 +279,11 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
       } catch (e) {}
     };
     fetchAllStatus();
-    const timer = setInterval(fetchAllStatus, 3000);
+    const timer = setInterval(() => {
+      if (!isMutatingWorkerRef.current && Date.now() - lastWorkerMutationRef.current >= 1400) {
+        fetchAllStatus();
+      }
+    }, 3000);
     return () => clearInterval(timer);
   }, [isScanning]);
 
@@ -274,12 +298,17 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
           await makeFollowupsDueNow(1);
         }
       }
+      markWorkerMutating();
+      setWorker3Status(prev => prev ? ({ ...prev, status: 'RUNNING', is_paused: false, is_running: true }) : prev);
       await startWorker3(worker3BatchLimit, 15, worker3RandomOrder);
-      const updated = await fetchWorker3Status();
-      setWorker3Status(updated);
-      const coord = await fetchCoordinatorStatus();
-      setCoordinatorStatus(coord);
+      finishWorkerMutating(async () => {
+        const updated = await fetchWorker3Status();
+        setWorker3Status(updated);
+        const coord = await fetchCoordinatorStatus();
+        setCoordinatorStatus(coord);
+      });
     } catch (e: any) {
+      isMutatingWorkerRef.current = false;
       alert(`Worker 3 Error: ${e.message}`);
     } finally {
       setWorker3ActionLoading(false);
@@ -287,90 +316,112 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   };
 
   const handlePauseWorker3 = async () => {
+    markWorkerMutating();
     setWorker3Status(prev => prev ? ({ ...prev, status: 'PAUSED', is_paused: true, is_running: false }) : prev);
     try {
       await pauseWorker3();
-      const updated = await fetchWorker3Status();
-      setWorker3Status(updated);
-      const coord = await fetchCoordinatorStatus().catch(() => null);
-      if (coord) setCoordinatorStatus(coord);
-      onRefresh?.();
+      finishWorkerMutating(async () => {
+        const updated = await fetchWorker3Status();
+        setWorker3Status(updated);
+        const coord = await fetchCoordinatorStatus().catch(() => null);
+        if (coord) setCoordinatorStatus(coord);
+      });
     } catch (e: any) {
+      isMutatingWorkerRef.current = false;
       alert(`Worker 3 Pause Error: ${e.message}`);
     }
   };
 
   const handleResumeWorker3 = async () => {
+    markWorkerMutating();
     setWorker3Status(prev => prev ? ({ ...prev, status: 'RUNNING', is_paused: false, is_running: true }) : prev);
     try {
       await resumeWorker3();
-      const updated = await fetchWorker3Status();
-      setWorker3Status(updated);
-      const coord = await fetchCoordinatorStatus().catch(() => null);
-      if (coord) setCoordinatorStatus(coord);
-      onRefresh?.();
+      finishWorkerMutating(async () => {
+        const updated = await fetchWorker3Status();
+        setWorker3Status(updated);
+        const coord = await fetchCoordinatorStatus().catch(() => null);
+        if (coord) setCoordinatorStatus(coord);
+      });
     } catch (e: any) {
+      isMutatingWorkerRef.current = false;
       alert(`Worker 3 Resume Error: ${e.message}`);
     }
   };
 
   const handleStartWorker2 = async () => {
+    markWorkerMutating();
+    setScannerStatus(prev => prev ? ({ ...prev, status: 'RUNNING', is_paused: false, is_running: true }) : prev);
     try {
       await startRepliesWorker();
-      const updated = await fetchReplyScannerStatus();
-      setScannerStatus(updated);
-      onRefresh?.();
+      finishWorkerMutating(async () => {
+        const updated = await fetchReplyScannerStatus();
+        setScannerStatus(updated);
+      });
     } catch (e: any) {
+      isMutatingWorkerRef.current = false;
       alert(`Worker 2 Error: ${e.message}`);
     }
   };
 
   const handlePauseWorker2 = async () => {
+    markWorkerMutating();
     setScannerStatus(prev => prev ? ({ ...prev, status: 'PAUSED', is_paused: true, is_running: false }) : prev);
     try {
       await pauseRepliesWorker();
-      const updated = await fetchReplyScannerStatus();
-      setScannerStatus(updated);
-      onRefresh?.();
+      finishWorkerMutating(async () => {
+        const updated = await fetchReplyScannerStatus();
+        setScannerStatus(updated);
+      });
     } catch (e: any) {
+      isMutatingWorkerRef.current = false;
       alert(`Worker 2 Pause Error: ${e.message}`);
     }
   };
 
   const handleResumeWorker2 = async () => {
+    markWorkerMutating();
     setScannerStatus(prev => prev ? ({ ...prev, status: 'RUNNING', is_paused: false, is_running: true }) : prev);
     try {
       await resumeRepliesWorker();
-      const updated = await fetchReplyScannerStatus();
-      setScannerStatus(updated);
-      onRefresh?.();
+      finishWorkerMutating(async () => {
+        const updated = await fetchReplyScannerStatus();
+        setScannerStatus(updated);
+      });
     } catch (e: any) {
+      isMutatingWorkerRef.current = false;
       alert(`Worker 2 Resume Error: ${e.message}`);
     }
   };
 
   const handleStopWorker2 = async () => {
+    markWorkerMutating();
     setScannerStatus(prev => prev ? ({ ...prev, status: 'IDLE', is_paused: false, is_running: false }) : prev);
     try {
       await stopRepliesWorker();
-      const updated = await fetchReplyScannerStatus();
-      setScannerStatus(updated);
-      onRefresh?.();
+      finishWorkerMutating(async () => {
+        const updated = await fetchReplyScannerStatus();
+        setScannerStatus(updated);
+      });
     } catch (e: any) {
+      isMutatingWorkerRef.current = false;
       alert(`Worker 2 Stop Error: ${e.message}`);
     }
   };
 
   const handleStopWorker3 = async () => {
+    markWorkerMutating();
     setWorker3Status(prev => prev ? ({ ...prev, status: 'STOPPED', is_paused: false, is_running: false }) : prev);
     try {
       await stopWorker3();
-      const updated = await fetchWorker3Status();
-      setWorker3Status(updated);
-      const coord = await fetchCoordinatorStatus().catch(() => null);
-      if (coord) setCoordinatorStatus(coord);
-      onRefresh?.();
+      finishWorkerMutating(async () => {
+        const updated = await fetchWorker3Status();
+        setWorker3Status(updated);
+        const coord = await fetchCoordinatorStatus().catch(() => null);
+        if (coord) setCoordinatorStatus(coord);
+      });
     } catch (e: any) {
+      isMutatingWorkerRef.current = false;
       alert(`Worker 3 Stop Error: ${e.message}`);
     }
   };

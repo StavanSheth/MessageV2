@@ -609,6 +609,11 @@ class InstagramWorker:
                     logger.warning("[Worker] Browser closed/disconnected during open_profile. Halting worker loop.")
                     self._stop_requested = True
                     self.status = WorkerStatus.STOPPED
+
+                if result_code == ResultCode.PROFILE_NOT_FOUND:
+                    await self._fail_task(task_id, result_code, reason, new_status=TaskStatus.MANUAL_REVIEW, retryable=False)
+                    return
+
                 await self._fail_task(task_id, result_code, reason)
                 return
 
@@ -622,6 +627,12 @@ class InstagramWorker:
             # ── Extract Profile ───────────────────────────────
             await self._set_stage(AutomationStage.EXTRACTING_PROFILE, contact.name, task_id=task_id)
             extracted = await adapter.extract_profile()
+
+            if extracted.get("not_found"):
+                not_found_reason = "Profile page not found (Sorry, this page isn't available. The link you followed may be broken, or the page may have been removed.)"
+                await self._fail_task(task_id, ResultCode.PROFILE_NOT_FOUND, not_found_reason,
+                                      new_status=TaskStatus.MANUAL_REVIEW, retryable=False)
+                return
 
             # ── Verify ───────────────────────────────────────
             await self._set_stage(AutomationStage.VERIFYING, contact.name, task_id=task_id)

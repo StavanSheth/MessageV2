@@ -440,7 +440,10 @@ class FollowUpWorker:
                 logger.warning(f"[Worker 3] Failed to open profile {contact.instagram_url}: {reason}")
                 async with AsyncSessionLocal() as session:
                     t_repo = TaskRepository(session)
-                    await t_repo.update_status(task_id, TaskStatus.RETRY_WAIT)
+                    if result_code == ResultCode.PROFILE_NOT_FOUND:
+                        await t_repo.update_status(task_id, TaskStatus.MANUAL_REVIEW, manual_review_reason=f"[{result_code.value}] {reason}")
+                    else:
+                        await t_repo.update_status(task_id, TaskStatus.RETRY_WAIT)
                 self.current_task_id = None
                 return
 

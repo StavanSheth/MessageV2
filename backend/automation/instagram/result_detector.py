@@ -8,8 +8,12 @@ class ResultDetector:
         if (
             status_code == 404
             or "sorry, this page isn't available" in lower_text
+            or "sorry, this page isn’t available" in lower_text
+            or "page isn't available" in lower_text
+            or "page isn’t available" in lower_text
             or "sorry, this page is not available" in lower_text
             or "page not found" in lower_text
+            or "account not found" in lower_text
             or "page may have been removed" in lower_text
             or "link you followed may be broken" in lower_text
             or "404 not found" in lower_text

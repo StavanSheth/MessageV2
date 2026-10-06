@@ -545,6 +545,68 @@ async function handleCommand(msg) {
     // Quiet background navigation: do NOT set active: true!
     await chrome.tabs.update(tab.id, { url: targetUrl });
     await waitForTabLoaded(tab.id, 20000);
+
+    // Verify page state after navigation (detect 404 / page unavailable / broken link)
+    try {
+      const [checkResult] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          const bodyText = (document.body ? document.body.innerText : "").toLowerCase();
+          const titleText = (document.title || "").toLowerCase();
+          const isNotFound =
+            bodyText.includes("sorry, this page isn't available") ||
+            bodyText.includes("sorry, this page isn’t available") ||
+            bodyText.includes("page isn't available") ||
+            bodyText.includes("page isn’t available") ||
+            bodyText.includes("page is not available") ||
+            bodyText.includes("link you followed may be broken") ||
+            bodyText.includes("page may have been removed") ||
+            bodyText.includes("page not found") ||
+            titleText.includes("page not found");
+
+          const isLogin =
+            window.location.pathname.includes("/accounts/login") ||
+            (bodyText.includes("log in") && (bodyText.includes("password") || bodyText.includes("username")));
+
+          const isChallenge =
+            window.location.pathname.includes("/challenge/") ||
+            window.location.pathname.includes("/two_factor/") ||
+            bodyText.includes("suspicious login") ||
+            bodyText.includes("confirm your info");
+
+          return { isNotFound, isLogin, isChallenge, url: window.location.href };
+        }
+      });
+
+      const pageState = checkResult?.result;
+      if (pageState?.isNotFound) {
+        return {
+          success: false,
+          not_found: true,
+          error: "Profile not found: Sorry, this page isn't available. The link you followed may be broken, or the page may have been removed.",
+          url: targetUrl
+        };
+      }
+      if (pageState?.isLogin) {
+        return {
+          success: false,
+          login_required: true,
+          error: "Instagram login required",
+          url: targetUrl
+        };
+      }
+      if (pageState?.isChallenge) {
+        return {
+          success: false,
+          challenge_required: true,
+          error: "Instagram challenge/verification required",
+          url: targetUrl
+        };
+      }
+    } catch (e) {
+      // Non-fatal if script execution restricted on internal page
+    }
+
     return { success: true, url: targetUrl };
   }
 
@@ -553,6 +615,25 @@ async function handleCommand(msg) {
       target: { tabId: tab.id },
       func: () => {
         const bodyText = document.body ? document.body.innerText : "";
+        const lowerBody = bodyText.toLowerCase();
+
+        const notFound =
+          lowerBody.includes("sorry, this page isn't available") ||
+          lowerBody.includes("sorry, this page isn’t available") ||
+          lowerBody.includes("page isn't available") ||
+          lowerBody.includes("page isn’t available") ||
+          lowerBody.includes("link you followed may be broken") ||
+          lowerBody.includes("page may have been removed");
+
+        if (notFound) {
+          return {
+            username: null,
+            followers: 0,
+            url: window.location.href,
+            not_found: true
+          };
+        }
+
         let followers = 0;
         const followerMatch = bodyText.match(/([\d,\.kKmM]+)\s+followers/i);
         if (followerMatch) {
@@ -568,7 +649,8 @@ async function handleCommand(msg) {
         return {
           username,
           followers,
-          url: window.location.href
+          url: window.location.href,
+          not_found: false
         };
       }
     });

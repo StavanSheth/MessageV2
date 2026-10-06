@@ -115,13 +115,17 @@ class InstagramAdapter:
             page_text_lower = page_text.lower()
             if (
                 "sorry, this page isn't available" in page_text_lower
+                or "sorry, this page isn’t available" in page_text_lower
+                or "page isn't available" in page_text_lower
+                or "page isn’t available" in page_text_lower
                 or "sorry, this page is not available" in page_text_lower
                 or "link you followed may be broken" in page_text_lower
                 or "page may have been removed" in page_text_lower
                 or "page not found" in page_text_lower
+                or "account not found" in page_text_lower
                 or "404 not found" in page_text_lower
             ):
-                return False, ResultCode.PROFILE_NOT_FOUND, "Profile page not found (Sorry, this page isn't available)"
+                return False, ResultCode.PROFILE_NOT_FOUND, "Profile page not found (Sorry, this page isn't available. The link you followed may be broken, or the page may have been removed.)"
 
             if "this account is private" in page_text_lower or "account is private" in page_text_lower:
                 return False, ResultCode.PROFILE_PRIVATE, "Account is private"

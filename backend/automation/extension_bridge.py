@@ -131,9 +131,20 @@ class ExtensionBridgeManager:
                 clean_user = profile_url.lstrip("@").strip("/").strip()
                 profile_url = f"https://www.instagram.com/{clean_user}/"
             res = await self.send_command("OPEN_PROFILE", {"url": profile_url}, timeout=25.0)
+            if res.get("not_found"):
+                return False, ResultCode.PROFILE_NOT_FOUND, res.get("error", "Profile not found: Sorry, this page isn't available. The link you followed may be broken, or the page may have been removed.")
+            if res.get("login_required"):
+                return False, ResultCode.LOGIN_REQUIRED, res.get("error", "Instagram login required")
+            if res.get("challenge_required"):
+                return False, ResultCode.CHALLENGE_REQUIRED, res.get("error", "Instagram challenge/verification required")
             if res.get("success"):
                 return True, ResultCode.SUCCESS, "Profile opened"
-            return False, ResultCode.NETWORK_ERROR, res.get("error", "Failed to open profile")
+
+            err = res.get("error", "Failed to open profile")
+            lower_err = err.lower()
+            if "not available" in lower_err or "not found" in lower_err or "broken" in lower_err or "removed" in lower_err:
+                return False, ResultCode.PROFILE_NOT_FOUND, err
+            return False, ResultCode.NETWORK_ERROR, err
         except Exception as e:
             return False, ResultCode.TIMEOUT, str(e)
 

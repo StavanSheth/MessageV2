@@ -33,7 +33,7 @@ function parseTaskError(task: Task): ErrorCategoryInfo | null {
   const rawCat = (task.error_category || task.error_code || '').toUpperCase();
   const rawMsg = (task.error_message || task.last_error || task.manual_review_reason || '');
   const statusStr = (task.status || '').toUpperCase();
-  const isAttentionStatus = ['MANUAL_REVIEW', 'RETRY_WAIT', 'AWAITING_APPROVAL', 'RECONCILING', 'FAILED', 'INTERRUPTED', 'SKIPPED'].includes(statusStr);
+  const isAttentionStatus = ['ACTION_NEEDED', 'MANUAL_REVIEW', 'RETRY_WAIT', 'AWAITING_APPROVAL', 'RECONCILING', 'FAILED', 'INTERRUPTED', 'SKIPPED'].includes(statusStr);
   const hasRepliedStatus = task.contact?.replied_status === 'DM_RESTRICTED' || task.contact?.replied_status === 'YES' || task.contact?.replied_status === 'AUTOMATED_MESSAGE';
 
   if (!rawCat && !rawMsg && !isAttentionStatus && !hasRepliedStatus) {
@@ -66,9 +66,14 @@ function parseTaskError(task: Task): ErrorCategoryInfo | null {
   if (
     matchedTag.includes('PAGE_NOT_FOUND') ||
     matchedTag.includes('PROFILE_NOT_FOUND') ||
+    matchedTag.includes('ACCOUNT_NOT_FOUND') ||
     lowerMsg.includes('page not found') ||
     lowerMsg.includes('profile not found') ||
+    lowerMsg.includes('account not found') ||
+    lowerMsg.includes("sorry, this page isn't available") ||
+    lowerMsg.includes("sorry, this page isn’t available") ||
     lowerMsg.includes("page isn't available") ||
+    lowerMsg.includes("page isn’t available") ||
     lowerMsg.includes("page is not available") ||
     lowerMsg.includes("link you followed may be broken") ||
     lowerMsg.includes("page may have been removed") ||
@@ -78,7 +83,7 @@ function parseTaskError(task: Task): ErrorCategoryInfo | null {
       tag: 'PAGE_NOT_FOUND',
       label: 'Account Not Found (404)',
       badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40 font-bold',
-      description: cleanMsg || "Sorry, this page isn't available. The link may be broken, or the page may have been removed."
+      description: cleanMsg || "Sorry, this page isn't available. The link you followed may be broken, or the page may have been removed."
     };
   }
 
@@ -1295,7 +1300,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                 { id: 'REPLY_RECEIVED', label: 'Replied' },
                 { id: 'DM_RESTRICTED', label: 'No DMs' },
                 { id: 'PROFILE_MISMATCH', label: 'Mismatch' },
-                { id: 'PAGE_NOT_FOUND', label: '404' },
+                { id: 'PAGE_NOT_FOUND', label: 'Account Not Found' },
                 { id: 'RATE_LIMITED', label: 'Cooldown' },
                 { id: 'EXTERNAL_MESSAGE_DETECTED', label: 'External' },
               ].map((opt) => (

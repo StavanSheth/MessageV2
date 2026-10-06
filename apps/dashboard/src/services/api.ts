@@ -687,6 +687,21 @@ export async function bulkSetTaskSelection(
   return res.json();
 }
 
+export async function reorderTasks(
+  taskIds: string[]
+): Promise<{ status: string; reordered_count: number }> {
+  const res = await fetch(`${BASE_URL}/api/tasks/reorder`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_ids: taskIds }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to reorder tasks');
+  }
+  return res.json();
+}
+
 export async function pauseAllWorkers(): Promise<any> {
   const res = await fetch(`${BASE_URL}/api/automation/all/pause`, { method: 'POST' });
   if (!res.ok) {

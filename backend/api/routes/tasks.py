@@ -268,6 +268,16 @@ async def bulk_task_selection(req: BulkSelectionRequest, db: AsyncSession = Depe
     status_str = "READY" if req.selected else "PAUSED"
     return {"status": "ok", "updated_count": count, "new_status": status_str}
 
+class ReorderTasksRequest(BaseModel):
+    task_ids: List[str]
+
+@router.post("/reorder")
+async def reorder_tasks(req: ReorderTasksRequest, db: AsyncSession = Depends(get_db)):
+    """Reorder tasks in custom order by setting priorities accordingly."""
+    repo = TaskRepository(db)
+    count = await repo.reorder_tasks(req.task_ids)
+    return {"status": "ok", "reordered_count": count}
+
 class FollowUpReviewRequest(BaseModel):
     task_ids: Optional[List[str]] = None
     contact_ids: Optional[List[str]] = None

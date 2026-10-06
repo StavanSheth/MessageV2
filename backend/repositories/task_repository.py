@@ -245,4 +245,21 @@ class TaskRepository:
         await self.session.commit()
         return result.rowcount
 
+    async def reorder_tasks(self, ordered_task_ids: List[str]) -> int:
+        """Set decreasing priority so tasks are claimed in exact order provided."""
+        if not ordered_task_ids:
+            return 0
+        base_priority = 10000
+        count = 0
+        for idx, tid in enumerate(ordered_task_ids):
+            prio = max(1, base_priority - idx)
+            await self.session.execute(
+                update(Task)
+                .where(Task.id == tid)
+                .values(priority=prio, updated_at=datetime.now(timezone.utc))
+            )
+            count += 1
+        await self.session.commit()
+        return count
+
 

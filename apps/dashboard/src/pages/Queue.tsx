@@ -5,10 +5,10 @@ import {
   ArrowUpRight, Users, MessageSquare, AlertTriangle, Send, Sparkles, X, Trash2,
   CheckCheck, ShieldAlert, Zap, Filter, ArrowUpDown,
   ThumbsUp, ThumbsDown, CheckSquare, Square, Download,
-  Edit3, Pause, Save
+  Edit3, Pause, Save, ChevronUp, ChevronDown
 } from 'lucide-react';
 import { Task, TaskStatus, LiveAutomationState } from '../types';
-import { retryTask, cancelTask, retryAllTasks, deleteTask, confirmFollowups, cancelFollowups, updateTask, toggleTaskPause, bulkSetTaskSelection, updateContactMessages, updateFollowupSchedule } from '../services/api';
+import { retryTask, cancelTask, retryAllTasks, deleteTask, confirmFollowups, cancelFollowups, updateTask, toggleTaskPause, bulkSetTaskSelection, reorderTasks, updateContactMessages, updateFollowupSchedule } from '../services/api';
 import { DateFilterMode, matchesDateFilter, formatDisplayDate, toDatetimeLocalValue } from '../utils/date';
 import { getStatusBadgeClass } from '../components/common/StatusBadge';
 
@@ -309,6 +309,20 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
     return map;
   }, [upcomingSortedTasks, remainingInRunQuota]);
 
+  // Active (non-paused) upcoming tasks ordered by dispatch priority
+  const activeUpcomingTasks = useMemo(() => {
+    return upcomingSortedTasks.filter((t) => t.status !== 'PAUSED');
+  }, [upcomingSortedTasks]);
+
+  // Map of task ID to dispatch order rank (#1, #2, #3...)
+  const activeTaskPositionMap = useMemo(() => {
+    const map = new Map<string, number>();
+    activeUpcomingTasks.forEach((t, i) => {
+      map.set(t.id, i + 1);
+    });
+    return map;
+  }, [activeUpcomingTasks]);
+
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
     try {
@@ -521,11 +535,44 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
     }
   };
 
+  const handleMoveTask = async (taskId: string, direction: 'UP' | 'DOWN') => {
+    const activeIds = activeUpcomingTasks.map((t) => t.id);
+    const idx = activeIds.indexOf(taskId);
+    if (idx === -1) return;
+    if (direction === 'UP' && idx === 0) return;
+    if (direction === 'DOWN' && idx === activeIds.length - 1) return;
+
+    const targetIdx = direction === 'UP' ? idx - 1 : idx + 1;
+    const newOrder = [...activeIds];
+    const temp = newOrder[idx];
+    newOrder[idx] = newOrder[targetIdx];
+    newOrder[targetIdx] = temp;
+
+    try {
+      setActionLoadingId(taskId);
+      await reorderTasks(newOrder);
+      await onRefresh();
+    } catch (e: any) {
+      alert(`Could not reorder tasks: ${e.message}`);
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
   const handleTogglePersonSelection = async (task: Task) => {
     try {
       setActionLoadingId(task.id);
       const willBeSelected = task.status === 'PAUSED';
       await bulkSetTaskSelection([task.id], willBeSelected);
+
+      const activeIds = activeUpcomingTasks.filter((t) => t.id !== task.id).map((t) => t.id);
+      let newOrderIds: string[];
+      if (willBeSelected) {
+        newOrderIds = [...activeIds, task.id];
+      } else {
+        newOrderIds = activeIds;
+      }
+      await reorderTasks(newOrderIds);
       await onRefresh();
     } catch (e: any) {
       alert(`Could not update selection: ${e.message}`);
@@ -542,6 +589,8 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
     try {
       setIsBulkSelecting(true);
       await bulkSetTaskSelection(eligibleIds, true);
+      const existingActiveIds = activeUpcomingTasks.filter((t) => !eligibleIds.includes(t.id)).map((t) => t.id);
+      await reorderTasks([...existingActiveIds, ...eligibleIds]);
       await onRefresh();
     } catch (e: any) {
       alert(`Could not include tasks: ${e.message}`);
@@ -558,6 +607,8 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
     try {
       setIsBulkSelecting(true);
       await bulkSetTaskSelection(eligibleIds, false);
+      const remainingActiveIds = activeUpcomingTasks.filter((t) => !eligibleIds.includes(t.id)).map((t) => t.id);
+      await reorderTasks(remainingActiveIds);
       await onRefresh();
     } catch (e: any) {
       alert(`Could not exclude tasks: ${e.message}`);
@@ -664,6 +715,8 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
       if (viewMode === 'UPCOMING') {
         if (a.status === 'RUNNING' && b.status !== 'RUNNING') return -1;
         if (b.status === 'RUNNING' && a.status !== 'RUNNING') return 1;
+        if (a.status !== 'PAUSED' && b.status === 'PAUSED') return -1;
+        if (a.status === 'PAUSED' && b.status !== 'PAUSED') return 1;
         const pA = a.priority ?? 1;
         const pB = b.priority ?? 1;
         if (pA !== pB) return pB - pA;
@@ -1284,18 +1337,18 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
             </div>
             <div>
               <div className="text-sm font-bold text-white flex items-center space-x-2">
-                <span>Person / Contact Selection</span>
+                <span>Person Selection & Custom Send Order</span>
                 <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                  {readyCount} Active (Ready)
+                  {readyCount} Selected ({readyCount} in Send Queue)
                 </span>
                 {pausedCount > 0 && (
                   <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                    {pausedCount} Deselected (Paused)
+                    {pausedCount} Excluded
                   </span>
                 )}
               </div>
               <p className="text-xs text-gray-300 mt-0.5">
-                Tick or untick any person to include or leave them out from worker dispatch. You can pause workers and edit selections anytime.
+                Tick or untick people to choose whom to message. Number badges (<strong className="text-[#e5a84b] font-mono">#1, #2, #3...</strong>) indicate the exact sending order. Use the <strong className="text-white">▲ / ▼</strong> buttons to move anyone earlier or later in the queue.
               </p>
             </div>
           </div>
@@ -1418,8 +1471,11 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
 
                   // Run tracking checks
                   const isNextInRun = nextInRunTaskIds.has(t.id);
-                  const runPosition = nextInRunPositionMap.get(t.id);
                   const isDoneInRun = runCompletedTaskIds.has(t.id) || (currentRunId && t.run_id === currentRunId);
+
+                  // Custom Dispatch Order Rank
+                  const activeRank = activeTaskPositionMap.get(t.id);
+                  const totalActiveCount = activeUpcomingTasks.length;
 
                   return (
                     <tr
@@ -1452,7 +1508,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                               title={
                                 t.status === 'PAUSED'
                                   ? 'Contact Deselected / Excluded. Click to Select & Include in dispatch queue.'
-                                  : 'Contact Selected / Active. Click to Deselect & Exclude from dispatch queue.'
+                                  : `Contact Selected (#${activeRank || 'Active'}). Click to Deselect & Exclude from dispatch queue.`
                               }
                             >
                               {t.status === 'PAUSED' ? (
@@ -1465,23 +1521,60 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                         </td>
                       )}
 
-                      {/* Queue Position */}
-                      <td className="py-4 px-4 align-top text-center">
+                      {/* Queue Position & Custom Order Controls */}
+                      <td className="py-4 px-3 align-top text-center">
                         {t.status === 'RUNNING' ? (
-                          <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-indigo-500/20 text-indigo-300 font-mono text-xs font-black border border-indigo-400 animate-pulse">
-                            <Play className="w-3 h-3 fill-indigo-400" />
-                          </span>
-                        ) : isNextInRun ? (
                           <div className="flex flex-col items-center">
-                            <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-md font-mono text-[10px] font-black bg-amber-500/25 text-amber-300 border border-amber-400/60 shadow-sm shadow-amber-500/10">
-                              #{runPosition} Next
+                            <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-indigo-500/20 text-indigo-300 font-mono text-xs font-black border border-indigo-400 animate-pulse">
+                              <Play className="w-3 h-3 fill-indigo-400" />
                             </span>
-                            <span className="text-[9px] text-amber-400/80 font-semibold mt-0.5">This Run</span>
+                            <span className="text-[9px] text-indigo-400 font-bold mt-0.5">Active</span>
                           </div>
-                        ) : viewMode === 'UPCOMING' ? (
-                          <span className="inline-flex items-center justify-center px-2 py-1 rounded-lg font-mono text-[10px] font-bold bg-gray-900 text-gray-400 border border-gray-800">
-                            #{overallRank}
-                          </span>
+                        ) : t.status === 'PAUSED' ? (
+                          <div className="flex flex-col items-center py-1">
+                            <span className="text-gray-600 font-mono text-xs">—</span>
+                            <span className="text-[9px] text-amber-500/70 font-semibold mt-0.5">Excluded</span>
+                          </div>
+                        ) : (viewMode === 'UPCOMING' || viewMode === 'ALL') && activeRank ? (
+                          <div className="inline-flex items-center justify-center space-x-1.5">
+                            <div className="flex flex-col items-center">
+                              <span
+                                className={`inline-flex items-center justify-center px-2 py-0.5 rounded-lg font-mono text-xs font-black border shadow-sm ${
+                                  isNextInRun
+                                    ? 'bg-amber-500/25 text-amber-300 border-amber-400/60 shadow-amber-500/10'
+                                    : 'bg-[#d49237]/20 text-[#e5a84b] border-[#d49237]/50 shadow-[#d49237]/10'
+                                }`}
+                                title={`Send Order #${activeRank}. This contact is #${activeRank} in line to be messaged.`}
+                              >
+                                #{activeRank}
+                              </span>
+                              {isNextInRun && (
+                                <span className="text-[9px] text-amber-400/80 font-semibold mt-0.5">Next in Run</span>
+                              )}
+                            </div>
+
+                            {/* Up & Down arrow buttons for custom order */}
+                            <div className="flex flex-col space-y-0.5">
+                              <button
+                                type="button"
+                                onClick={() => handleMoveTask(t.id, 'UP')}
+                                disabled={activeRank <= 1 || isBulkSelecting || actionLoadingId === t.id}
+                                className="p-0.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white disabled:opacity-20 disabled:hover:bg-transparent cursor-pointer disabled:cursor-not-allowed transition"
+                                title="Move up in order (message earlier)"
+                              >
+                                <ChevronUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleMoveTask(t.id, 'DOWN')}
+                                disabled={activeRank >= totalActiveCount || isBulkSelecting || actionLoadingId === t.id}
+                                className="p-0.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white disabled:opacity-20 disabled:hover:bg-transparent cursor-pointer disabled:cursor-not-allowed transition"
+                                title="Move down in order (message later)"
+                              >
+                                <ChevronDown className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
                         ) : (
                           <span className="text-gray-500 font-mono text-[11px]">
                             #{overallRank}

@@ -819,54 +819,38 @@ class InstagramWorker:
                 async with AsyncSessionLocal() as session:
                     msg_repo = MessageRepository(session)
                     await msg_repo.update_result(msg_id, "SENT", "SUCCESS")
-                async with AsyncSessionLocal() as session:
                     task_repo = TaskRepository(session)
                     await task_repo.update_status(task_id, TaskStatus.COMPLETED, run_id=self.current_run_id)
 
+                    # BUG-3 fix: Re-read contact from DB to get latest replied_status
                     chk_c = await session.get(Contact, contact.id)
                     if chk_c and self.current_run_id:
                         chk_c.last_run_id = self.current_run_id
 
-                    # Automatically schedule Follow-Up 1 or 2 if contact has not replied
-                    if contact.replied_status not in ["YES", "AUTOMATED_MESSAGE"]:
+                    # Schedule Follow-Up 1 only for MESSAGE tasks (Worker 3 handles FU1→FU2)
+                    if chk_c and chk_c.replied_status not in ["YES", "AUTOMATED_MESSAGE"] and task.type == "MESSAGE":
                         from datetime import timedelta
-                        now = datetime.now(timezone.utc)
-                        if task.type == "MESSAGE":
-                            delay = contact.followup_1_delay_days or 3
-                            fu_stmt = select(Task).where(
-                                and_(Task.contact_id == contact.id, Task.type == "FOLLOW_UP_1")
+                        fu_stmt = select(Task).where(
+                            and_(Task.contact_id == contact.id, Task.type == "FOLLOW_UP_1")
+                        )
+                        existing_fu = (await session.execute(fu_stmt)).scalar_one_or_none()
+                        if not existing_fu:
+                            delay = chk_c.followup_1_delay_days or 3
+                            # Anchor from task completion time, not current time
+                            anchor = task.completed_at or datetime.now(timezone.utc)
+                            if anchor.tzinfo is None:
+                                anchor = anchor.replace(tzinfo=timezone.utc)
+                            fu1_task = Task(
+                                contact_id=contact.id,
+                                type="FOLLOW_UP_1",
+                                sequence=2,
+                                priority=task.priority,
+                                scheduled_at=anchor + timedelta(days=delay),
+                                status=TaskStatus.READY.value
                             )
-                            existing_fu = (await session.execute(fu_stmt)).scalar_one_or_none()
-                            if not existing_fu:
-                                fu1_task = Task(
-                                    contact_id=contact.id,
-                                    type="FOLLOW_UP_1",
-                                    sequence=2,
-                                    priority=task.priority,
-                                    scheduled_at=now + timedelta(days=delay),
-                                    status=TaskStatus.READY.value
-                                )
-                                session.add(fu1_task)
-                                await session.commit()
-                                logger.info(f"[Worker] Scheduled Follow-up 1 for {contact.name} in {delay} days")
-                        elif task.type == "FOLLOW_UP_1":
-                            delay = contact.followup_2_delay_days or 5
-                            fu_stmt = select(Task).where(
-                                and_(Task.contact_id == contact.id, Task.type == "FOLLOW_UP_2")
-                            )
-                            existing_fu = (await session.execute(fu_stmt)).scalar_one_or_none()
-                            if not existing_fu:
-                                fu2_task = Task(
-                                    contact_id=contact.id,
-                                    type="FOLLOW_UP_2",
-                                    sequence=3,
-                                    priority=task.priority,
-                                    scheduled_at=now + timedelta(days=delay),
-                                    status=TaskStatus.READY.value
-                                )
-                                session.add(fu2_task)
-                                await session.commit()
-                                logger.info(f"[Worker] Scheduled Follow-up 2 for {contact.name} in {delay} days")
+                            session.add(fu1_task)
+                            await session.commit()
+                            logger.info(f"[Worker] Scheduled Follow-up 1 for {contact.name} in {delay} days")
 
                     # Record OutreachHistory entry to retain long-term memory
                     try:

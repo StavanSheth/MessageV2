@@ -66,57 +66,61 @@ class ContactRepository:
         result = await self.session.execute(stmt)
         return result.scalars().first()
 
-    async def update_contact_details(self, contact_id: str, name: Optional[str] = None,
-                                     username: Optional[str] = None, instagram_url: Optional[str] = None,
-                                     notes: Optional[str] = None, expected_followers: Optional[int] = None) -> Optional[Contact]:
+    async def update_contact_details(
+        self,
+        contact_id: str,
+        name: Optional[str] = None,
+        username: Optional[str] = None,
+        instagram_url: Optional[str] = None,
+        notes: Optional[str] = None,
+        expected_followers: Optional[int] = None,
+        is_archived: Optional[bool] = None,
+        data: Optional[dict] = None
+    ) -> Optional[Contact]:
         contact = await self.get_by_id(contact_id)
         if not contact:
             return None
-        if name is not None:
-            contact.name = name.strip()
-        if username is not None:
-            contact.username = username.lstrip("@").strip()
-        if instagram_url is not None:
-            clean_val = instagram_url.strip()
-            if not clean_val.startswith("http://") and not clean_val.startswith("https://"):
-                clean_user = clean_val.lstrip("@").strip("/").strip()
-                contact.instagram_url = f"https://www.instagram.com/{clean_user}/"
-                if not username:
-                    contact.username = clean_user
-            else:
-                contact.instagram_url = clean_val
-        if notes is not None:
-            contact.notes = notes
-        if expected_followers is not None:
-            contact.expected_followers = expected_followers
+
+        payload = {}
+        if name is not None: payload["name"] = name
+        if username is not None: payload["username"] = username
+        if instagram_url is not None: payload["instagram_url"] = instagram_url
+        if notes is not None: payload["notes"] = notes
+        if expected_followers is not None: payload["expected_followers"] = expected_followers
+        if is_archived is not None: payload["is_archived"] = is_archived
+        if data:
+            payload.update(data)
+
+        for k, v in payload.items():
+            if v is None:
+                continue
+            if k == "name":
+                contact.name = str(v).strip()
+            elif k == "username":
+                contact.username = str(v).lstrip("@").strip()
+            elif k == "instagram_url":
+                try:
+                    from backend.sources.xlsx.adapter import LocalXlsxSource
+                    can_url, can_user = LocalXlsxSource._format_instagram_url(v)
+                    contact.instagram_url = can_url or str(v).strip()
+                    if can_user and not contact.username:
+                        contact.username = can_user
+                except Exception:
+                    clean_val = str(v).strip()
+                    if not clean_val.startswith("http://") and not clean_val.startswith("https://"):
+                        clean_user = clean_val.lstrip("@").strip("/").strip()
+                        contact.instagram_url = f"https://www.instagram.com/{clean_user}/"
+                        if not contact.username:
+                            contact.username = clean_user
+                    else:
+                        contact.instagram_url = clean_val
+            elif hasattr(contact, k):
+                setattr(contact, k, v)
+
         contact.updated_at = datetime.now(timezone.utc)
         await self.session.commit()
         await self.session.refresh(contact)
         return contact
-
-    async def bulk_delete(self, contact_ids: List[str]) -> int:
-        from sqlalchemy import delete
-        from backend.database.models import Task, Message, VerificationResult
-        if not contact_ids:
-            return 0
-        await self.session.execute(delete(VerificationResult).where(VerificationResult.contact_id.in_(contact_ids)))
-        await self.session.execute(delete(Message).where(Message.contact_id.in_(contact_ids)))
-        await self.session.execute(delete(Task).where(Task.contact_id.in_(contact_ids)))
-        stmt = delete(Contact).where(Contact.id.in_(contact_ids))
-        res = await self.session.execute(stmt)
-        await self.session.commit()
-        return res.rowcount
-
-    async def clear_all(self) -> int:
-        from sqlalchemy import delete
-        from backend.database.models import Task, Message, VerificationResult
-        await self.session.execute(delete(VerificationResult))
-        await self.session.execute(delete(Message))
-        await self.session.execute(delete(Task))
-        stmt = delete(Contact)
-        res = await self.session.execute(stmt)
-        await self.session.commit()
-        return res.rowcount
 
     async def list_all(self, limit: int = 100, offset: int = 0) -> List[Contact]:
         stmt = select(Contact).order_by(Contact.created_at.desc()).limit(limit).offset(offset)
@@ -159,7 +163,11 @@ class ContactRepository:
                     and_(
                         Task.contact_id == contact_id,
                         Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"]),
-                        Task.status.in_([TaskStatus.READY.value, TaskStatus.CREATED.value, TaskStatus.QUEUED.value])
+                        Task.status.in_([
+                            TaskStatus.READY.value, TaskStatus.CREATED.value,
+                            TaskStatus.QUEUED.value, TaskStatus.MANUAL_REVIEW.value,
+                            TaskStatus.RETRY_WAIT.value, TaskStatus.PAUSED.value
+                        ])
                     )
                 )
                 .values(
@@ -350,7 +358,7 @@ class ContactRepository:
 
     async def delete(self, contact_id: str) -> bool:
         from sqlalchemy import delete
-        from backend.database.models import Task, Message, VerificationResult, OutreachHistory
+        from backend.database.models import Task, Message, VerificationResult, OutreachHistory, SendAttempt
         contact = await self.get_by_id(contact_id)
         if contact:
             try:
@@ -364,6 +372,7 @@ class ContactRepository:
             except Exception:
                 pass
         await self.session.execute(delete(VerificationResult).where(VerificationResult.contact_id == contact_id))
+        await self.session.execute(delete(SendAttempt).where(SendAttempt.contact_id == contact_id))
         await self.session.execute(delete(Message).where(Message.contact_id == contact_id))
         await self.session.execute(delete(Task).where(Task.contact_id == contact_id))
         stmt = delete(Contact).where(Contact.id == contact_id)
@@ -371,32 +380,9 @@ class ContactRepository:
         await self.session.commit()
         return res.rowcount > 0
 
-    async def update_contact_details(self, contact_id: str, data: dict) -> Optional[Contact]:
-        contact = await self.get_by_id(contact_id)
-        if not contact:
-            return None
-        allowed_fields = ["name", "username", "instagram_url", "notes", "expected_followers", "is_archived"]
-        for k in allowed_fields:
-            if k in data and data[k] is not None:
-                if k == "instagram_url":
-                    from backend.sources.xlsx.adapter import LocalXlsxSource
-                    can_url, can_user = LocalXlsxSource._format_instagram_url(data[k])
-                    setattr(contact, "instagram_url", can_url or data[k])
-                    if can_user and not data.get("username"):
-                        setattr(contact, "username", can_user)
-                elif k == "username":
-                    user_clean = str(data[k]).lstrip("@").strip()
-                    setattr(contact, "username", user_clean)
-                else:
-                    setattr(contact, k, data[k])
-        contact.updated_at = datetime.now(timezone.utc)
-        await self.session.commit()
-        await self.session.refresh(contact)
-        return contact
-
     async def bulk_delete(self, contact_ids: List[str]) -> int:
         from sqlalchemy import delete
-        from backend.database.models import Task, Message, VerificationResult, OutreachHistory
+        from backend.database.models import Task, Message, VerificationResult, OutreachHistory, SendAttempt
         if not contact_ids:
             return 0
         c_stmt = select(Contact).where(Contact.id.in_(contact_ids))
@@ -413,6 +399,7 @@ class ContactRepository:
             except Exception:
                 pass
         await self.session.execute(delete(VerificationResult).where(VerificationResult.contact_id.in_(contact_ids)))
+        await self.session.execute(delete(SendAttempt).where(SendAttempt.contact_id.in_(contact_ids)))
         await self.session.execute(delete(Message).where(Message.contact_id.in_(contact_ids)))
         await self.session.execute(delete(Task).where(Task.contact_id.in_(contact_ids)))
         res = await self.session.execute(delete(Contact).where(Contact.id.in_(contact_ids)))
@@ -421,7 +408,7 @@ class ContactRepository:
 
     async def clear_all(self) -> int:
         from sqlalchemy import delete
-        from backend.database.models import Task, Message, VerificationResult, OutreachHistory
+        from backend.database.models import Task, Message, VerificationResult, OutreachHistory, SendAttempt
         all_contacts = (await self.session.execute(select(Contact))).scalars().all()
         for c in all_contacts:
             try:
@@ -435,6 +422,7 @@ class ContactRepository:
             except Exception:
                 pass
         await self.session.execute(delete(VerificationResult))
+        await self.session.execute(delete(SendAttempt))
         await self.session.execute(delete(Message))
         await self.session.execute(delete(Task))
         res = await self.session.execute(delete(Contact))

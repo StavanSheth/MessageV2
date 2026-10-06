@@ -24,6 +24,8 @@ class RecoveryService:
         stmt = select(Task).where(
             or_(
                 Task.status == TaskStatus.RUNNING.value,
+                Task.status == TaskStatus.SENDING.value,
+                Task.status == TaskStatus.VERIFYING.value,
                 Task.status == TaskStatus.INTERRUPTED.value,
                 Task.status == TaskStatus.RECONCILING.value
             )

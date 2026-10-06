@@ -41,9 +41,11 @@ async def lifespan(app: FastAPI):
         if affected:
             logger.warning(f"Recovery: {len(affected)} interrupted task(s) found and marked: {affected}")
 
-    logger.info(f"Backend ready on http://{settings.HOST}:{settings.PORT}")
     yield
     logger.info("Shutting down backend...")
+    from backend.database.session import async_engine
+    await async_engine.dispose()
+    logger.info("Database engine disposed.")
 
 
 app = FastAPI(

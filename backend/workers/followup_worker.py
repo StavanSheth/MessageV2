@@ -198,6 +198,11 @@ class FollowUpWorker:
             logger.info(f"[{WORKER_NAME}] Worker stopped mid-task. Reverting task {self.current_task_id} to READY.")
             await self._revert_task_to_ready(self.current_task_id)
 
+        try:
+            await self.browser_worker.stop()
+        except Exception:
+            pass
+
         self.status = WorkerStatus.STOPPED
         self.stage = AutomationStage.IDLE
         self.is_dispatching_dm = False

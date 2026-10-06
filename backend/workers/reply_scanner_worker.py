@@ -183,6 +183,17 @@ class ReplyScannerWorker:
                     stmt = select(Contact)
                     all_contacts = (await session.execute(stmt)).scalars().all()
 
+                    # Pre-index contacts for fast O(1) matching
+                    username_map = {}
+                    name_map = {}
+                    for c in all_contacts:
+                        c_u = (c.username or "").strip().lower().lstrip("@")
+                        if c_u:
+                            username_map[c_u] = c
+                        c_n = (c.name or "").strip().lower()
+                        if c_n:
+                            name_map[c_n] = c
+
                     for thread in threads:
                         if self._paused or self._stop_requested:
                             logger.info("[ReplyScanner] Pause/Stop requested during inbox scan. Halting thread loop.")
@@ -195,35 +206,32 @@ class ReplyScannerWorker:
                         if not thread_name:
                             continue
 
-                        # Match contact by exact username or token-bounded name
-                        matched_contact = None
-                        clean_tname = thread_name.strip().lower()
-                        thread_tokens = set(re.findall(r"[a-zA-Z0-9_\.]+", clean_tname)) if clean_tname else set()
+                        # Match contact by fast indexed lookups
+                        clean_tname = thread_name.strip().lower().lstrip("@")
+                        matched_contact = username_map.get(clean_tname)
 
-                        for c in all_contacts:
-                            c_user = (c.username or "").strip().lower().lstrip("@")
-                            c_name = (c.name or "").strip().lower()
+                        if not matched_contact and thread_name.strip().lower() in name_map:
+                            matched_contact = name_map[thread_name.strip().lower()]
 
-                            # 1. Exact username match
-                            if c_user and (clean_tname == c_user or clean_tname == f"@{c_user}"):
-                                matched_contact = c
-                                break
-                            # 2. Check thread_href for username
-                            if c_user and thread_href and c_user in thread_href.lower():
-                                matched_contact = c
-                                break
-                            # 3. Exact full name match
-                            if c_name and clean_tname == c_name:
-                                matched_contact = c
-                                break
-                            # 4. Thread contains exact username token
-                            if c_user and c_user in thread_tokens:
-                                matched_contact = c
-                                break
-                            # 5. Multi-word full name match
-                            if c_name and len(c_name.split()) >= 2 and c_name in clean_tname:
-                                matched_contact = c
-                                break
+                        if not matched_contact:
+                            thread_tokens = set(re.findall(r"[a-zA-Z0-9_\.]+", clean_tname)) if clean_tname else set()
+                            # Check token intersection with known usernames
+                            for token in thread_tokens:
+                                if token in username_map:
+                                    matched_contact = username_map[token]
+                                    break
+
+                        # Fallback for href or multi-word substring match
+                        if not matched_contact:
+                            for c in all_contacts:
+                                c_user = (c.username or "").strip().lower().lstrip("@")
+                                c_name = (c.name or "").strip().lower()
+                                if c_user and thread_href and c_user in thread_href.lower():
+                                    matched_contact = c
+                                    break
+                                if c_name and len(c_name.split()) >= 2 and c_name in clean_tname:
+                                    matched_contact = c
+                                    break
 
                         if not matched_contact:
                             continue

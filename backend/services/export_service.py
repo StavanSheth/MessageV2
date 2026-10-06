@@ -200,7 +200,17 @@ class ExportService:
         if 'AWAITING_APPROVAL' in matched_tag or status_str == 'AWAITING_APPROVAL' or 'awaiting approval' in clean_msg:
             return "Approval Required"
 
-        if 'PAGE_NOT_FOUND' in matched_tag or '404' in clean_msg or 'page not found' in clean_msg:
+        if (
+            'PAGE_NOT_FOUND' in matched_tag
+            or 'PROFILE_NOT_FOUND' in matched_tag
+            or '404' in clean_msg
+            or 'page not found' in clean_msg
+            or 'profile not found' in clean_msg
+            or "isn't available" in clean_msg
+            or "is not available" in clean_msg
+            or "link you followed may be broken" in clean_msg
+            or "page may have been removed" in clean_msg
+        ):
             return "Page Not Found (404)"
 
         if 'DM_RESTRICTED' in matched_tag or replied_status == 'DM_RESTRICTED' or 'does not accept' in clean_msg or 'no message button' in clean_msg:

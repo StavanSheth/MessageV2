@@ -15,6 +15,7 @@ VALID_TASK_TRANSITIONS: Dict[TaskStatus, Set[TaskStatus]] = {
     TaskStatus.PAUSED: {TaskStatus.READY, TaskStatus.CANCELLED, TaskStatus.SKIPPED},
     TaskStatus.RUNNING: {
         TaskStatus.COMPLETED,
+        TaskStatus.FAILED,
         TaskStatus.READY,
         TaskStatus.RETRY_WAIT,
         TaskStatus.MANUAL_REVIEW,
@@ -23,8 +24,28 @@ VALID_TASK_TRANSITIONS: Dict[TaskStatus, Set[TaskStatus]] = {
         TaskStatus.CANCELLED,
         TaskStatus.INTERRUPTED,
         TaskStatus.RECONCILING,
-        TaskStatus.PAUSED
+        TaskStatus.PAUSED,
+        TaskStatus.SENDING,
+        TaskStatus.VERIFYING
     },
+    TaskStatus.SENDING: {
+        TaskStatus.COMPLETED,
+        TaskStatus.FAILED,
+        TaskStatus.READY,
+        TaskStatus.RETRY_WAIT,
+        TaskStatus.MANUAL_REVIEW,
+        TaskStatus.SKIPPED,
+        TaskStatus.CANCELLED,
+        TaskStatus.RECONCILING
+    },
+    TaskStatus.VERIFYING: {
+        TaskStatus.SENDING,
+        TaskStatus.READY,
+        TaskStatus.MANUAL_REVIEW,
+        TaskStatus.SKIPPED,
+        TaskStatus.CANCELLED
+    },
+    TaskStatus.FAILED: {TaskStatus.READY, TaskStatus.RETRY_WAIT, TaskStatus.CANCELLED, TaskStatus.MANUAL_REVIEW},
     TaskStatus.AWAITING_APPROVAL: {TaskStatus.READY, TaskStatus.APPROVED, TaskStatus.SKIPPED, TaskStatus.CANCELLED, TaskStatus.MANUAL_REVIEW, TaskStatus.COMPLETED, TaskStatus.PAUSED},
     TaskStatus.APPROVED: {TaskStatus.READY, TaskStatus.RUNNING, TaskStatus.CANCELLED, TaskStatus.SKIPPED},
     TaskStatus.RETRY_WAIT: {TaskStatus.READY, TaskStatus.CANCELLED, TaskStatus.PAUSED},
@@ -35,6 +56,7 @@ VALID_TASK_TRANSITIONS: Dict[TaskStatus, Set[TaskStatus]] = {
     TaskStatus.SKIPPED: set(),
     TaskStatus.CANCELLED: set(),
 }
+
 
 VALID_MESSAGE_TRANSITIONS: Dict[MessageStatus, Set[MessageStatus]] = {
     MessageStatus.PENDING: {MessageStatus.VERIFYING, MessageStatus.SKIPPED},

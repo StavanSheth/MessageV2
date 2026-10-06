@@ -5,7 +5,15 @@ class ResultDetector:
     @staticmethod
     def classify_navigation_result(status_code: Optional[int], page_text: str) -> ResultCode:
         lower_text = page_text.lower()
-        if "sorry, this page isn't available" in lower_text or "page not found" in lower_text or "link you followed may be broken" in lower_text:
+        if (
+            status_code == 404
+            or "sorry, this page isn't available" in lower_text
+            or "sorry, this page is not available" in lower_text
+            or "page not found" in lower_text
+            or "page may have been removed" in lower_text
+            or "link you followed may be broken" in lower_text
+            or "404 not found" in lower_text
+        ):
             return ResultCode.PROFILE_NOT_FOUND
         if "try again later" in lower_text or "we limit how often" in lower_text or "action blocked" in lower_text:
             return ResultCode.RATE_LIMITED

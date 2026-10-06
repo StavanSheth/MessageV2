@@ -22,14 +22,14 @@ type QueueViewMode = 'UPCOMING' | 'DONE' | 'ISSUES' | 'ALL';
 type RunFilterMode = 'ALL' | 'NEXT_IN_RUN' | 'DONE_IN_RUN';
 type TimeSortMode = 'DEFAULT' | 'SCHEDULED_ASC' | 'SCHEDULED_DESC' | 'COMPLETED_DESC' | 'COMPLETED_ASC';
 
-export interface ErrorCategoryInfo {
+interface ErrorCategoryInfo {
   tag: string;
   label: string;
   badgeClass: string;
   description: string;
 }
 
-export function parseTaskError(task: Task): ErrorCategoryInfo | null {
+function parseTaskError(task: Task): ErrorCategoryInfo | null {
   const rawCat = (task.error_category || task.error_code || '').toUpperCase();
   const rawMsg = (task.error_message || task.last_error || task.manual_review_reason || '');
   const statusStr = (task.status || '').toUpperCase();
@@ -55,19 +55,30 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   ) {
     return {
       tag: 'AWAITING_APPROVAL',
-      label: 'Approval Required',
+      label: 'Needs Manual Approval',
       badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold',
-      description: cleanMsg || 'Identity verification confidence was medium. Operator approval required before dispatch.'
+      description: cleanMsg || 'Identity verification confidence was medium. Operator approval required before sending.'
     };
   }
 
-  // 2. Page not found / 404
-  if (matchedTag.includes('PAGE_NOT_FOUND') || cleanMsg.toLowerCase().includes('page not found') || cleanMsg.toLowerCase().includes('404')) {
+  // 2. Page not found / 404 / Broken link
+  const lowerMsg = cleanMsg.toLowerCase();
+  if (
+    matchedTag.includes('PAGE_NOT_FOUND') ||
+    matchedTag.includes('PROFILE_NOT_FOUND') ||
+    lowerMsg.includes('page not found') ||
+    lowerMsg.includes('profile not found') ||
+    lowerMsg.includes("page isn't available") ||
+    lowerMsg.includes("page is not available") ||
+    lowerMsg.includes("link you followed may be broken") ||
+    lowerMsg.includes("page may have been removed") ||
+    lowerMsg.includes('404')
+  ) {
     return {
       tag: 'PAGE_NOT_FOUND',
-      label: 'Page Not Found (404)',
-      badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
-      description: cleanMsg || 'Target Instagram profile handle does not exist or was renamed/deleted.'
+      label: 'Account Not Found (404)',
+      badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40 font-bold',
+      description: cleanMsg || "Sorry, this page isn't available. The link may be broken, or the page may have been removed."
     };
   }
 
@@ -82,9 +93,9 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   ) {
     return {
       tag: 'DM_RESTRICTED',
-      label: 'DMs Restricted / Closed',
-      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
-      description: cleanMsg || 'Account has closed direct messages to non-followers or restricts receiving messages.'
+      label: 'DMs Closed / Follow-Only',
+      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold',
+      description: cleanMsg || 'Account restricts direct messages from non-followers or disabled message requests.'
     };
   }
 
@@ -96,9 +107,9 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   ) {
     return {
       tag: 'EXTERNAL_MESSAGE_DETECTED',
-      label: 'External Message Detected',
+      label: 'Manual Message Outside System',
       badgeClass: 'bg-rose-500/25 text-rose-300 border-rose-500/40 font-bold',
-      description: cleanMsg || 'A message was sent directly from this Instagram account that did not originate from the automated sequence. Please verify.'
+      description: cleanMsg || 'A message was sent directly from this Instagram account (e.g. from mobile) outside the automated queue.'
     };
   }
 
@@ -114,9 +125,9 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   ) {
     return {
       tag: 'REPLY_RECEIVED',
-      label: 'Replied by Lead',
-      badgeClass: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
-      description: cleanMsg || 'Contact replied on Instagram. Pending manual review before continuing follow-up.'
+      label: 'Lead Replied on Instagram',
+      badgeClass: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold',
+      description: cleanMsg || 'Lead answered or sent an automated reply. Held for operator review to prevent automated interruption.'
     };
   }
 
@@ -129,9 +140,9 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   ) {
     return {
       tag: 'EXISTING_HISTORY',
-      label: 'Prior Chat History',
-      badgeClass: 'bg-sky-500/20 text-sky-300 border-sky-500/40',
-      description: cleanMsg || 'Prior conversation history detected with this account on Instagram.'
+      label: 'Prior Chat History with Lead',
+      badgeClass: 'bg-sky-500/20 text-sky-300 border-sky-500/40 font-bold',
+      description: cleanMsg || 'Prior conversation history detected in this Instagram thread before automation ran.'
     };
   }
 
@@ -139,9 +150,9 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   if (matchedTag.includes('RATE_LIMITED') || cleanMsg.toLowerCase().includes('rate limit') || cleanMsg.toLowerCase().includes('action blocked')) {
     return {
       tag: 'RATE_LIMITED',
-      label: 'Rate Limited / Cooling Down',
-      badgeClass: 'bg-orange-500/20 text-orange-300 border-orange-500/40',
-      description: cleanMsg || 'Instagram rate limit threshold reached. Automatic backoff delay in effect.'
+      label: 'Rate Limited (Cooling Down)',
+      badgeClass: 'bg-orange-500/20 text-orange-300 border-orange-500/40 font-bold',
+      description: cleanMsg || 'Instagram anti-spam limit triggered. System paused with pacing delay before next attempt.'
     };
   }
 
@@ -149,9 +160,9 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   if (matchedTag.includes('PROFILE_MISMATCH') || cleanMsg.toLowerCase().includes('mismatch')) {
     return {
       tag: 'PROFILE_MISMATCH',
-      label: 'Profile Mismatch',
-      badgeClass: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40',
-      description: cleanMsg || 'Extracted profile details do not match expected contact username/handle.'
+      label: 'Profile Doesn\'t Match Lead',
+      badgeClass: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40 font-bold',
+      description: cleanMsg || 'Extracted profile details do not match the expected contact username or identity.'
     };
   }
 
@@ -159,8 +170,8 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   if (matchedTag.includes('COMPOSER_UNAVAILABLE') || cleanMsg.toLowerCase().includes('composer') || cleanMsg.toLowerCase().includes('typing')) {
     return {
       tag: 'COMPOSER_UNAVAILABLE',
-      label: 'DM Composer Unavailable',
-      badgeClass: 'bg-red-500/20 text-red-300 border-red-500/40',
+      label: 'Chat Box Unavailable',
+      badgeClass: 'bg-red-500/20 text-red-300 border-red-500/40 font-bold',
       description: cleanMsg || 'Instagram message input field could not be focused or typed into.'
     };
   }
@@ -169,9 +180,9 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   if (matchedTag.includes('CHALLENGE_REQUIRED') || cleanMsg.toLowerCase().includes('challenge') || cleanMsg.toLowerCase().includes('checkpoint')) {
     return {
       tag: 'CHALLENGE_REQUIRED',
-      label: 'Security Checkpoint',
-      badgeClass: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
-      description: cleanMsg || 'Instagram requested a security checkpoint or captcha challenge.'
+      label: 'Instagram Security Challenge',
+      badgeClass: 'bg-purple-500/20 text-purple-300 border-purple-500/40 font-bold',
+      description: cleanMsg || 'Instagram presented a security checkpoint, SMS code, or CAPTCHA challenge.'
     };
   }
 
@@ -179,9 +190,9 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   if (matchedTag.includes('AUTH') || cleanMsg.toLowerCase().includes('login') || cleanMsg.toLowerCase().includes('not logged in')) {
     return {
       tag: 'AUTHENTICATION_REQUIRED',
-      label: 'Login Required',
-      badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
-      description: cleanMsg || 'Instagram session expired or not authenticated in Chrome.'
+      label: 'Instagram Login Required',
+      badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40 font-bold',
+      description: cleanMsg || 'Instagram session expired or account is not logged in on active Chrome profile.'
     };
   }
 
@@ -189,8 +200,8 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   if (statusStr === 'MANUAL_REVIEW') {
     return {
       tag: matchedTag || 'MANUAL_REVIEW',
-      label: matchedTag ? matchedTag.replace(/_/g, ' ') : 'Manual Review',
-      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+      label: matchedTag ? matchedTag.replace(/_/g, ' ') : 'Needs Operator Review',
+      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold',
       description: cleanMsg || 'Task flagged for manual operator review before proceeding.'
     };
   }
@@ -198,8 +209,8 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   if (statusStr === 'RETRY_WAIT') {
     return {
       tag: matchedTag || 'RETRY_WAIT',
-      label: matchedTag ? matchedTag.replace(/_/g, ' ') : 'Waiting for Retry',
-      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+      label: matchedTag ? matchedTag.replace(/_/g, ' ') : 'Queued for Auto-Retry',
+      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold',
       description: cleanMsg || 'Task scheduled for retry attempt after transient issue.'
     };
   }
@@ -207,26 +218,35 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
   if (statusStr === 'INTERRUPTED') {
     return {
       tag: 'INTERRUPTED',
-      label: 'Interrupted',
-      badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
-      description: cleanMsg || 'Automation run was interrupted while this task was executing.'
+      label: 'Interrupted Mid-Run',
+      badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40 font-bold',
+      description: cleanMsg || 'Automation run was abruptly halted or process terminated while this task was dispatching.'
     };
   }
 
   if (statusStr === 'RECONCILING') {
     return {
       tag: 'RECONCILING',
-      label: 'Reconciling State',
-      badgeClass: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
-      description: cleanMsg || 'Task status is currently being reconciled with Instagram message log.'
+      label: 'Verifying Delivery',
+      badgeClass: 'bg-blue-500/20 text-blue-300 border-blue-500/40 font-bold',
+      description: cleanMsg || 'Message was submitted; system is inspecting chat thread to verify delivery and avoid duplicate sends.'
+    };
+  }
+
+  if (statusStr === 'FAILED') {
+    return {
+      tag: matchedTag || 'FAILED',
+      label: 'Delivery Failed',
+      badgeClass: 'bg-red-500/20 text-red-300 border-red-500/40 font-bold',
+      description: cleanMsg || 'Send attempt failed after retries exhausted or non-retryable error.'
     };
   }
 
   if (statusStr === 'SKIPPED') {
     return {
       tag: matchedTag || 'SKIPPED',
-      label: matchedTag ? matchedTag.replace(/_/g, ' ') : 'Skipped',
-      badgeClass: 'bg-gray-500/20 text-gray-300 border-gray-500/40',
+      label: matchedTag ? matchedTag.replace(/_/g, ' ') : 'Skipped by Policy',
+      badgeClass: 'bg-gray-500/20 text-gray-300 border-gray-500/40 font-bold',
       description: cleanMsg || 'Task was skipped based on account condition or policy.'
     };
   }
@@ -236,7 +256,7 @@ export function parseTaskError(task: Task): ErrorCategoryInfo | null {
     return {
       tag: finalTag,
       label: matchedTag ? matchedTag.replace(/_/g, ' ') : 'Attention Needed',
-      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold',
       description: cleanMsg || 'Task requires attention or operator review.'
     };
   }
@@ -894,7 +914,7 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                 <h2 className="text-xl font-black text-white tracking-tight">Execution Queue & Dispatch Scheduler</h2>
                 <span className="bg-emerald-500/20 text-emerald-400 font-mono text-xs px-2.5 py-0.5 rounded-full border border-emerald-500/30 font-semibold flex items-center space-x-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-                  <span>{tasks.length} Synced</span>
+                  <span>{totalFiltered} in View ({tasks.length} Total)</span>
                 </span>
               </div>
               <p className="text-xs text-gray-400 mt-0.5">
@@ -1338,17 +1358,17 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
           </div>
 
           {/* Page Size Selector */}
-          <div className="flex items-center rounded-xl bg-gray-950/90 border border-gray-800 px-2.5 py-1 space-x-1.5">
-            <span className="text-[10px] text-gray-500 font-bold uppercase">Rows:</span>
+          <div className="flex items-center rounded-xl bg-gray-950/90 border border-gray-800 px-2.5 py-1 space-x-1.5" title="Page size (how many rows displayed per page)">
+            <span className="text-[10px] text-gray-500 font-bold uppercase">Per Page:</span>
             <select
               value={pageSize}
               onChange={(e) => setPageSize(Number(e.target.value))}
               className="bg-transparent text-xs text-gray-300 font-semibold focus:outline-none cursor-pointer"
             >
-              <option value={10} className="bg-gray-900 text-white">10</option>
-              <option value={25} className="bg-gray-900 text-white">25</option>
-              <option value={50} className="bg-gray-900 text-white">50</option>
-              <option value={100} className="bg-gray-900 text-white">100</option>
+              <option value={10} className="bg-gray-900 text-white">10 / page</option>
+              <option value={25} className="bg-gray-900 text-white">25 / page</option>
+              <option value={50} className="bg-gray-900 text-white">50 / page</option>
+              <option value={100} className="bg-gray-900 text-white">100 / page</option>
             </select>
           </div>
         </div>
@@ -1596,8 +1616,8 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                     <span>{viewMode === 'DONE' ? 'Sent Message Copy' : 'Queued Message Body'}</span>
                   </span>
                 </th>
-                <th className="py-3.5 px-4 w-[14%]">
-                  {viewMode === 'UPCOMING' ? 'Priority & Status' : 'Status & Issues'}
+                <th className="py-3.5 px-4 w-[16%]">
+                  {viewMode === 'UPCOMING' ? 'Priority & Status' : viewMode === 'ISSUES' ? 'Reason & Category Tag' : 'Status & Issues'}
                 </th>
                 <th className="py-3.5 px-4 w-[12%]">
                   {viewMode === 'DONE' ? 'Delivered At' : 'Scheduled / ETA'}
@@ -1795,49 +1815,74 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
 
                       {/* Status & Retries / Error Categorization */}
                       <td className="py-4 px-4 align-top space-y-1.5">
-                        <span
-                          className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${getStatusBadge(
-                            t.status
-                          )}`}
-                        >
-                          {t.status === 'COMPLETED' ? (
-                            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                          ) : t.status === 'RUNNING' ? (
-                            <Play className="w-3 h-3 text-indigo-400 fill-indigo-400" />
-                          ) : t.status === 'PAUSED' ? (
-                            <Pause className="w-3 h-3 text-amber-400" />
-                          ) : t.status === 'RETRY_WAIT' || t.status === 'MANUAL_REVIEW' ? (
-                            <AlertCircle className="w-3 h-3 text-amber-400" />
-                          ) : (
-                            <Clock className="w-3 h-3 text-sky-400" />
-                          )}
-                          <span>{t.status === 'PAUSED' ? 'Excluded / Paused' : t.status.replace('_', ' ')}</span>
-                        </span>
-
-                        <div className="text-[10px] text-gray-400 font-mono pl-1">
-                          {t.status === 'COMPLETED' ? (
-                            <span className="text-emerald-400 font-semibold">Delivered</span>
-                          ) : (
-                            <>
-                              Attempt: <span className="text-gray-200 font-semibold">{t.attempt_count ?? t.retry_count ?? 0}</span> / {t.max_retries ?? 3}
-                            </>
-                          )}
-                        </div>
-
-                        {/* Categorized Issue & Explanation Pill */}
                         {(() => {
                           const err = parseTaskError(t);
-                          if (!err) return null;
-                          return (
-                            <div className="mt-1 space-y-1">
-                              <span className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[9px] font-bold border font-mono ${err.badgeClass}`}>
-                                <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
-                                <span>[{err.tag}] {err.label}</span>
-                              </span>
-                              <div className="text-[10px] text-gray-300 font-sans leading-tight bg-gray-950/90 p-1.5 rounded-lg border border-gray-800/80 shadow-inner">
-                                {err.description}
+                          const hasIssue = Boolean(err && (viewMode === 'ISSUES' || issueStatuses.includes(t.status)));
+
+                          if (hasIssue && err) {
+                            return (
+                              <div className="space-y-1.5">
+                                {/* Primary Real Reason & Category Tag */}
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span
+                                    className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border shadow-sm ${err.badgeClass}`}
+                                    title={`Real Reason: ${err.description}`}
+                                  >
+                                    <AlertTriangle className="w-3 h-3 shrink-0" />
+                                    <span>{err.label}</span>
+                                  </span>
+                                  <span
+                                    className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-gray-900 border border-gray-800 text-gray-400 font-semibold"
+                                    title={`Internal state machine status: ${t.status}`}
+                                  >
+                                    {t.status.replace('_', ' ')}
+                                  </span>
+                                </div>
+
+                                <div className="text-[10px] text-gray-400 font-mono pl-1">
+                                  Attempt: <span className="text-gray-200 font-semibold">{t.attempt_count ?? t.retry_count ?? 0}</span> / {t.max_retries ?? 3}
+                                </div>
+
+                                {/* Plain English Explanation & Tag */}
+                                <div className="mt-1 text-[10px] text-gray-300 font-sans leading-relaxed bg-gray-950/90 p-2 rounded-xl border border-gray-800/90 shadow-inner">
+                                  <span className="font-bold text-amber-400 font-mono text-[9px] uppercase tracking-wider block mb-0.5">
+                                    Category: [{err.tag}]
+                                  </span>
+                                  {err.description}
+                                </div>
                               </div>
-                            </div>
+                            );
+                          }
+
+                          return (
+                            <>
+                              <span
+                                className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${getStatusBadge(
+                                  t.status
+                                )}`}
+                              >
+                                {t.status === 'COMPLETED' ? (
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                                ) : t.status === 'RUNNING' ? (
+                                  <Play className="w-3 h-3 text-indigo-400 fill-indigo-400" />
+                                ) : t.status === 'PAUSED' ? (
+                                  <Pause className="w-3 h-3 text-amber-400" />
+                                ) : (
+                                  <Clock className="w-3 h-3 text-sky-400" />
+                                )}
+                                <span>{t.status === 'PAUSED' ? 'Excluded / Paused' : t.status.replace('_', ' ')}</span>
+                              </span>
+
+                              <div className="text-[10px] text-gray-400 font-mono pl-1">
+                                {t.status === 'COMPLETED' ? (
+                                  <span className="text-emerald-400 font-semibold">Delivered</span>
+                                ) : (
+                                  <>
+                                    Attempt: <span className="text-gray-200 font-semibold">{t.attempt_count ?? t.retry_count ?? 0}</span> / {t.max_retries ?? 3}
+                                  </>
+                                )}
+                              </div>
+                            </>
                           );
                         })()}
                       </td>

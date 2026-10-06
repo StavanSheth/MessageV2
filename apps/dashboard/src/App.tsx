@@ -95,27 +95,38 @@ export function App() {
     }
   };
 
-  // Load backend state
+  const currentTabRef = useRef<string>(currentTab);
+  currentTabRef.current = currentTab;
+  const initialLoadedRef = useRef<boolean>(false);
+
+  // Load backend state (smart tab-scoped fetching to prevent polling flood)
   const loadData = useCallback(async (force = false) => {
     try {
-      const [st, cList, tList, sList, eList, allSt] = await Promise.all([
+      const activeTab = currentTabRef.current;
+      const isInitial = !initialLoadedRef.current || force;
+
+      const [st, allSt] = await Promise.all([
         fetchAutomationStatus().catch(() => null),
-        fetchContacts().catch(() => []),
-        fetchTasks().catch(() => []),
-        fetchSources().catch(() => []),
-        fetchEvents(100).catch(() => []),
         fetchAllWorkersStatus().catch(() => null),
-      ]);
+      ] as const);
 
       const isRecentMutation = !force && (isMutatingRef.current || (Date.now() - lastMutationTimeRef.current < 1400));
-
       if (st && !isRecentMutation) setAutomationState(st);
       if (allSt && !isRecentMutation) setAllWorkersStatus(allSt);
 
-      if (cList) setContacts(cList);
-      if (tList) setTasks(tList);
-      if (sList) setSources(sList);
-      if (eList) setEvents(eList);
+      const fetchC = isInitial || activeTab === 'contacts' || activeTab === 'overview';
+      const fetchT = isInitial || activeTab === 'queue' || activeTab === 'contacts' || activeTab === 'overview';
+      const fetchS = isInitial || activeTab === 'sources';
+      const fetchE = isInitial || activeTab === 'events';
+
+      const dataPromises: Promise<any>[] = [];
+      if (fetchC) dataPromises.push(fetchContacts().then(setContacts).catch(() => []));
+      if (fetchT) dataPromises.push(fetchTasks().then(setTasks).catch(() => []));
+      if (fetchS) dataPromises.push(fetchSources().then(setSources).catch(() => []));
+      if (fetchE) dataPromises.push(fetchEvents(100).then(setEvents).catch(() => []));
+
+      await Promise.all(dataPromises);
+      initialLoadedRef.current = true;
     } catch (e) {
       console.error('Error fetching dashboard data:', e);
     }
@@ -133,7 +144,7 @@ export function App() {
   const { isConnected: isWsConnected } = useWebSocket(handleWsEvent);
 
   useEffect(() => {
-    loadData();
+    loadData(true);
     const interval = setInterval(() => {
       if (!isMutatingRef.current && Date.now() - lastMutationTimeRef.current >= 1400) {
         loadData();
@@ -141,6 +152,11 @@ export function App() {
     }, 2500);
     return () => clearInterval(interval);
   }, [loadData]);
+
+  // Refresh tab data when switching tabs
+  useEffect(() => {
+    loadData(true);
+  }, [currentTab, loadData]);
 
   // Action handlers - Worker 1
   const handleStart = async (limitOverride?: number | null) => {

@@ -96,9 +96,13 @@ class InstagramAdapter:
                 await self.page.bring_to_front()
             except Exception:
                 pass
-            await self.page.goto(profile_url, wait_until="domcontentloaded", timeout=25000)
+            response = await self.page.goto(profile_url, wait_until="domcontentloaded", timeout=25000)
             await asyncio.sleep(2)
             await self.dismiss_popups()
+
+            # Check for HTTP 404 response
+            if response and getattr(response, "status", None) == 404:
+                return False, ResultCode.PROFILE_NOT_FOUND, "Profile page not found (HTTP 404)"
 
             # Check for login redirection or challenge
             current_url = getattr(self.page, "url", "") or ""
@@ -109,8 +113,15 @@ class InstagramAdapter:
 
             page_text = await self.page.locator("body").inner_text()
             page_text_lower = page_text.lower()
-            if "sorry, this page isn't available" in page_text_lower or "link you followed may be broken" in page_text_lower:
-                return False, ResultCode.PROFILE_NOT_FOUND, "Profile page not found"
+            if (
+                "sorry, this page isn't available" in page_text_lower
+                or "sorry, this page is not available" in page_text_lower
+                or "link you followed may be broken" in page_text_lower
+                or "page may have been removed" in page_text_lower
+                or "page not found" in page_text_lower
+                or "404 not found" in page_text_lower
+            ):
+                return False, ResultCode.PROFILE_NOT_FOUND, "Profile page not found (Sorry, this page isn't available)"
 
             if "this account is private" in page_text_lower or "account is private" in page_text_lower:
                 return False, ResultCode.PROFILE_PRIVATE, "Account is private"
@@ -357,9 +368,9 @@ class InstagramAdapter:
                     if expected_text not in text_in_composer:
                         return ResultCode.SUCCESS
 
-            return ResultCode.UNKNOWN
+            return ResultCode.SEND_UNKNOWN
         except Exception:
-            return ResultCode.UNKNOWN
+            return ResultCode.SEND_UNKNOWN
 
     async def inspect_conversation(self, expected_text: str) -> ResultCode:
         """Inspect conversation thread during reconciliation."""

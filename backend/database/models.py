@@ -46,7 +46,7 @@ class SourceRecord(Base):
     __tablename__ = "source_records"
 
     id = Column(String(64), primary_key=True, default=lambda: generate_id("rec_"))
-    source_id = Column(String(64), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False)
+    source_id = Column(String(64), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False, index=True)
     raw_data = Column(Text, nullable=False)  # JSON string
     normalized_data = Column(Text, nullable=True)  # JSON string
     status = Column(String(32), default="VALID")
@@ -60,8 +60,8 @@ class Contact(Base):
     __tablename__ = "contacts"
 
     id = Column(String(64), primary_key=True, default=lambda: generate_id("cnt_"))
-    source_record_id = Column(String(64), ForeignKey("source_records.id", ondelete="SET NULL"), nullable=True)
-    name = Column(String(255), nullable=False)
+    source_record_id = Column(String(64), ForeignKey("source_records.id", ondelete="SET NULL"), nullable=True, index=True)
+    name = Column(String(255), nullable=False, index=True)
     instagram_url = Column(String(512), nullable=False, index=True)
     username = Column(String(255), nullable=True, index=True)
     expected_followers = Column(Integer, nullable=True)
@@ -81,25 +81,29 @@ class Contact(Base):
     notes = Column(Text, nullable=True)
     is_archived = Column(Boolean, default=False, index=True)
     last_run_id = Column(String(64), nullable=True, index=True)
-    created_at = Column(DateTime, default=utcnow)
+    created_at = Column(DateTime, default=utcnow, index=True)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
+    __table_args__ = (
+        Index("ix_contacts_archived_replied", "is_archived", "replied_status"),
+    )
+
     source_record = relationship("SourceRecord", back_populates="contact")
-    tasks = relationship("Task", back_populates="contact", cascade="all, delete-orphan")
-    messages = relationship("Message", back_populates="contact", cascade="all, delete-orphan")
+    tasks = relationship("Task", back_populates="contact", cascade="all, delete-orphan", lazy="selectin")
+    messages = relationship("Message", back_populates="contact", cascade="all, delete-orphan", lazy="selectin")
 
 class Task(Base):
     __tablename__ = "tasks"
 
     id = Column(String(64), primary_key=True, default=lambda: generate_id("tsk_"))
     contact_id = Column(String(64), ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False, index=True)
-    type = Column(String(32), nullable=False, default="MESSAGE")  # MESSAGE, FOLLOW_UP_1, FOLLOW_UP_2
+    type = Column(String(32), nullable=False, default="MESSAGE", index=True)  # MESSAGE, FOLLOW_UP_1, FOLLOW_UP_2
     status = Column(String(32), nullable=False, default="CREATED", index=True)
     sequence = Column(Integer, default=1)
     priority = Column(Integer, default=1)
-    scheduled_at = Column(DateTime, default=utcnow)
+    scheduled_at = Column(DateTime, default=utcnow, index=True)
     started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True, index=True)
     attempt_count = Column(Integer, default=0)
     worker_id = Column(String(64), nullable=True)
     lease_owner = Column(String(64), nullable=True)
@@ -119,10 +123,12 @@ class Task(Base):
     __table_args__ = (
         UniqueConstraint("contact_id", "type", "sequence", name="uq_contact_task_seq"),
         Index("ix_tasks_claim_ready", "status", "type", "scheduled_at", "priority"),
+        Index("ix_tasks_contact_type", "contact_id", "type"),
+        Index("ix_tasks_contact_status", "contact_id", "status"),
     )
 
-    contact = relationship("Contact", back_populates="tasks")
-    messages = relationship("Message", back_populates="task")
+    contact = relationship("Contact", back_populates="tasks", lazy="selectin")
+    messages = relationship("Message", back_populates="task", lazy="selectin")
     errors = relationship("Error", back_populates="task")
     verifications = relationship("VerificationResult", back_populates="task")
     send_attempts = relationship("SendAttempt", back_populates="task", cascade="all, delete-orphan")
@@ -185,7 +191,7 @@ class BrowserSession(Base):
     __tablename__ = "browser_sessions"
 
     id = Column(String(64), primary_key=True, default=lambda: generate_id("ses_"))
-    worker_id = Column(String(64), nullable=False)
+    worker_id = Column(String(64), nullable=False, index=True)
     browser_type = Column(String(32), default="chromium")
     user_data_dir = Column(Text, nullable=False)
     is_headless = Column(Boolean, default=False)
@@ -226,7 +232,7 @@ class Error(Base):
     __tablename__ = "errors"
 
     id = Column(String(64), primary_key=True, default=lambda: generate_id("err_"))
-    task_id = Column(String(64), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)
+    task_id = Column(String(64), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True)
     worker_id = Column(String(64), nullable=True)
     code = Column(String(64), nullable=False)
     message = Column(Text, nullable=False)
@@ -242,8 +248,8 @@ class AutomationRun(Base):
     __tablename__ = "automation_runs"
 
     id = Column(String(64), primary_key=True, default=lambda: generate_id("run_"))
-    worker_id = Column(String(64), nullable=False)
-    task_id = Column(String(64), nullable=False)
+    worker_id = Column(String(64), nullable=False, index=True)
+    task_id = Column(String(64), nullable=False, index=True)
     start_time = Column(DateTime, default=utcnow)
     end_time = Column(DateTime, nullable=True)
     status = Column(String(32), default="RUNNING")
@@ -255,7 +261,7 @@ class SyncRun(Base):
     __tablename__ = "sync_runs"
 
     id = Column(String(64), primary_key=True, default=lambda: generate_id("sync_"))
-    source_id = Column(String(64), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False)
+    source_id = Column(String(64), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False, index=True)
     started_at = Column(DateTime, default=utcnow)
     completed_at = Column(DateTime, nullable=True)
     status = Column(String(32), default="PENDING")

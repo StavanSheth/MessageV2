@@ -26,6 +26,9 @@ import {
   setCoordinatorMode,
   setWorkerRandomOrder
 } from '../services/api';
+import { formatLastScan } from '../utils/date';
+import { StageStepper } from '../components/automation/StageStepper';
+import { CoordinatorPanel } from '../components/automation/CoordinatorPanel';
 
 interface LiveAutomationViewProps {
   state: LiveAutomationState;
@@ -42,8 +45,6 @@ interface LiveAutomationViewProps {
   onStop?: () => void;
   onRefresh?: () => void;
 }
-import { formatLastScan } from '../utils/date';
-export { formatLastScan };
 
 const OUTREACH_STAGES = [
   { key: 'CHECKING_LOGIN', label: 'Login Check', aliases: ['INITIALIZING'] },
@@ -666,80 +667,7 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
         </div>
 
         {/* DM Mutual Exclusion Status & Strategy Bar */}
-        <div className="mt-4 pt-3 border-t border-gray-800/80 flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center space-x-3">
-            {/* Lock Status Badge */}
-            <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl border text-xs font-bold shadow-sm ${
-              coordinatorStatus?.active_sender === 'WORKER-01'
-                ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                : coordinatorStatus?.active_sender === 'WORKER-03'
-                ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                : 'bg-gray-800 border-gray-700 text-gray-300'
-            }`}>
-              {coordinatorStatus?.active_sender ? (
-                <>
-                  <Lock className="w-3.5 h-3.5 animate-pulse text-amber-400" />
-                  <span>
-                    DM Lock: {coordinatorStatus.active_sender === 'WORKER-01' ? 'Worker 1 (Cold DMs Active)' : 'Worker 3 (Follow-Up Active)'}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <Unlock className="w-3.5 h-3.5 text-gray-400" />
-                  <span>DM Lock: Standby / Free</span>
-                </>
-              )}
-            </div>
-
-            {/* Due Tasks Count */}
-            <div className="text-xs text-gray-400 flex items-center space-x-2">
-              <span className="bg-gray-800 px-2 py-0.5 rounded text-gray-300 font-mono">
-                {coordinatorStatus?.cold_due_count || 0} Cold Ready
-              </span>
-              <span>•</span>
-              <span className="bg-gray-800 px-2 py-0.5 rounded text-amber-300 font-mono">
-                {coordinatorStatus?.followup_due_count || 0} Follow-Ups Due
-              </span>
-            </div>
-          </div>
-
-          {/* Mode Switcher */}
-          <div className="flex items-center space-x-2 text-xs">
-            <span className="text-gray-400 font-semibold uppercase text-[10px]">Strategy:</span>
-            <div className="inline-flex p-0.5 rounded-lg bg-gray-950 border border-gray-800">
-              <button
-                onClick={() => handleSetMode('BALANCED')}
-                className={`px-2.5 py-1 rounded text-xs font-bold transition cursor-pointer ${
-                  coordinatorStatus?.mode === 'BALANCED'
-                    ? 'bg-indigo-600 text-white shadow'
-                    : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                ⚖️ Balanced
-              </button>
-              <button
-                onClick={() => handleSetMode('COLD_ONLY')}
-                className={`px-2.5 py-1 rounded text-xs font-bold transition cursor-pointer ${
-                  coordinatorStatus?.mode === 'COLD_ONLY'
-                    ? 'bg-emerald-600 text-white shadow'
-                    : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                ⚡ Cold Only
-              </button>
-              <button
-                onClick={() => handleSetMode('FOLLOWUP_ONLY')}
-                className={`px-2.5 py-1 rounded text-xs font-bold transition cursor-pointer ${
-                  coordinatorStatus?.mode === 'FOLLOWUP_ONLY'
-                    ? 'bg-amber-600 text-white shadow'
-                    : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                🔁 Follow-Ups Only
-              </button>
-            </div>
-          </div>
-        </div>
+        <CoordinatorPanel coordinatorStatus={coordinatorStatus} onSetMode={handleSetMode} />
 
         {/* View Switcher Tabs */}
         <div className="mt-3 pt-3 border-t border-gray-800/80 flex items-center justify-between flex-wrap gap-3">
@@ -945,44 +873,12 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
           </div>
 
           {/* Worker 1: 7-Stage Dynamic Stepper */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs uppercase font-bold text-gray-400 tracking-wider">Outreach Execution Pipeline (7 Steps)</span>
-              <span className="text-xs text-indigo-400 font-mono font-semibold">
-                {outreachStageIndex >= 0 ? `Step ${outreachStageIndex + 1} of 7: ${OUTREACH_STAGES[outreachStageIndex].label}` : 'Stage: Idle'}
-              </span>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-              {OUTREACH_STAGES.map((s, idx) => {
-                const isPast = outreachStageIndex > idx;
-                const isCurrent = state.stage === s.key || s.aliases.includes(state.stage);
-                return (
-                  <div
-                    key={s.key}
-                    className={`flex flex-col items-center p-2 rounded-xl border text-center transition-all ${
-                      isCurrent
-                        ? 'bg-indigo-600/30 border-indigo-400 text-indigo-300 shadow-md shadow-indigo-500/20 scale-105'
-                        : isPast
-                        ? 'bg-emerald-950/20 border-emerald-500/40 text-emerald-400'
-                        : 'bg-gray-950/60 border-gray-800 text-gray-500'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-1 mb-1">
-                      {isPast ? (
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                      ) : isCurrent ? (
-                        <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />
-                      ) : (
-                        <span className="w-2 h-2 rounded-full bg-gray-600" />
-                      )}
-                      <span className="text-[10px] font-mono font-bold">Step {idx + 1}</span>
-                    </div>
-                    <span className="text-xs font-semibold truncate w-full">{s.label}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          <StageStepper
+            stages={OUTREACH_STAGES}
+            currentStage={state.stage}
+            title="Outreach Execution Pipeline"
+            themeColor="indigo"
+          />
 
           {/* Worker 1: Batch Dispatch Toolbar */}
           <div className="p-4 rounded-xl bg-gray-950/80 border border-gray-800 flex flex-col lg:flex-row items-center justify-between gap-4">
@@ -1619,44 +1515,12 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
           </div>
 
           {/* Worker 2: 6-Stage Dynamic Stepper */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs uppercase font-bold text-gray-400 tracking-wider">Reply Audit Pipeline (6 Steps)</span>
-              <span className="text-xs text-purple-400 font-mono font-semibold">
-                {scannerStageIndex >= 0 ? `Step ${scannerStageIndex + 1} of 6: ${SCANNER_STAGES[scannerStageIndex].label}` : 'Stage: Standby'}
-              </span>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-              {SCANNER_STAGES.map((s, idx) => {
-                const isPast = scannerStageIndex > idx;
-                const isCurrent = scannerCurrentStage === s.key || s.aliases.includes(scannerCurrentStage);
-                return (
-                  <div
-                    key={s.key}
-                    className={`flex flex-col items-center p-2 rounded-xl border text-center transition-all ${
-                      isCurrent
-                        ? 'bg-purple-600/30 border-purple-400 text-purple-300 shadow-md shadow-purple-500/20 scale-105'
-                        : isPast
-                        ? 'bg-emerald-950/20 border-emerald-500/40 text-emerald-400'
-                        : 'bg-gray-950/60 border-gray-800 text-gray-500'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-1 mb-1">
-                      {isPast ? (
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                      ) : isCurrent ? (
-                        <span className="w-2 h-2 rounded-full bg-purple-400 animate-ping" />
-                      ) : (
-                        <span className="w-2 h-2 rounded-full bg-gray-600" />
-                      )}
-                      <span className="text-[10px] font-mono font-bold">Step {idx + 1}</span>
-                    </div>
-                    <span className="text-xs font-semibold truncate w-full">{s.label}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          <StageStepper
+            stages={SCANNER_STAGES}
+            currentStage={scannerCurrentStage}
+            title="Reply Audit Pipeline"
+            themeColor="purple"
+          />
 
           {/* Worker 2: Stats Toolbar */}
           <div className="p-3.5 rounded-xl bg-gray-950/80 border border-gray-800 flex flex-wrap items-center justify-between gap-3 text-xs">
@@ -2050,35 +1914,12 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
           </div>
 
           {/* Stepper Pipeline */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs uppercase font-bold text-gray-400 tracking-wider">Follow-Up Pipeline (6 Steps)</span>
-              <span className="text-xs text-amber-400 font-mono font-semibold">
-                {worker3Status?.stage ? `Stage: ${worker3Status.stage}` : 'Stage: Idle'}
-              </span>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-              {FOLLOWUP_STAGES.map((s, idx) => {
-                const isCurrent = worker3Status?.stage === s.key || s.aliases.includes(worker3Status?.stage || '');
-                return (
-                  <div
-                    key={s.key}
-                    className={`flex flex-col items-center p-2 rounded-xl border text-center transition-all ${
-                      isCurrent
-                        ? 'bg-amber-600/30 border-amber-400 text-amber-300 shadow-md shadow-amber-500/20 scale-105'
-                        : 'bg-gray-950/60 border-gray-800 text-gray-500'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-1 mb-1">
-                      <span className={`w-2 h-2 rounded-full ${isCurrent ? 'bg-amber-400 animate-ping' : 'bg-gray-600'}`} />
-                      <span className="text-[10px] font-mono font-bold">Step {idx + 1}</span>
-                    </div>
-                    <span className="text-xs font-semibold truncate w-full">{s.label}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          <StageStepper
+            stages={FOLLOWUP_STAGES}
+            currentStage={worker3Status?.stage || ''}
+            title="Follow-Up Pipeline"
+            themeColor="amber"
+          />
 
           {/* Batch Selector & Actions Bar */}
           <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl bg-gray-950/80 border border-gray-800/80">

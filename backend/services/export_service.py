@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import io
+import re
 from typing import List, Dict, Any, Optional
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -170,16 +171,113 @@ class ExportService:
         ]
 
     @classmethod
+    def _get_task_condition_label(cls, task: Task) -> str:
+        raw_cat = (getattr(task, 'error_category', None) or getattr(task, 'error_code', None) or '').upper()
+        raw_msg = (task.manual_review_reason or getattr(task, 'error_message', None) or getattr(task, 'last_error', None) or '')
+        status_str = (task.status or '').upper()
+        contact = task.contact
+        replied_status = (contact.replied_status if contact else '').upper()
+
+        tag_match = re.match(r'^\[([A-Z0-9_]+)\]\s*(.*)', raw_msg, re.IGNORECASE)
+        matched_tag = tag_match.group(1).upper() if tag_match else raw_cat
+        clean_msg = (tag_match.group(2).strip() if tag_match else raw_msg).lower()
+
+        if status_str == 'COMPLETED':
+            if replied_status in ['YES', 'AUTOMATED_MESSAGE']:
+                return "Delivered (Contact Replied)"
+            return "Delivered Successfully"
+
+        if status_str in ['READY', 'QUEUED']:
+            return "Ready for Dispatch"
+
+        if status_str == 'RUNNING':
+            return "Dispatching Now"
+
+        if status_str == 'PAUSED':
+            return "Paused"
+
+        # Specific attention conditions with human-readable names
+        if 'AWAITING_APPROVAL' in matched_tag or status_str == 'AWAITING_APPROVAL' or 'awaiting approval' in clean_msg:
+            return "Approval Required"
+
+        if 'PAGE_NOT_FOUND' in matched_tag or '404' in clean_msg or 'page not found' in clean_msg:
+            return "Page Not Found (404)"
+
+        if 'DM_RESTRICTED' in matched_tag or replied_status == 'DM_RESTRICTED' or 'does not accept' in clean_msg or 'no message button' in clean_msg:
+            return "DMs Restricted / Closed"
+
+        if 'DM_NOT_AVAILABLE' in matched_tag or 'not available' in clean_msg:
+            return "DM Message Button Unavailable"
+
+        if 'EXTERNAL_MESSAGE_DETECTED' in matched_tag or 'external message' in clean_msg:
+            return "External Message Detected"
+
+        if 'REPLY_RECEIVED' in matched_tag or 'reply received' in clean_msg or replied_status in ['YES', 'AUTOMATED_MESSAGE']:
+            return "Contact Already Replied"
+
+        if 'EXISTING_HISTORY' in matched_tag or 'ALREADY_MESSAGED' in matched_tag or 'existing' in clean_msg or 'prior' in clean_msg:
+            return "Prior Chat History Detected"
+
+        if 'RATE_LIMITED' in matched_tag or 'rate limit' in clean_msg or 'action blocked' in clean_msg:
+            return "Rate Limited / Cooldown"
+
+        if 'PROFILE_MISMATCH' in matched_tag or 'mismatch' in clean_msg:
+            return "Profile Identity Mismatch"
+
+        if 'follow-up 1 was not completed' in clean_msg or 'out of order' in clean_msg:
+            return "Previous Follow-Up Not Completed"
+
+        if 'COMPOSER_UNAVAILABLE' in matched_tag or 'composer' in clean_msg:
+            return "DM Composer Unavailable"
+
+        if 'CHALLENGE_REQUIRED' in matched_tag or 'checkpoint' in clean_msg or 'challenge' in clean_msg:
+            return "Security Checkpoint"
+
+        if 'AUTH' in matched_tag or 'login' in clean_msg:
+            return "Authentication / Login Required"
+
+        if status_str == 'CANCELLED':
+            return "Cancelled"
+
+        if status_str == 'RETRY_WAIT':
+            return "Waiting for Retry"
+
+        if status_str == 'INTERRUPTED':
+            return "Interrupted"
+
+        if status_str == 'RECONCILING':
+            return "Reconciling State"
+
+        if status_str == 'SKIPPED':
+            return "Skipped"
+
+        if status_str == 'MANUAL_REVIEW':
+            return "Manual Review Required"
+
+        return status_str.replace('_', ' ').title()
+
+    @classmethod
     def _extract_task_row(cls, task: Task) -> List[Any]:
         cnt = task.contact
         err_or_reason = task.manual_review_reason or getattr(task, 'error_message', None) or "—"
+        cond_label = cls._get_task_condition_label(task)
+        msg_body = "—"
+        if cnt:
+            if task.type == "FOLLOW_UP_1" and cnt.followup_1_message:
+                msg_body = cnt.followup_1_message
+            elif task.type == "FOLLOW_UP_2" and cnt.followup_2_message:
+                msg_body = cnt.followup_2_message
+            elif cnt.message:
+                msg_body = cnt.message
         return [
             task.id,
             cnt.name if cnt else "—",
             f"@{cnt.username}" if (cnt and cnt.username) else "—",
             task.type,
             task.status,
+            cond_label,
             f"P{task.priority}",
+            msg_body,
             format_datetime(task.scheduled_at),
             format_datetime(task.completed_at),
             task.attempt_count or 0,
@@ -230,11 +328,12 @@ class ExportService:
         tasks = list(t_res.scalars().all())
         t_headers = [
             "Task ID", "Contact Name", "Instagram Handle", "Stage / Type",
-            "Status", "Priority", "Scheduled At", "Completed At", "Attempts",
+            "Status", "Condition / Category", "Priority", "Queued Message",
+            "Scheduled At", "Completed At", "Attempts",
             "Review Reason / Error", "Created At"
         ]
         t_rows = [cls._extract_task_row(t) for t in tasks]
-        cls._style_worksheet(ws2, t_headers, t_rows, status_cols=[5])
+        cls._style_worksheet(ws2, t_headers, t_rows, status_cols=[5, 6])
 
         # ── Sheet 3: Sources ──
         ws3 = wb.create_sheet(title="3. Ingested Sources")
@@ -309,30 +408,36 @@ class ExportService:
 
         t_headers = [
             "Task ID", "Contact Name", "Instagram Handle", "Stage / Type",
-            "Status", "Priority", "Scheduled Time", "Completed Time", "Attempts",
+            "Status", "Condition / Category", "Priority", "Queued Message",
+            "Scheduled Time", "Completed Time", "Attempts",
             "Review Reason / Error", "Created At"
         ]
 
-        upcoming = [t for t in tasks if t.status in ["READY", "RUNNING", "QUEUED", "RETRY_WAIT"]]
+        upcoming = [t for t in tasks if t.status in ["READY", "RUNNING", "QUEUED", "PAUSED"]]
         done = [t for t in tasks if t.status == "COMPLETED"]
-        issues = [t for t in tasks if t.status in ["MANUAL_REVIEW", "FAILED", "CANCELLED", "SKIPPED"]]
+        issues = [
+            t for t in tasks if t.status in [
+                "MANUAL_REVIEW", "RETRY_WAIT", "AWAITING_APPROVAL",
+                "RECONCILING", "FAILED", "INTERRUPTED", "SKIPPED", "CANCELLED"
+            ] or (t.contact and t.contact.replied_status in ["YES", "AUTOMATED_MESSAGE", "DM_RESTRICTED"])
+        ]
 
         # Sheet 1: Upcoming Queue
         ws1 = wb.active
         ws1.title = "Upcoming Queue"
-        cls._style_worksheet(ws1, t_headers, [cls._extract_task_row(t) for t in upcoming], status_cols=[5])
+        cls._style_worksheet(ws1, t_headers, [cls._extract_task_row(t) for t in upcoming], status_cols=[5, 6])
 
         # Sheet 2: Done Already
         ws2 = wb.create_sheet(title="Done Already")
-        cls._style_worksheet(ws2, t_headers, [cls._extract_task_row(t) for t in done], status_cols=[5])
+        cls._style_worksheet(ws2, t_headers, [cls._extract_task_row(t) for t in done], status_cols=[5, 6])
 
         # Sheet 3: Action Needed / Needs Attention
         ws3 = wb.create_sheet(title="Action Needed")
-        cls._style_worksheet(ws3, t_headers, [cls._extract_task_row(t) for t in issues], status_cols=[5])
+        cls._style_worksheet(ws3, t_headers, [cls._extract_task_row(t) for t in issues], status_cols=[5, 6])
 
         # Sheet 4: All Tasks
         ws4 = wb.create_sheet(title="All Tasks")
-        cls._style_worksheet(ws4, t_headers, [cls._extract_task_row(t) for t in tasks], status_cols=[5])
+        cls._style_worksheet(ws4, t_headers, [cls._extract_task_row(t) for t in tasks], status_cols=[5, 6])
 
         output = io.BytesIO()
         wb.save(output)

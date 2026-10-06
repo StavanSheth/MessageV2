@@ -81,14 +81,17 @@ export interface Contact {
   last_run_id?: string | null;
   task_id?: string | null;
   first_message_scheduled_at?: string | null;
+  first_message_scheduled_at_raw?: string | null;
   // Outreach & Follow-up Tracking
   first_message_status?: string;
   first_message_sent_at?: string | null;
   followup_1_status?: string;
   followup_1_scheduled_at?: string | null;
+  followup_1_scheduled_at_raw?: string | null;
   followup_1_sent_at?: string | null;
   followup_2_status?: string;
   followup_2_scheduled_at?: string | null;
+  followup_2_scheduled_at_raw?: string | null;
   followup_2_sent_at?: string | null;
   created_at: string;
   updated_at?: string;

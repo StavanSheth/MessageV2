@@ -123,11 +123,11 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, tasks = [], automa
       message: c.message || c.custom_message || 'Hey! Saw your profile and loved your work.',
       followup_1_message: c.followup_1_message || 'Hey! Just following up on my previous message.',
       followup_1_delay_days: c.followup_1_delay_days ?? 3,
-      followup_1_scheduled_at: toDatetimeLocalValue(c.followup_1_scheduled_at),
+      followup_1_scheduled_at: toDatetimeLocalValue(c.followup_1_scheduled_at_raw || c.followup_1_scheduled_at),
       followup_1_status: c.followup_1_status || 'SCHEDULED',
       followup_2_message: c.followup_2_message || 'Hey! One last quick check-in before I close this thread.',
       followup_2_delay_days: c.followup_2_delay_days ?? 5,
-      followup_2_scheduled_at: toDatetimeLocalValue(c.followup_2_scheduled_at),
+      followup_2_scheduled_at: toDatetimeLocalValue(c.followup_2_scheduled_at_raw || c.followup_2_scheduled_at),
       followup_2_status: c.followup_2_status || 'SCHEDULED',
     });
     setEditSuccessMsg('');

@@ -42,21 +42,29 @@ class TaskRepository:
 
     async def claim_next_ready(self, worker_id: str, task_types: Optional[List[str]] = None,
                                lease_duration_seconds: int = 300,
-                               random_order: bool = False) -> Optional[Task]:
+                               random_order: bool = False,
+                               task_ids: Optional[List[str]] = None) -> Optional[Task]:
         """Atomically find and claim the next ready task or expired lease."""
         now = datetime.now(timezone.utc)
         type_cond = [Task.type.in_(task_types)] if task_types else []
+        task_id_cond = [Task.id.in_(task_ids)] if task_ids else []
+
+        # If task_ids are explicitly provided (e.g. operator checked specific rows to run now),
+        # allow immediate execution. Otherwise, enforce scheduled_at <= now for automatic queues.
+        scheduled_cond = [Task.scheduled_at <= now] if not task_ids else []
 
         ready_cond = and_(
             Task.status == TaskStatus.READY.value,
-            Task.scheduled_at <= now,
-            *type_cond
+            *scheduled_cond,
+            *type_cond,
+            *task_id_cond
         )
         expired_lease_cond = and_(
             Task.status == TaskStatus.RUNNING.value,
             Task.lease_expires_at != None,
             Task.lease_expires_at < now,
-            *type_cond
+            *type_cond,
+            *task_id_cond
         )
 
         order_by_args = [func.random()] if random_order else [Task.priority.desc(), Task.scheduled_at.asc()]

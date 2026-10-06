@@ -58,6 +58,7 @@ class FollowUpWorker:
         self._start_time: Optional[datetime] = None
         self.last_scan_at: Optional[str] = None
         self.random_order: bool = False
+        self.target_task_ids: Optional[List[str]] = None
 
     @property
     def is_running(self) -> bool:
@@ -71,13 +72,21 @@ class FollowUpWorker:
         self.random_order = enabled
         logger.info(f"[{WORKER_NAME}] Random order selection set to: {enabled}")
 
-    async def start(self, batch_limit: Optional[int] = None, delay_seconds: Optional[int] = None, random_order: Optional[bool] = None) -> None:
+    async def start(self, batch_limit: Optional[int] = None, delay_seconds: Optional[int] = None, random_order: Optional[bool] = None, task_ids: Optional[List[str]] = None) -> None:
         if random_order is not None:
             self.random_order = random_order
+
+        if task_ids is not None:
+            self.target_task_ids = list(task_ids)
+            if not batch_limit or batch_limit <= 0:
+                batch_limit = len(self.target_task_ids)
 
         if self._paused or self.status == WorkerStatus.PAUSED:
             if batch_limit is not None and batch_limit > 0:
                 self.batch_limit = batch_limit
+                self.batch_sent_count = 0
+            elif self.batch_limit is not None and self.batch_sent_count >= self.batch_limit:
+                self.batch_sent_count = 0
             if delay_seconds is not None and delay_seconds >= 5:
                 self.delay_between_messages = delay_seconds
             await self.resume()
@@ -121,6 +130,11 @@ class FollowUpWorker:
         self._paused = True
         self.status = WorkerStatus.PAUSED
         await coordinator.release_dm_lock(WORKER_ID)
+        try:
+            from backend.automation.extension_bridge import extension_bridge
+            await extension_bridge.abort_current_action()
+        except Exception:
+            pass
         await self._update_worker_db(status="PAUSED")
         await event_bus.publish(EventCode.WORKER_PAUSED, worker_id=WORKER_ID)
         await event_bus.publish_state(await self.health())
@@ -129,6 +143,8 @@ class FollowUpWorker:
         await coordinator.acquire_dm_lock(WORKER_ID)
         self._stop_requested = False
         self._paused = False
+        if self.batch_limit is not None and self.batch_sent_count >= self.batch_limit:
+            self.batch_sent_count = 0
         self.status = WorkerStatus.RUNNING
         if not self._task or self._task.done():
             self._task = asyncio.create_task(self._run_loop())
@@ -140,6 +156,11 @@ class FollowUpWorker:
         self._stop_requested = True
         self._paused = False
         await coordinator.release_dm_lock(WORKER_ID)
+        try:
+            from backend.automation.extension_bridge import extension_bridge
+            await extension_bridge.abort_current_action()
+        except Exception:
+            pass
         task_to_cancel = self._task
         self._task = None
         if task_to_cancel and not task_to_cancel.done():
@@ -221,7 +242,8 @@ class FollowUpWorker:
             "next_due_at": next_due_at,
             "last_scan_at": self.last_scan_at,
             "last_scanned_at": self.last_scan_at,
-            "random_order": self.random_order
+            "random_order": self.random_order,
+            "target_task_ids": self.target_task_ids
         }
 
     async def _update_worker_db(self, **kwargs) -> None:
@@ -243,7 +265,16 @@ class FollowUpWorker:
                 st.worker_id = None
             if stuck_tasks:
                 await session.commit()
-            return await repo.claim_next_ready(WORKER_ID, task_types=["FOLLOW_UP_1", "FOLLOW_UP_2"], random_order=self.random_order)
+            task = await repo.claim_next_ready(
+                WORKER_ID,
+                task_types=["FOLLOW_UP_1", "FOLLOW_UP_2"],
+                random_order=self.random_order,
+                task_ids=self.target_task_ids
+            )
+            if task and self.target_task_ids:
+                if task.id in self.target_task_ids:
+                    self.target_task_ids.remove(task.id)
+            return task
 
     async def _run_loop(self) -> None:
         self.status = WorkerStatus.RUNNING
@@ -403,9 +434,45 @@ class FollowUpWorker:
                     await t_repo.update_status(task_id, TaskStatus.CANCELLED, manual_review_reason=f"Cancelled: Contact replied {chk_c.replied_status}")
                     self.current_task_id = None
                     return
+                if chk_c and chk_c.replied_status == "DM_RESTRICTED":
+                    logger.info(f"[Worker 3] Contact {contact.name} is DM_RESTRICTED. Skipping follow-up.")
+                    t_repo = TaskRepository(chk_session)
+                    await t_repo.update_status(task_id, TaskStatus.SKIPPED, manual_review_reason="[DM_RESTRICTED] Contact cannot receive message requests")
+                    self.current_task_id = None
+                    return
+
                 if chk_c:
+                    # Stale scheduled date safeguard (> 30 days past due)
+                    now_dt = datetime.now(timezone.utc)
+                    task_scheduled = task.scheduled_at
+                    if task_scheduled and task_scheduled.tzinfo is None:
+                        task_scheduled = task_scheduled.replace(tzinfo=timezone.utc)
+                    if task_scheduled and (now_dt - task_scheduled).days > 30:
+                        logger.warning(f"[Worker 3] Task {task_id} scheduled date ({task.scheduled_at}) is > 30 days in the past. Flagging MANUAL_REVIEW.")
+                        t_repo = TaskRepository(chk_session)
+                        await t_repo.update_status(
+                            task_id,
+                            TaskStatus.MANUAL_REVIEW,
+                            manual_review_reason=f"[STALE_FOLLOWUP] Scheduled date is > 30 days overdue. Operator review recommended."
+                        )
+                        self.current_task_id = None
+                        return
+
+                    # Verify prerequisite outreach message completed before sending Follow-Up 1
+                    if task.type == "FOLLOW_UP_1":
+                        init_stmt = select(Task).where(
+                            and_(Task.contact_id == contact.id, Task.type == "MESSAGE")
+                        )
+                        init_task = (await chk_session.execute(init_stmt)).scalar_one_or_none()
+                        if not init_task or init_task.status != TaskStatus.COMPLETED.value:
+                            logger.warning(f"[Worker 3] Cannot send Follow-Up 1 for {contact.name}: Initial outreach message was not completed (status: {getattr(init_task, 'status', 'None')}).")
+                            t_repo = TaskRepository(chk_session)
+                            await t_repo.update_status(task_id, TaskStatus.MANUAL_REVIEW, manual_review_reason="[INITIAL_MESSAGE_PENDING] Initial outreach message was not completed.")
+                            self.current_task_id = None
+                            return
+
+                    # Verify Follow-Up 1 completed before sending Follow-Up 2
                     if task.type == "FOLLOW_UP_2":
-                        from sqlalchemy import select, and_
                         fu1_stmt = select(Task).where(
                             and_(Task.contact_id == contact.id, Task.type == "FOLLOW_UP_1")
                         )
@@ -416,6 +483,7 @@ class FollowUpWorker:
                             await t_repo.update_status(task_id, TaskStatus.CANCELLED, manual_review_reason="Cancelled: Follow-Up 1 was not completed")
                             self.current_task_id = None
                             return
+
                     if task.type == "FOLLOW_UP_1" and chk_c.followup_1_message:
                         followup_body = chk_c.followup_1_message
                     elif task.type == "FOLLOW_UP_2" and chk_c.followup_2_message:

@@ -63,8 +63,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   isRandomOrder = false,
   onToggleRandomOrder,
 }) => {
-  const isRunning = anyRunning !== undefined ? anyRunning : workerStatus === 'RUNNING';
-  const isPaused = anyPaused !== undefined ? anyPaused : workerStatus === 'PAUSED';
+  const isRunning = Boolean((anyRunning ?? false) || workerStatus === 'RUNNING');
+  const isPaused = Boolean((anyPaused ?? false) || workerStatus === 'PAUSED');
 
   const PRESET_BATCHES = [1, 3, 5, 10, 25, 50, 100];
   const effectiveIsCustom = isCustomBatch !== undefined

@@ -345,6 +345,33 @@ async function handleCommand(msg) {
     return { success: true, pong: true };
   }
 
+  if (action === "ABORT_CURRENT_ACTION") {
+    console.log("[MessageV2 Extension] ABORT_CURRENT_ACTION received! Aborting in-flight operations...");
+    try {
+      const oTab = await getOutreachTab();
+      if (oTab && oTab.id) {
+        await chrome.scripting.executeScript({
+          target: { tabId: oTab.id },
+          func: () => {
+            window.__MESSAGEV2_ABORT__ = true;
+          }
+        }).catch(() => {});
+      }
+    } catch (e) {}
+    try {
+      const sTab = await getScannerTab();
+      if (sTab && sTab.id) {
+        await chrome.scripting.executeScript({
+          target: { tabId: sTab.id },
+          func: () => {
+            window.__MESSAGEV2_ABORT__ = true;
+          }
+        }).catch(() => {});
+      }
+    } catch (e) {}
+    return { success: true, aborted: true };
+  }
+
   if (action === "RELOAD_EXTENSION") {
     console.log("[MessageV2 Extension] Reloading extension...");
     setTimeout(() => {
@@ -578,10 +605,13 @@ async function handleCommand(msg) {
       target: { tabId: tab.id },
       args: [messageText, checkHistory, taskType],
       func: async (textToSend, shouldCheckHistory, currentTaskType) => {
+        window.__MESSAGEV2_ABORT__ = false;
+
         // 1. Click message button if not in DM thread
         if (!window.location.href.includes("/direct/t/")) {
           let clicked = false;
           for (let attempt = 0; attempt < 10; attempt++) {
+            if (window.__MESSAGEV2_ABORT__) return { success: false, aborted: true, error: "Operation aborted by user" };
             const buttons = Array.from(document.querySelectorAll('div[role="button"], button, a[role="button"]'));
             const msgBtn = buttons.find(b => {
               const t = (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase();
@@ -599,6 +629,8 @@ async function handleCommand(msg) {
           }
         }
 
+        if (window.__MESSAGEV2_ABORT__) return { success: false, aborted: true, error: "Operation aborted by user" };
+
         // Dismiss any notification or save info popup
         const notNowButtons = Array.from(document.querySelectorAll('button, div[role="button"]')).filter(b => {
           const t = b.innerText.toLowerCase();
@@ -611,6 +643,7 @@ async function handleCommand(msg) {
         // 2. Find message composer (contenteditable or textarea)
         let composer = null;
         for (let i = 0; i < 25; i++) {
+          if (window.__MESSAGEV2_ABORT__) return { success: false, aborted: true, error: "Operation aborted by user" };
           composer = document.querySelector('div[contenteditable="true"][role="textbox"], div[contenteditable="true"][aria-label*="Message"], div[contenteditable="true"][data-lexical-editor="true"], textarea[placeholder*="Message"], div[aria-label="Message"]');
           if (composer) break;
           await new Promise(r => setTimeout(r, 350));
@@ -646,36 +679,102 @@ async function handleCommand(msg) {
         // 3. Detect existing conversation history (Anti-Duplicate Contact Guard)
         // Must exclude the profile header card (which contains username, name, followers, 'View profile')
         if (shouldCheckHistory) {
-          const chatPane = composer.closest('div[role="main"]') || document.querySelector('div[role="main"]') || document.body;
+          // Find the isolated conversation pane (never scan full document.body on profile pages)
+          let chatPane = composer.closest('div[role="dialog"]') ||
+                         composer.closest('div[aria-label*="Direct"], div[aria-label*="Conversation"], div[aria-label*="Chat"]') ||
+                         composer.closest('section');
           
+          if (!chatPane && window.location.pathname.startsWith('/direct/')) {
+            chatPane = composer.closest('div[role="main"]') || document.querySelector('div[role="main"]');
+          }
+
+          if (!chatPane) {
+            // Walk up from composer to find the nearest scrollable conversation wrapper
+            let curr = composer.parentElement;
+            while (curr && curr !== document.body && curr.getAttribute('role') !== 'main') {
+              if (curr.clientHeight > 150) {
+                chatPane = curr;
+                break;
+              }
+              curr = curr.parentElement;
+            }
+          }
+
+          if (!chatPane) {
+            chatPane = composer.parentElement?.parentElement || document.body;
+          }
+
+          // Locate and isolate the Profile Introduction Card (e.g. avatar, name, 'View Profile' button)
+          const viewProfileElem = Array.from(chatPane.querySelectorAll('a, button, div[role="button"], span')).find(el => {
+            const t = (el.innerText || '').trim().toLowerCase();
+            return t === 'view profile';
+          });
+          // The profile intro card container wraps the 'View Profile' button and profile info
+          const profileIntroCard = viewProfileElem ? (
+            viewProfileElem.closest('div[style*="align-items: center"]') ||
+            viewProfileElem.closest('div[style*="flex-direction: column"]') ||
+            viewProfileElem.parentElement?.parentElement?.parentElement ||
+            viewProfileElem.parentElement
+          ) : null;
+
+          // Locate the top bar/header of the popup (containing back arrow, title, close X)
+          const popupHeader = chatPane.querySelector('header, div[role="banner"]') ||
+                              Array.from(chatPane.querySelectorAll('div')).find(d => {
+                                return d.querySelector('svg[aria-label="Close"], svg[aria-label="Back"]') && d.clientHeight < 70;
+                              });
+
           // Check for message rows in Instagram's virtualized thread grid (excluding profile card)
           const msgRows = Array.from(chatPane.querySelectorAll('div[role="row"], div[role="listitem"]')).filter(r => {
+            if (composer.contains(r)) return false;
+            if (profileIntroCard && profileIntroCard.contains(r)) return false;
+            if (popupHeader && popupHeader.contains(r)) return false;
             const t = (r.innerText || '').trim();
-            if (!t || t === 'Message...' || t === 'View Profile' || t === 'View profile') return false;
+            if (!t || t === 'Message...' || t.toLowerCase() === 'view profile') return false;
             if (t.includes('followers') || t.includes('posts') || t.includes("You don't follow") || t.includes('You follow each other')) return false;
             return true;
           });
           
           // Check for existing real message bubbles inside active thread
-          const threadBubbles = Array.from(chatPane.querySelectorAll('div[dir="auto"], span[dir="auto"]')).filter(el => {
+          const threadBubbles = Array.from(chatPane.querySelectorAll('div[dir="auto"], span[dir="auto"], div[role="none"] span')).filter(el => {
             if (composer.contains(el)) return false;
+            if (profileIntroCard && profileIntroCard.contains(el)) return false;
+            if (popupHeader && popupHeader.contains(el)) return false;
             if (el.closest('header') || el.closest('nav') || el.closest('[role="navigation"]')) return false;
+
             const txt = (el.innerText || '').trim();
-            if (!txt || txt === "Message..." || txt === "View Profile" || txt === "View profile" || txt === "Search" || txt === "Primary" || txt === "General" || txt === "Requests") return false;
+            if (!txt || txt === "Message..." || txt.toLowerCase() === "view profile" || txt === "Search" || txt === "Primary" || txt === "General" || txt === "Requests") return false;
             if (txt.includes("followers") || txt.includes("posts") || txt.includes("You follow each other") || txt.includes("You don't follow each other") || txt.includes("Instagram") || txt.includes("Followed by")) return false;
-            // Exclude profile header elements
+            if (txt.includes("photos of") || txt.includes("spread some love")) return false;
+
+            // Exclude profile header elements & username/name labels
             const topHeader = chatPane.querySelector('h2, span[style*="font-weight: 600"]');
             if (topHeader && (txt === topHeader.innerText?.trim() || txt.toLowerCase() === topHeader.innerText?.trim().toLowerCase())) return false;
+            
+            // Check if this element has message bubble characteristics (not just random layout text)
+            const parentBubble = el.closest('div[role="button"], div[style*="border-radius"], div[class*="message"], div[tabindex]');
+            const hasMessageAction = Boolean(el.closest('[aria-label*="Double tap to like"], [aria-label*="Like"], [aria-label*="React"], [aria-label*="Reply"]'));
+            
             return txt.length > 1;
           });
 
-          if (msgRows.length > 0 || threadBubbles.length > 0) {
+          // Check specifically if there are actual message bubbles outside the intro card
+          const realMessages = threadBubbles.filter(b => {
+            if (profileIntroCard && profileIntroCard.contains(b)) return false;
+            return true;
+          });
+
+          if (msgRows.length > 0 || realMessages.length > 0) {
             return {
               success: false,
               already_messaged: true,
-              error: `Existing conversation history detected with this contact (${msgRows.length} rows, ${threadBubbles.length} bubbles)`
+              error: `Existing conversation history detected with this contact (${msgRows.length} rows, ${realMessages.length} bubbles)`
             };
           }
+        }
+
+        // Abort check before typing
+        if (window.__MESSAGEV2_ABORT__) {
+          return { success: false, aborted: true, error: "Operation aborted by user" };
         }
 
         // 4. Focus & Clean Composer (Ensure no stale drafts)
@@ -690,18 +789,9 @@ async function handleCommand(msg) {
           document.execCommand('delete', false, null);
         } catch (e) {}
 
-        // 5. Insert text for Meta Lexical contenteditable
-        // Dispatch InputEvent beforeinput -> execCommand -> InputEvent input
-        try {
-          const beforeEvt = new InputEvent('beforeinput', {
-            bubbles: true,
-            cancelable: true,
-            inputType: 'insertText',
-            data: textToSend
-          });
-          composer.dispatchEvent(beforeEvt);
-        } catch (e) {}
-
+        // 5. Cleanly insert text ONCE for Meta Lexical contenteditable
+        // Using native execCommand('insertText') which Lexical handles directly.
+        // DO NOT dispatch beforeinput or input with data payload as Lexical duplicates them!
         let inserted = false;
         try {
           inserted = document.execCommand('insertText', false, textToSend);
@@ -709,25 +799,24 @@ async function handleCommand(msg) {
           inserted = false;
         }
 
-        try {
-          const inputEvt = new InputEvent('input', {
-            bubbles: true,
-            cancelable: true,
-            inputType: 'insertText',
-            data: textToSend
-          });
-          composer.dispatchEvent(inputEvt);
-        } catch (e) {}
-
         let currentText = (composer.innerText || composer.textContent || '').trim();
-        if (!inserted || currentText !== textToSend.trim()) {
+        if (!inserted || currentText === '') {
+          // Fallback only if execCommand did not insert any text
           const p = composer.querySelector('p') || composer;
           p.textContent = textToSend;
           composer.dispatchEvent(new Event('input', { bubbles: true }));
           composer.dispatchEvent(new Event('change', { bubbles: true }));
+        } else {
+          // Lightweight input notification for React/Lexical button enabling
+          composer.dispatchEvent(new Event('input', { bubbles: true }));
         }
 
-        await new Promise(r => setTimeout(r, 600));
+        await new Promise(r => setTimeout(r, 400));
+
+        // Abort check before sending
+        if (window.__MESSAGEV2_ABORT__) {
+          return { success: false, aborted: true, error: "Operation aborted by user before send" };
+        }
 
         // 6. Send message (Single dispatch via Send button or Enter key)
         const sendBtn = Array.from(document.querySelectorAll('div[role="button"], button')).find(b => {
@@ -767,6 +856,7 @@ async function handleCommand(msg) {
       success: result?.result?.success || false,
       already_messaged: result?.result?.already_messaged || false,
       dm_restricted: result?.result?.dm_restricted || false,
+      aborted: result?.result?.aborted || false,
       error: result?.result?.error
     };
   }

@@ -12,7 +12,7 @@ export async function fetchAutomationStatus(): Promise<LiveAutomationState> {
   return res.json();
 }
 
-export async function startAutomation(options?: { batch_limit?: number | null; delay_seconds?: number; random_order?: boolean }): Promise<{ status: string }> {
+export async function startAutomation(options?: { batch_limit?: number | null; delay_seconds?: number; random_order?: boolean; task_ids?: string[] }): Promise<{ status: string }> {
   const res = await fetch(`${BASE_URL}/api/automation/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -534,11 +534,11 @@ export async function launchChromeLive(profileId?: string): Promise<any> {
 // Worker 3 & Coordinator API Clients
 // ─────────────────────────────────────────────────────────────
 
-export async function startWorker3(batchLimit?: number | null, delaySeconds?: number, randomOrder?: boolean): Promise<any> {
+export async function startWorker3(batchLimit?: number | null, delaySeconds?: number, randomOrder?: boolean, taskIds?: string[]): Promise<any> {
   const res = await fetch(`${BASE_URL}/api/automation/worker3/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ batch_limit: batchLimit, delay_seconds: delaySeconds, random_order: randomOrder }),
+    body: JSON.stringify({ batch_limit: batchLimit, delay_seconds: delaySeconds, random_order: randomOrder, task_ids: taskIds }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

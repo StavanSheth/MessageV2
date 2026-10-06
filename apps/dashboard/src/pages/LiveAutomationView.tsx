@@ -264,6 +264,14 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   const handleStartWorker3 = async () => {
     try {
       setWorker3ActionLoading(true);
+      if ((!worker3Status?.due_count || worker3Status.due_count === 0) && (worker3Status?.future_count || 0) > 0) {
+        const confirmMakeDue = window.confirm(
+          `No follow-ups are due right now (all ${worker3Status?.future_count} are scheduled for future dates).\n\nWould you like to make 1 follow-up due now so Worker 3 can dispatch immediately?`
+        );
+        if (confirmMakeDue) {
+          await makeFollowupsDueNow(1);
+        }
+      }
       await startWorker3(worker3BatchLimit, 15, worker3RandomOrder);
       const updated = await fetchWorker3Status();
       setWorker3Status(updated);

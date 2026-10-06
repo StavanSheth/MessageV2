@@ -8,7 +8,7 @@ import {
   Edit3, Pause, Save, ChevronUp, ChevronDown
 } from 'lucide-react';
 import { Task, TaskStatus, LiveAutomationState } from '../types';
-import { retryTask, cancelTask, retryAllTasks, deleteTask, confirmFollowups, cancelFollowups, updateTask, toggleTaskPause, bulkSetTaskSelection, reorderTasks, updateContactMessages, updateFollowupSchedule } from '../services/api';
+import { retryTask, cancelTask, retryAllTasks, deleteTask, confirmFollowups, cancelFollowups, updateTask, toggleTaskPause, bulkSetTaskSelection, reorderTasks, updateContactMessages, updateFollowupSchedule, startAutomation, startWorker3 } from '../services/api';
 import { DateFilterMode, matchesDateFilter, formatDisplayDate, toDatetimeLocalValue } from '../utils/date';
 import { getStatusBadgeClass } from '../components/common/StatusBadge';
 
@@ -252,8 +252,10 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [filterStage, setFilterStage] = useState<string>('ALL');
   const [issueCategoryFilter, setIssueCategoryFilter] = useState<string>('ALL');
+  const [workerFilter, setWorkerFilter] = useState<'ALL' | 'WORKER-01' | 'WORKER-02' | 'WORKER-03'>('ALL');
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const [isConfirmingFollowups, setIsConfirmingFollowups] = useState(false);
+  const [isStartingSelected, setIsStartingSelected] = useState(false);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [isRetryingAll, setIsRetryingAll] = useState(false);
@@ -396,11 +398,11 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
       contact_message: c?.message || c?.custom_message || t.message || '',
       followup_1_message: c?.followup_1_message || 'Hey! Just following up on my previous message.',
       followup_1_delay_days: c?.followup_1_delay_days ?? 3,
-      followup_1_scheduled_at: toDatetimeLocalValue(c?.followup_1_scheduled_at),
+      followup_1_scheduled_at: toDatetimeLocalValue(c?.followup_1_scheduled_at_raw || c?.followup_1_scheduled_at),
       followup_1_status: c?.followup_1_status || 'SCHEDULED',
       followup_2_message: c?.followup_2_message || 'Hey! One last quick check-in before I close this thread.',
       followup_2_delay_days: c?.followup_2_delay_days ?? 5,
-      followup_2_scheduled_at: toDatetimeLocalValue(c?.followup_2_scheduled_at),
+      followup_2_scheduled_at: toDatetimeLocalValue(c?.followup_2_scheduled_at_raw || c?.followup_2_scheduled_at),
       followup_2_status: c?.followup_2_status || 'SCHEDULED',
     });
     setEditSuccessMsg('');
@@ -503,6 +505,84 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
       }
       return next;
     });
+  };
+
+  const handleQuickPick = (count: number, pageIds: string[]) => {
+    setSelectedTaskIds(new Set(pageIds.slice(0, count)));
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedTaskIds(new Set());
+  };
+
+  const handleStartWorker1WithSelected = async () => {
+    if (selectedTaskIds.size === 0) return;
+    try {
+      setIsStartingSelected(true);
+      await startAutomation({ task_ids: Array.from(selectedTaskIds) });
+      alert(`Worker 1 started with ${selectedTaskIds.size} selected contact(s)!`);
+      await onRefresh();
+    } catch (e: any) {
+      alert(`Could not start Worker 1: ${e.message}`);
+    } finally {
+      setIsStartingSelected(false);
+    }
+  };
+
+  const handleStartWorker3WithSelected = async () => {
+    if (selectedTaskIds.size === 0) return;
+    try {
+      setIsStartingSelected(true);
+      await startWorker3(null, 15, false, Array.from(selectedTaskIds));
+      alert(`Worker 3 started with ${selectedTaskIds.size} selected follow-up(s)!`);
+      await onRefresh();
+    } catch (e: any) {
+      alert(`Could not start Worker 3: ${e.message}`);
+    } finally {
+      setIsStartingSelected(false);
+    }
+  };
+
+  const handleBulkExcludeSelected = async () => {
+    if (selectedTaskIds.size === 0) return;
+    try {
+      setIsBulkSelecting(true);
+      await bulkSetTaskSelection(Array.from(selectedTaskIds), false);
+      await onRefresh();
+    } catch (e: any) {
+      alert(`Could not exclude selected tasks: ${e.message}`);
+    } finally {
+      setIsBulkSelecting(false);
+    }
+  };
+
+  const handleBulkIncludeSelected = async () => {
+    if (selectedTaskIds.size === 0) return;
+    try {
+      setIsBulkSelecting(true);
+      await bulkSetTaskSelection(Array.from(selectedTaskIds), true);
+      await onRefresh();
+    } catch (e: any) {
+      alert(`Could not include selected tasks: ${e.message}`);
+    } finally {
+      setIsBulkSelecting(false);
+    }
+  };
+
+  const handleBulkRetrySelected = async () => {
+    if (selectedTaskIds.size === 0) return;
+    try {
+      setIsBulkSelecting(true);
+      for (const id of Array.from(selectedTaskIds)) {
+        await retryTask(id).catch(() => {});
+      }
+      await onRefresh();
+      alert(`Re-queued ${selectedTaskIds.size} task(s) for dispatch.`);
+    } catch (e: any) {
+      alert(`Could not retry selected tasks: ${e.message}`);
+    } finally {
+      setIsBulkSelecting(false);
+    }
   };
 
   const handleConfirmFollowups = async (taskIds?: string[]) => {
@@ -653,6 +733,10 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
       if (filterStage === 'MESSAGE' && t.type !== 'MESSAGE') return false;
       if (filterStage === 'FOLLOW_UP_1' && t.type !== 'FOLLOW_UP_1') return false;
       if (filterStage === 'FOLLOW_UP_2' && t.type !== 'FOLLOW_UP_2') return false;
+
+      // 2b. Worker Scope filter
+      if (workerFilter === 'WORKER-01' && t.type !== 'MESSAGE') return false;
+      if (workerFilter === 'WORKER-03' && !t.type?.startsWith('FOLLOW_UP')) return false;
 
       // 3. Run Filter
       if (runFilter === 'NEXT_IN_RUN') {
@@ -1328,54 +1412,142 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
         </div>
       )}
 
-      {/* Person Queue Selection Control Panel (Upcoming / All) */}
-      {(viewMode === 'UPCOMING' || viewMode === 'ALL') && (
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-gradient-to-r from-[#061d15] via-[#08231a] to-[#061d15] border border-[#123529] p-4 rounded-2xl shadow-xl backdrop-blur-md">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-xl bg-[#d49237]/15 border border-[#d49237]/35 flex items-center justify-center shrink-0">
-              <Users className="w-5 h-5 text-[#e5a84b]" />
-            </div>
-            <div>
-              <div className="text-sm font-bold text-white flex items-center space-x-2">
-                <span>Person Selection & Custom Send Order</span>
-                <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                  {readyCount} Selected ({readyCount} in Send Queue)
-                </span>
-                {pausedCount > 0 && (
-                  <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                    {pausedCount} Excluded
+      {/* ── 3 WORKERS SCOPE TABS & SELECTION CONTROL BAR ── */}
+      <div className="flex flex-col space-y-3 bg-gradient-to-r from-[#061d15] via-[#08231a] to-[#061d15] border border-[#123529] p-4 rounded-2xl shadow-xl backdrop-blur-md">
+        {/* Worker Scoping Tabs */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-800/80 pb-3">
+          <div className="flex items-center space-x-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400">Worker Scope:</span>
+            <div className="flex flex-wrap items-center gap-1.5 bg-gray-950/90 p-1 rounded-xl border border-gray-800">
+              {[
+                { id: 'ALL', label: 'All Workers', count: tasks.length },
+                { id: 'WORKER-01', label: 'Worker 1 (Outreach)', count: tasks.filter(t => t.type === 'MESSAGE').length },
+                { id: 'WORKER-02', label: 'Worker 2 (Reply Scanner)', count: tasks.filter(t => t.contact?.replied_status === 'PENDING_SCAN' || t.status === 'RECONCILING').length },
+                { id: 'WORKER-03', label: 'Worker 3 (Follow-Ups)', count: tasks.filter(t => t.type?.startsWith('FOLLOW_UP')).length },
+              ].map((w) => (
+                <button
+                  key={w.id}
+                  onClick={() => { setWorkerFilter(w.id as any); setCurrentPage(1); }}
+                  className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                    workerFilter === w.id
+                      ? 'bg-gradient-to-r from-[#d49237] to-[#e5a84b] text-[#041610] shadow-md shadow-[#d49237]/25'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-900'
+                  }`}
+                >
+                  <span>{w.label}</span>
+                  <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${workerFilter === w.id ? 'bg-[#041610]/30 text-[#041610]' : 'bg-gray-800 text-gray-400'}`}>
+                    {w.count}
                   </span>
-                )}
-              </div>
-              <p className="text-xs text-gray-300 mt-0.5">
-                Tick or untick people to choose whom to message. Number badges (<strong className="text-[#e5a84b] font-mono">#1, #2, #3...</strong>) indicate the exact sending order. Use the <strong className="text-white">▲ / ▼</strong> buttons to move anyone earlier or later in the queue.
-              </p>
+                </button>
+              ))}
             </div>
+          </div>
+
+          {/* Quick Selection Presets */}
+          <div className="flex items-center space-x-1.5 bg-gray-950/90 p-1 rounded-xl border border-gray-800">
+            <span className="text-[10px] font-bold text-gray-500 uppercase px-2">Quick Pick:</span>
+            {[1, 3, 5, 10].map((num) => (
+              <button
+                key={num}
+                onClick={() => handleQuickPick(num, paginatedTasks.map(t => t.id))}
+                className="px-2 py-0.5 rounded text-xs font-mono font-bold text-gray-300 hover:text-white hover:bg-gray-800 transition cursor-pointer"
+                title={`Pick first ${num} contacts on this page`}
+              >
+                +{num}
+              </button>
+            ))}
+            <button
+              onClick={() => handleSelectAll(paginatedTasks.map(t => t.id))}
+              className="px-2.5 py-0.5 rounded text-xs font-bold text-emerald-400 hover:bg-emerald-950/50 transition cursor-pointer"
+            >
+              All Page
+            </button>
+            {selectedTaskIds.size > 0 && (
+              <button
+                onClick={handleDeselectAll}
+                className="px-2.5 py-0.5 rounded text-xs font-bold text-rose-400 hover:bg-rose-950/50 transition cursor-pointer"
+              >
+                Clear ({selectedTaskIds.size})
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Selected Tasks Action Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+          <div className="flex items-center space-x-2">
+            <span className={`px-2.5 py-1 rounded-lg font-mono text-xs font-bold border ${
+              selectedTaskIds.size > 0
+                ? 'bg-[#d49237]/20 text-[#e5a84b] border-[#d49237]/40 shadow-sm'
+                : 'bg-gray-900 text-gray-500 border-gray-800'
+            }`}>
+              {selectedTaskIds.size} Selected
+            </span>
+            <span className="text-xs text-gray-400">
+              {selectedTaskIds.size === 0
+                ? 'Click individual checkboxes or quick pick buttons to choose contacts.'
+                : 'Choose worker or batch action to execute on this specific selection:'}
+            </span>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Start Worker 1 with Selection */}
             <button
-              onClick={() => handleBulkIncludePage(paginatedTasks)}
-              disabled={isBulkSelecting}
-              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-700/80 hover:bg-emerald-600 text-white border border-emerald-500/40 shadow-sm transition cursor-pointer disabled:opacity-50"
-              title="Select and include all eligible contacts on this page"
+              onClick={handleStartWorker1WithSelected}
+              disabled={selectedTaskIds.size === 0 || isStartingSelected}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md shadow-emerald-900/30 transition disabled:opacity-40 cursor-pointer active:scale-95"
+              title="Start Worker 1 (Outreach) with only the selected contacts"
             >
-              <CheckSquare className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Select / Include All Page</span>
+              <Play className="w-3.5 h-3.5 fill-current" />
+              <span>Start W1 ({selectedTaskIds.size})</span>
             </button>
 
+            {/* Start Worker 3 with Selection */}
             <button
-              onClick={() => handleBulkExcludePage(paginatedTasks)}
-              disabled={isBulkSelecting}
-              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-700/80 hover:bg-amber-600 text-white border border-amber-500/40 shadow-sm transition cursor-pointer disabled:opacity-50"
-              title="Deselect and exclude all eligible contacts on this page"
+              onClick={handleStartWorker3WithSelected}
+              disabled={selectedTaskIds.size === 0 || isStartingSelected}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-md shadow-indigo-900/30 transition disabled:opacity-40 cursor-pointer active:scale-95"
+              title="Start Worker 3 (Follow-Ups) with only the selected follow-ups"
             >
-              <Square className="w-3.5 h-3.5 text-amber-300" />
-              <span>Deselect / Exclude All Page</span>
+              <Play className="w-3.5 h-3.5 fill-current" />
+              <span>Start W3 ({selectedTaskIds.size})</span>
+            </button>
+
+            {/* Include in Active Dispatch Queue */}
+            <button
+              onClick={handleBulkIncludeSelected}
+              disabled={selectedTaskIds.size === 0}
+              className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-700/50 transition disabled:opacity-40 cursor-pointer"
+              title="Set selected tasks to READY status"
+            >
+              <CheckSquare className="w-3.5 h-3.5" />
+              <span>Include</span>
+            </button>
+
+            {/* Exclude / Pause Selected */}
+            <button
+              onClick={handleBulkExcludeSelected}
+              disabled={selectedTaskIds.size === 0}
+              className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-amber-950/60 hover:bg-amber-900/80 text-amber-300 border border-amber-700/50 transition disabled:opacity-40 cursor-pointer"
+              title="Pause selected tasks so they are not messaged"
+            >
+              <Pause className="w-3.5 h-3.5" />
+              <span>Exclude</span>
+            </button>
+
+            {/* Retry Selected */}
+            <button
+              onClick={handleBulkRetrySelected}
+              disabled={selectedTaskIds.size === 0}
+              className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-gray-900 hover:bg-gray-800 text-gray-300 border border-gray-700 transition disabled:opacity-40 cursor-pointer"
+              title="Re-queue selected failed/skipped tasks"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Retry</span>
             </button>
           </div>
         </div>
-      )}
+      </div>
 
       {/* Main Queue Table */}
       <div className="bg-[#08231a]/70 border border-gray-800/90 rounded-2xl shadow-2xl overflow-hidden backdrop-blur-md">
@@ -1385,45 +1557,22 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
               <tr className="border-b border-gray-800 bg-gray-950/90 text-[11px] font-bold uppercase tracking-wider text-gray-400">
                 {viewMode !== 'DONE' && (
                   <th className="py-3.5 px-3 w-[4%] text-center">
-                    {viewMode === 'ISSUES' ? (
-                      <button
-                        onClick={() => handleSelectAll(paginatedTasks.map((t) => t.id))}
-                        className="text-gray-400 hover:text-white transition cursor-pointer"
-                        title={
-                          paginatedTasks.length > 0 && paginatedTasks.every((t) => selectedTaskIds.has(t.id))
-                            ? 'Deselect All on Page'
-                            : 'Select All on Page'
-                        }
-                      >
-                        {paginatedTasks.length > 0 && paginatedTasks.every((t) => selectedTaskIds.has(t.id)) ? (
-                          <CheckSquare className="w-4 h-4 text-amber-400" />
-                        ) : (
-                          <Square className="w-4 h-4 text-gray-500" />
-                        )}
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          const eligible = paginatedTasks.filter((t) => t.status !== 'COMPLETED' && t.status !== 'CANCELLED');
-                          const allActive = eligible.length > 0 && eligible.every((t) => t.status !== 'PAUSED');
-                          if (allActive) {
-                            handleBulkExcludePage(paginatedTasks);
-                          } else {
-                            handleBulkIncludePage(paginatedTasks);
-                          }
-                        }}
-                        disabled={isBulkSelecting}
-                        className="text-gray-400 hover:text-white transition cursor-pointer disabled:opacity-50"
-                        title="Toggle select / include or deselect / exclude all contacts on this page"
-                      >
-                        {paginatedTasks.length > 0 &&
-                        paginatedTasks.filter((t) => t.status !== 'COMPLETED' && t.status !== 'CANCELLED').every((t) => t.status !== 'PAUSED') ? (
-                          <CheckSquare className="w-4 h-4 text-emerald-400" />
-                        ) : (
-                          <Square className="w-4 h-4 text-gray-500" />
-                        )}
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleSelectAll(paginatedTasks.map((t) => t.id))}
+                      className="text-gray-400 hover:text-white transition cursor-pointer"
+                      title={
+                        paginatedTasks.length > 0 && paginatedTasks.every((t) => selectedTaskIds.has(t.id))
+                          ? 'Deselect All on Page'
+                          : 'Select All on Page'
+                      }
+                    >
+                      {paginatedTasks.length > 0 && paginatedTasks.every((t) => selectedTaskIds.has(t.id)) ? (
+                        <CheckSquare className="w-4 h-4 text-[#e5a84b]" />
+                      ) : (
+                        <Square className="w-4 h-4 text-gray-500 hover:text-gray-300" />
+                      )}
+                    </button>
                   </th>
                 )}
                 <th className="py-3.5 px-4 w-[8%] text-center">
@@ -1489,35 +1638,18 @@ export const Queue: React.FC<QueueProps> = ({ tasks, automationState, onRefresh 
                       {/* Selection Checkbox for all non-done modes */}
                       {viewMode !== 'DONE' && (
                         <td className="py-4 px-3 align-top text-center">
-                          {viewMode === 'ISSUES' ? (
-                            <button
-                              onClick={() => handleToggleSelect(t.id)}
-                              className="text-gray-400 hover:text-white transition cursor-pointer pt-0.5"
-                            >
-                              {selectedTaskIds.has(t.id) ? (
-                                <CheckSquare className="w-4 h-4 text-amber-400" />
-                              ) : (
-                                <Square className="w-4 h-4 text-gray-600 hover:text-gray-400" />
-                              )}
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handleTogglePersonSelection(t)}
-                              disabled={actionLoadingId === t.id || isBulkSelecting}
-                              className="text-gray-400 hover:text-white transition cursor-pointer pt-0.5 disabled:opacity-50"
-                              title={
-                                t.status === 'PAUSED'
-                                  ? 'Contact Deselected / Excluded. Click to Select & Include in dispatch queue.'
-                                  : `Contact Selected (#${activeRank || 'Active'}). Click to Deselect & Exclude from dispatch queue.`
-                              }
-                            >
-                              {t.status === 'PAUSED' ? (
-                                <Square className="w-4 h-4 text-gray-600 hover:text-emerald-400" />
-                              ) : (
-                                <CheckSquare className="w-4 h-4 text-emerald-400 hover:text-amber-400" />
-                              )}
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleSelect(t.id)}
+                            className="text-gray-400 hover:text-white transition cursor-pointer pt-0.5"
+                            title={selectedTaskIds.has(t.id) ? "Deselect contact" : "Select contact"}
+                          >
+                            {selectedTaskIds.has(t.id) ? (
+                              <CheckSquare className="w-4 h-4 text-[#e5a84b]" />
+                            ) : (
+                              <Square className="w-4 h-4 text-gray-600 hover:text-gray-400" />
+                            )}
+                          </button>
                         </td>
                       )}
 

@@ -127,6 +127,11 @@ export function App() {
       } else if (limitOverride !== undefined) {
         activeLimit = limitOverride;
       }
+      const readyCount = tasks.filter(t => t.status === 'READY').length;
+      if (readyCount === 0) {
+        alert("Notice: There are currently 0 contacts in READY status in the queue.\n\nPlease go to the Queue tab to select contacts or re-queue skipped tasks before starting.");
+        return;
+      }
       await startAutomation({ batch_limit: activeLimit, delay_seconds: 15, random_order: isRandomOrder });
       await loadData();
     } catch (e: any) {

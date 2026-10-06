@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timezone
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, Depends
@@ -24,23 +24,31 @@ class StartAutomationRequest(BaseModel):
     random_order: Optional[bool] = False
     random_order_worker1: Optional[bool] = None
     random_order_worker3: Optional[bool] = None
+    task_ids: Optional[List[str]] = None
 
 class SetRandomOrderRequest(BaseModel):
     enabled: bool
 
 @router.post("/start")
 async def start_automation(req: Optional[StartAutomationRequest] = None):
-    """Start the Instagram worker with optional batch limit, delay, and random order."""
+    """Start the Instagram worker with optional batch limit, delay, random order, and specific task selection."""
     try:
         batch_limit = req.batch_limit if req else None
         delay_seconds = req.delay_seconds if req else 15
         random_order = req.random_order if (req and req.random_order is not None) else None
-        await instagram_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds, random_order=random_order)
+        task_ids = req.task_ids if req else None
+        await instagram_worker.start(
+            batch_limit=batch_limit,
+            delay_seconds=delay_seconds,
+            random_order=random_order,
+            task_ids=task_ids
+        )
         return {
             "status": "started",
             "batch_limit": batch_limit,
             "delay_seconds": delay_seconds,
-            "random_order": instagram_worker.random_order
+            "random_order": instagram_worker.random_order,
+            "selected_count": len(task_ids) if task_ids else None
         }
     except Exception as e:
         raise HTTPException(500, f"Failed to start worker: {str(e)}")
@@ -259,13 +267,20 @@ async def start_worker3(req: Optional[StartAutomationRequest] = None):
         batch_limit = req.batch_limit if req else None
         delay_seconds = req.delay_seconds if req else 15
         random_order = req.random_order if (req and req.random_order is not None) else None
-        await followup_worker.start(batch_limit=batch_limit, delay_seconds=delay_seconds, random_order=random_order)
+        task_ids = req.task_ids if req else None
+        await followup_worker.start(
+            batch_limit=batch_limit,
+            delay_seconds=delay_seconds,
+            random_order=random_order,
+            task_ids=task_ids
+        )
         return {
             "status": "started",
             "worker_id": "WORKER-03",
             "batch_limit": batch_limit,
             "delay_seconds": delay_seconds,
-            "random_order": followup_worker.random_order
+            "random_order": followup_worker.random_order,
+            "selected_count": len(task_ids) if task_ids else None
         }
     except Exception as e:
         raise HTTPException(500, f"Failed to start Worker 3: {str(e)}")
@@ -506,13 +521,22 @@ async def resume_all_workers():
     except Exception:
         pass
 
-    if followup_worker.is_paused and fu_due > 0:
+    # Worker 3 (Follow-up): Resume if paused
+    if followup_worker.is_paused:
         try:
             await followup_worker.resume()
             results["worker3"] = {"status": "resumed"}
         except Exception as e:
             results["worker3"] = {"error": str(e)}
-    else:
+
+    # Worker 1 (Outreach): Resume if paused
+    if instagram_worker.is_paused:
+        try:
+            await instagram_worker.resume()
+            results["worker1"] = {"status": "resumed"}
+        except Exception as e:
+            results["worker1"] = {"error": str(e)}
+    elif not instagram_worker.is_running and not followup_worker.is_running:
         try:
             await instagram_worker.resume()
             results["worker1"] = {"status": "resumed"}

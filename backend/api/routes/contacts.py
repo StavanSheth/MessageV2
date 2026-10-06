@@ -112,14 +112,17 @@ async def list_contacts(limit: int = 1000, offset: int = 0, db: AsyncSession = D
             # 1st Message tracking
             "first_message_status": m1_status,
             "first_message_scheduled_at": format_datetime_readable(task_msg.scheduled_at) if task_msg else None,
+            "first_message_scheduled_at_raw": task_msg.scheduled_at.isoformat() if (task_msg and task_msg.scheduled_at) else None,
             "first_message_sent_at": m1_sent_at,
             # Follow Up 1 tracking
             "followup_1_status": fu1_status,
             "followup_1_scheduled_at": fu1_scheduled_at,
+            "followup_1_scheduled_at_raw": task_fu1.scheduled_at.isoformat() if (task_fu1 and task_fu1.scheduled_at) else None,
             "followup_1_sent_at": fu1_sent_at,
             # Follow Up 2 tracking
             "followup_2_status": fu2_status,
             "followup_2_scheduled_at": fu2_scheduled_at,
+            "followup_2_scheduled_at_raw": task_fu2.scheduled_at.isoformat() if (task_fu2 and task_fu2.scheduled_at) else None,
             "followup_2_sent_at": fu2_sent_at,
             # Timestamps
             "created_at": c.created_at.isoformat() if c.created_at else None,

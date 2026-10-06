@@ -157,6 +157,15 @@ class ExtensionBridgeManager:
         except Exception as e:
             return False, ResultCode.DM_NOT_AVAILABLE, str(e)
 
+    async def abort_current_action(self) -> Dict[str, Any]:
+        if not self.is_connected:
+            return {"success": False, "error": "Extension not connected"}
+        try:
+            return await self.send_command("ABORT_CURRENT_ACTION", timeout=3.0)
+        except Exception as e:
+            logger.warning(f"[ExtensionBridge] abort_current_action notice: {e}")
+            return {"success": False, "error": str(e)}
+
     async def reload_extension(self) -> Dict[str, Any]:
         if not self.is_connected:
             return {"success": False, "error": "Extension not connected"}
@@ -218,6 +227,8 @@ class ExtensionBridgeManager:
                 "check_history": check_history,
                 "task_type": task_type
             }, timeout=30.0)
+            if res.get("aborted"):
+                return False, ResultCode.TASK_CANCELLED, res.get("error", "Operation aborted by user"), False, False
             if res.get("dm_restricted"):
                 return False, ResultCode.DM_NOT_AVAILABLE, res.get("error", "This account can't receive your message requests"), False, True
             if res.get("already_messaged"):

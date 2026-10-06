@@ -298,6 +298,9 @@ class ExtensionAdapter:
         success, code, reason, already_messaged, dm_restricted = await self.bridge.prepare_and_send(
             self._pending_message, check_history=check_history, task_type=task_type
         )
+        self._last_send_success = success
+        self._last_send_code = code
+        self._last_send_reason = reason
         return success, reason, already_messaged, dm_restricted
 
     async def scan_inbox(self) -> Dict[str, Any]:
@@ -310,8 +313,12 @@ class ExtensionAdapter:
         return await self.bridge.inspect_current_conversation(worker=worker)
 
     async def detect_send_result(self) -> Tuple[ResultCode, str]:
+        if not getattr(self, "_last_send_success", True):
+            return getattr(self, "_last_send_code", ResultCode.NETWORK_ERROR), getattr(self, "_last_send_reason", "Failed")
         return ResultCode.SUCCESS, "Delivered"
 
     async def detect_result(self, expected_text: str = "") -> ResultCode:
+        if not getattr(self, "_last_send_success", True):
+            return getattr(self, "_last_send_code", ResultCode.NETWORK_ERROR)
         return ResultCode.SUCCESS
 

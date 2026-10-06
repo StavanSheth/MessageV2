@@ -496,6 +496,7 @@ async def resume_all_workers():
     from backend.workers.instagram_worker import instagram_worker
     from backend.workers.reply_scanner_worker import reply_scanner_worker
     from backend.workers.followup_worker import followup_worker
+    from backend.automation.coordinator import coordinator
     from backend.database.session import AsyncSessionLocal
     from backend.database.models import Task
     from sqlalchemy import select, and_, func
@@ -509,7 +510,7 @@ async def resume_all_workers():
     except Exception as e:
         results["worker2"] = {"error": str(e)}
 
-    # For DM senders (Worker 1 vs Worker 3), determine which one has due tasks or was paused
+    # For DM senders (Worker 1 vs Worker 3), resume according to priority without mutual preemption conflict
     now = datetime.now(timezone.utc)
     fu_due = 0
     try:
@@ -521,27 +522,20 @@ async def resume_all_workers():
     except Exception:
         pass
 
-    # Worker 3 (Follow-up): Resume if paused
-    if followup_worker.is_paused:
-        try:
-            await followup_worker.resume()
-            results["worker3"] = {"status": "resumed"}
-        except Exception as e:
-            results["worker3"] = {"error": str(e)}
-
-    # Worker 1 (Outreach): Resume if paused
-    if instagram_worker.is_paused:
-        try:
-            await instagram_worker.resume()
-            results["worker1"] = {"status": "resumed"}
-        except Exception as e:
-            results["worker1"] = {"error": str(e)}
-    elif not instagram_worker.is_running and not followup_worker.is_running:
-        try:
-            await instagram_worker.resume()
-            results["worker1"] = {"status": "resumed"}
-        except Exception as e:
-            results["worker1"] = {"error": str(e)}
+    if coordinator.mode == "FOLLOWUP_ONLY" or (fu_due > 0 and coordinator.mode != "COLD_ONLY"):
+        if followup_worker.is_paused or not followup_worker.is_running:
+            try:
+                await followup_worker.resume()
+                results["worker3"] = {"status": "resumed"}
+            except Exception as e:
+                results["worker3"] = {"error": str(e)}
+    else:
+        if instagram_worker.is_paused or not instagram_worker.is_running:
+            try:
+                await instagram_worker.resume()
+                results["worker1"] = {"status": "resumed"}
+            except Exception as e:
+                results["worker1"] = {"error": str(e)}
 
     return {"status": "resumed_all", "results": results}
 

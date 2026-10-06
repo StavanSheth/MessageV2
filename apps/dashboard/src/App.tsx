@@ -140,6 +140,8 @@ export function App() {
   };
 
   const handlePause = async () => {
+    setAutomationState((prev) => ({ ...prev, status: 'PAUSED', is_paused: true }));
+    setAllWorkersStatus((prev: any) => prev ? ({ ...prev, any_running: false, any_paused: true }) : prev);
     try {
       await pauseAutomation();
       await loadData();
@@ -149,6 +151,8 @@ export function App() {
   };
 
   const handleResume = async () => {
+    setAutomationState((prev) => ({ ...prev, status: 'RUNNING', is_paused: false }));
+    setAllWorkersStatus((prev: any) => prev ? ({ ...prev, any_running: true, any_paused: false }) : prev);
     try {
       await resumeAutomation();
       await loadData();
@@ -158,6 +162,8 @@ export function App() {
   };
 
   const handleStop = async () => {
+    setAutomationState((prev) => ({ ...prev, status: 'STOPPED', is_paused: false, is_running: false }));
+    setAllWorkersStatus((prev: any) => prev ? ({ ...prev, any_running: false, any_paused: false, all_idle: true }) : prev);
     try {
       await stopAutomation();
       await loadData();
@@ -176,6 +182,12 @@ export function App() {
       } else if (limitOverride !== undefined) {
         activeLimit = limitOverride;
       }
+      setAllWorkersStatus((prev: any) => ({
+        ...prev,
+        any_running: true,
+        any_paused: false,
+        active_count: 2
+      }));
       await startAllWorkers({ batch_limit: activeLimit, delay_seconds: 15, random_order: isRandomOrder });
       await loadData();
     } catch (e: any) {
@@ -184,6 +196,14 @@ export function App() {
   };
 
   const handlePauseAll = async () => {
+    setAllWorkersStatus((prev: any) => ({
+      ...prev,
+      any_running: false,
+      any_paused: true,
+      active_count: 0,
+      paused_count: 3
+    }));
+    setAutomationState((prev) => ({ ...prev, status: 'PAUSED', is_paused: true }));
     try {
       await pauseAllWorkers();
       await loadData();
@@ -193,6 +213,13 @@ export function App() {
   };
 
   const handleResumeAll = async () => {
+    setAllWorkersStatus((prev: any) => ({
+      ...prev,
+      any_running: true,
+      any_paused: false,
+      active_count: 1
+    }));
+    setAutomationState((prev) => ({ ...prev, status: 'RUNNING', is_paused: false }));
     try {
       await resumeAllWorkers();
       await loadData();
@@ -202,6 +229,15 @@ export function App() {
   };
 
   const handleStopAll = async () => {
+    setAllWorkersStatus((prev: any) => ({
+      ...prev,
+      any_running: false,
+      any_paused: false,
+      all_idle: true,
+      active_count: 0,
+      paused_count: 0
+    }));
+    setAutomationState((prev) => ({ ...prev, status: 'STOPPED', is_paused: false, is_running: false }));
     try {
       await stopAllWorkers();
       await loadData();
@@ -267,6 +303,7 @@ export function App() {
             onPause={handlePause}
             onResume={handleResume}
             onStop={handleStop}
+            onRefresh={loadData}
           />
         )}
         {currentTab === 'overview' && (

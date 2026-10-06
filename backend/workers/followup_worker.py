@@ -126,20 +126,42 @@ class FollowUpWorker:
         self._task = asyncio.create_task(self._run_loop())
         logger.info(f"[Worker 3] {WORKER_NAME} started (batch_limit={self.batch_limit}, delay={self.delay_between_messages}s)")
 
+    async def _revert_task_to_ready(self, task_id: str, cancel_pending_msg: bool = False, msg_id: Optional[str] = None) -> None:
+        try:
+            async with AsyncSessionLocal() as session:
+                task_repo = TaskRepository(session)
+                await task_repo.update_status(task_id, TaskStatus.READY, worker_id=None)
+                if cancel_pending_msg and msg_id:
+                    msg_repo = MessageRepository(session)
+                    await msg_repo.update_result(msg_id, "CANCELLED", "OPERATION_ABORTED")
+        except Exception as e:
+            logger.warning(f"[{WORKER_NAME}] Error reverting task {task_id} to READY: {e}")
+        self.current_task_id = None
+        self.stage = AutomationStage.IDLE
+
     async def pause(self) -> None:
         self._paused = True
         self.status = WorkerStatus.PAUSED
-        await coordinator.release_dm_lock(WORKER_ID)
+        self.stage = AutomationStage.IDLE
+        coordinator.clear_preemption()
+        await coordinator.release_dm_lock(WORKER_ID, auto_resume=False)
         try:
             from backend.automation.extension_bridge import extension_bridge
             await extension_bridge.abort_current_action()
         except Exception:
             pass
-        await self._update_worker_db(status="PAUSED")
+
+        if self.current_task_id:
+            logger.info(f"[{WORKER_NAME}] Worker paused mid-task. Reverting task {self.current_task_id} to READY.")
+            await self._revert_task_to_ready(self.current_task_id)
+
+        await self._update_worker_db(status="PAUSED", current_stage="IDLE", current_task_id=None)
         await event_bus.publish(EventCode.WORKER_PAUSED, worker_id=WORKER_ID)
         await event_bus.publish_state(await self.health())
+        logger.info(f"[{WORKER_NAME}] Worker paused successfully.")
 
     async def resume(self) -> None:
+        coordinator.clear_preemption()
         await coordinator.acquire_dm_lock(WORKER_ID)
         self._stop_requested = False
         self._paused = False
@@ -151,11 +173,13 @@ class FollowUpWorker:
         await self._update_worker_db(status="RUNNING")
         await event_bus.publish(EventCode.WORKER_RESUMED, worker_id=WORKER_ID)
         await event_bus.publish_state(await self.health())
+        logger.info(f"[{WORKER_NAME}] Worker resumed successfully.")
 
     async def stop(self) -> None:
         self._stop_requested = True
         self._paused = False
-        await coordinator.release_dm_lock(WORKER_ID)
+        coordinator.clear_preemption()
+        await coordinator.release_dm_lock(WORKER_ID, auto_resume=False)
         try:
             from backend.automation.extension_bridge import extension_bridge
             await extension_bridge.abort_current_action()
@@ -171,22 +195,16 @@ class FollowUpWorker:
                 pass
 
         if self.current_task_id:
-            try:
-                async with AsyncSessionLocal() as session:
-                    task_repo = TaskRepository(session)
-                    current_task = await task_repo.get_by_id(self.current_task_id)
-                    if current_task and current_task.status == TaskStatus.RUNNING.value:
-                        await task_repo.update_status(self.current_task_id, TaskStatus.READY, worker_id=None)
-            except Exception as e:
-                logger.error(f"[Worker 3] Error releasing task on stop: {e}")
-            self.current_task_id = None
+            logger.info(f"[{WORKER_NAME}] Worker stopped mid-task. Reverting task {self.current_task_id} to READY.")
+            await self._revert_task_to_ready(self.current_task_id)
 
         self.status = WorkerStatus.STOPPED
         self.stage = AutomationStage.IDLE
         self.is_dispatching_dm = False
-        await self._update_worker_db(status="STOPPED", current_stage="IDLE")
+        await self._update_worker_db(status="STOPPED", current_stage="IDLE", current_task_id=None)
         await event_bus.publish(EventCode.WORKER_STOPPED, worker_id=WORKER_ID)
         await event_bus.publish_state(await self.health())
+        logger.info(f"[{WORKER_NAME}] Worker stopped successfully.")
 
     async def health(self) -> Dict[str, Any]:
         due_count = 0
@@ -367,11 +385,12 @@ class FollowUpWorker:
             self.status = WorkerStatus.ERROR
             await self._update_worker_db(status="ERROR")
         finally:
-            self.status = WorkerStatus.STOPPED
-            self.stage = AutomationStage.IDLE
-            await coordinator.release_dm_lock(WORKER_ID)
-            await self._update_worker_db(status="STOPPED", current_stage="IDLE")
-            await event_bus.publish_state(await self.health())
+            if not self._paused:
+                self.status = WorkerStatus.STOPPED
+                self.stage = AutomationStage.IDLE
+                await coordinator.release_dm_lock(WORKER_ID, auto_resume=False)
+                await self._update_worker_db(status="STOPPED", current_stage="IDLE")
+                await event_bus.publish_state(await self.health())
 
     async def _process_followup(self, task: Task, adapter: InstagramAdapter) -> None:
         task_id = task.id
@@ -555,6 +574,12 @@ class FollowUpWorker:
                 msg = await m_repo.create(contact.id, task_id, followup_body, sequence=seq_num)
                 msg_id = msg.id
 
+            # Pause & Stop Check right before sending
+            if self._paused or self._stop_requested:
+                logger.info(f"[{WORKER_NAME}] Worker paused/stopped before sending follow-up for task {task_id}.")
+                await self._revert_task_to_ready(task_id, cancel_pending_msg=True, msg_id=msg_id)
+                return
+
             if isinstance(adapter, ExtensionAdapter):
                 sent, send_reason, already_messaged, dm_restricted = await adapter.send_message(
                     check_history=False,
@@ -575,6 +600,15 @@ class FollowUpWorker:
                     m_repo = MessageRepository(session)
                     await m_repo.update_result(msg_id, "SKIPPED", "DM_RESTRICTED")
                 self.current_task_id = None
+                return
+
+            if not sent:
+                if self._paused or self._stop_requested or "abort" in str(send_reason).lower():
+                    logger.info(f"[{WORKER_NAME}] Follow-up send aborted or worker paused/stopped for task {task_id}. Reverting to READY.")
+                    await self._revert_task_to_ready(task_id, cancel_pending_msg=True, msg_id=msg_id)
+                    return
+                logger.warning(f"[{WORKER_NAME}] Follow-up send failed for task {task_id}: {send_reason}")
+                await self._fail_task(task_id, ResultCode.SEND_FAILED, send_reason or "Send failed", new_status=TaskStatus.FAILED)
                 return
 
             # ── Confirm Result ──

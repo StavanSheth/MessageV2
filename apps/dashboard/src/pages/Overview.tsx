@@ -104,7 +104,7 @@ export const Overview: React.FC<OverviewProps> = ({
             <span>Import Sheet</span>
           </button>
 
-          {state.status === 'RUNNING' && (
+          {((state.status === 'RUNNING' && !state.is_paused)) && (
             <>
               {onPause && (
                 <button
@@ -133,7 +133,7 @@ export const Overview: React.FC<OverviewProps> = ({
             </>
           )}
 
-          {state.status === 'PAUSED' && (
+          {(state.status === 'PAUSED' || Boolean(state.is_paused)) && (
             <>
               {onResume && (
                 <button
@@ -156,7 +156,7 @@ export const Overview: React.FC<OverviewProps> = ({
             </>
           )}
 
-          {state.status !== 'RUNNING' && state.status !== 'PAUSED' && (
+          {state.status !== 'RUNNING' && state.status !== 'PAUSED' && !state.is_paused && (
             <button
               onClick={() => onStart(batchLimit)}
               className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/30 transition hover:scale-105 active:scale-95 cursor-pointer"

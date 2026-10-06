@@ -40,6 +40,7 @@ interface LiveAutomationViewProps {
   onPause?: () => void;
   onResume?: () => void;
   onStop?: () => void;
+  onRefresh?: () => void;
 }
 import { formatLastScan } from '../utils/date';
 export { formatLastScan };
@@ -84,7 +85,8 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   onStart,
   onPause,
   onResume,
-  onStop
+  onStop,
+  onRefresh,
 }) => {
   const PRESET_BATCHES = [1, 3, 5, 10, 25, 50, 100];
   const effectiveIsCustom = isCustomBatch !== undefined
@@ -285,23 +287,31 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
   };
 
   const handlePauseWorker3 = async () => {
-    await pauseWorker3();
-    const updated = await fetchWorker3Status();
-    setWorker3Status(updated);
+    setWorker3Status(prev => prev ? ({ ...prev, status: 'PAUSED', is_paused: true, is_running: false }) : prev);
     try {
-      const coord = await fetchCoordinatorStatus();
-      setCoordinatorStatus(coord);
-    } catch (e) {}
+      await pauseWorker3();
+      const updated = await fetchWorker3Status();
+      setWorker3Status(updated);
+      const coord = await fetchCoordinatorStatus().catch(() => null);
+      if (coord) setCoordinatorStatus(coord);
+      onRefresh?.();
+    } catch (e: any) {
+      alert(`Worker 3 Pause Error: ${e.message}`);
+    }
   };
 
   const handleResumeWorker3 = async () => {
-    await resumeWorker3();
-    const updated = await fetchWorker3Status();
-    setWorker3Status(updated);
+    setWorker3Status(prev => prev ? ({ ...prev, status: 'RUNNING', is_paused: false, is_running: true }) : prev);
     try {
-      const coord = await fetchCoordinatorStatus();
-      setCoordinatorStatus(coord);
-    } catch (e) {}
+      await resumeWorker3();
+      const updated = await fetchWorker3Status();
+      setWorker3Status(updated);
+      const coord = await fetchCoordinatorStatus().catch(() => null);
+      if (coord) setCoordinatorStatus(coord);
+      onRefresh?.();
+    } catch (e: any) {
+      alert(`Worker 3 Resume Error: ${e.message}`);
+    }
   };
 
   const handleStartWorker2 = async () => {
@@ -309,37 +319,60 @@ export const LiveAutomationView: React.FC<LiveAutomationViewProps> = ({
       await startRepliesWorker();
       const updated = await fetchReplyScannerStatus();
       setScannerStatus(updated);
+      onRefresh?.();
     } catch (e: any) {
       alert(`Worker 2 Error: ${e.message}`);
     }
   };
 
   const handlePauseWorker2 = async () => {
-    await pauseRepliesWorker();
-    const updated = await fetchReplyScannerStatus();
-    setScannerStatus(updated);
+    setScannerStatus(prev => prev ? ({ ...prev, status: 'PAUSED', is_paused: true, is_running: false }) : prev);
+    try {
+      await pauseRepliesWorker();
+      const updated = await fetchReplyScannerStatus();
+      setScannerStatus(updated);
+      onRefresh?.();
+    } catch (e: any) {
+      alert(`Worker 2 Pause Error: ${e.message}`);
+    }
   };
 
   const handleResumeWorker2 = async () => {
-    await resumeRepliesWorker();
-    const updated = await fetchReplyScannerStatus();
-    setScannerStatus(updated);
+    setScannerStatus(prev => prev ? ({ ...prev, status: 'RUNNING', is_paused: false, is_running: true }) : prev);
+    try {
+      await resumeRepliesWorker();
+      const updated = await fetchReplyScannerStatus();
+      setScannerStatus(updated);
+      onRefresh?.();
+    } catch (e: any) {
+      alert(`Worker 2 Resume Error: ${e.message}`);
+    }
   };
 
   const handleStopWorker2 = async () => {
-    await stopRepliesWorker();
-    const updated = await fetchReplyScannerStatus();
-    setScannerStatus(updated);
+    setScannerStatus(prev => prev ? ({ ...prev, status: 'IDLE', is_paused: false, is_running: false }) : prev);
+    try {
+      await stopRepliesWorker();
+      const updated = await fetchReplyScannerStatus();
+      setScannerStatus(updated);
+      onRefresh?.();
+    } catch (e: any) {
+      alert(`Worker 2 Stop Error: ${e.message}`);
+    }
   };
 
   const handleStopWorker3 = async () => {
-    await stopWorker3();
-    const updated = await fetchWorker3Status();
-    setWorker3Status(updated);
+    setWorker3Status(prev => prev ? ({ ...prev, status: 'STOPPED', is_paused: false, is_running: false }) : prev);
     try {
-      const coord = await fetchCoordinatorStatus();
-      setCoordinatorStatus(coord);
-    } catch (e) {}
+      await stopWorker3();
+      const updated = await fetchWorker3Status();
+      setWorker3Status(updated);
+      const coord = await fetchCoordinatorStatus().catch(() => null);
+      if (coord) setCoordinatorStatus(coord);
+      onRefresh?.();
+    } catch (e: any) {
+      alert(`Worker 3 Stop Error: ${e.message}`);
+    }
   };
 
   const handleMakeDueNow = async (count: number | null = null) => {

@@ -105,6 +105,13 @@ class ReplyScannerWorker:
     async def pause(self):
         self._paused = True
         self.status = "PAUSED"
+        self.current_stage = "IDLE"
+        try:
+            from backend.automation.extension_bridge import extension_bridge
+            await extension_bridge.abort_current_action()
+        except Exception:
+            pass
+        await event_bus.publish(EventCode.WORKER_PAUSED, worker_id="WORKER-02")
         logger.info("[ReplyScanner] Worker 2 paused.")
 
     async def resume(self):
@@ -113,11 +120,17 @@ class ReplyScannerWorker:
         if not self._periodic_task or self._periodic_task.done():
             self._periodic_task = asyncio.create_task(self._run_loop(45))
         self.status = "RUNNING"
+        await event_bus.publish(EventCode.WORKER_RESUMED, worker_id="WORKER-02")
         logger.info("[ReplyScanner] Worker 2 resumed.")
 
     async def stop(self):
         self._stop_requested = True
         self._paused = False
+        try:
+            from backend.automation.extension_bridge import extension_bridge
+            await extension_bridge.abort_current_action()
+        except Exception:
+            pass
         if self._periodic_task and not self._periodic_task.done():
             self._periodic_task.cancel()
             try:
@@ -127,6 +140,7 @@ class ReplyScannerWorker:
             self._periodic_task = None
         self.status = "IDLE"
         self.current_stage = "IDLE"
+        await event_bus.publish(EventCode.WORKER_STOPPED, worker_id="WORKER-02")
         logger.info("[ReplyScanner] Worker 2 stopped.")
 
     async def scan_inbox(self) -> Dict[str, Any]:
@@ -170,6 +184,9 @@ class ReplyScannerWorker:
                     all_contacts = (await session.execute(stmt)).scalars().all()
 
                     for thread in threads:
+                        if self._paused or self._stop_requested:
+                            logger.info("[ReplyScanner] Pause/Stop requested during inbox scan. Halting thread loop.")
+                            break
                         thread_name = (thread.get("name") or "").strip().lower()
                         snippet = thread.get("snippet", "")
                         has_reply = thread.get("has_reply", False)

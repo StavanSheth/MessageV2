@@ -39,19 +39,25 @@ class DMCoordinator:
         logger.info(f"[Coordinator] DM Lock granted to {worker_id} (mode={self.mode})")
         return True
 
-    async def release_dm_lock(self, worker_id: str) -> None:
+    def clear_preemption(self) -> None:
+        """Clear preempted worker tracker so no worker auto-resumes on manual user action."""
+        self.preempted_worker = None
+
+    async def release_dm_lock(self, worker_id: str, auto_resume: bool = True) -> None:
         """Release the lock when worker idles or stops."""
         if self.active_sender == worker_id:
-            logger.info(f"[Coordinator] DM Lock released by {worker_id}")
+            logger.info(f"[Coordinator] DM Lock released by {worker_id} (auto_resume={auto_resume})")
             self.active_sender = None
             self.lock_acquired_at = None
 
-            # If another worker was previously preempted, auto-resume it cleanly
-            if self.preempted_worker and self.preempted_worker != worker_id:
+            # If another worker was previously preempted, auto-resume it cleanly if auto_resume is True
+            if auto_resume and self.preempted_worker and self.preempted_worker != worker_id:
                 next_worker = self.preempted_worker
                 self.preempted_worker = None
                 logger.info(f"[Coordinator] Auto-resuming preempted worker: {next_worker}")
                 asyncio.create_task(self._auto_resume_worker(next_worker))
+            elif not auto_resume:
+                self.preempted_worker = None
 
     async def _auto_resume_worker(self, worker_id: str) -> None:
         """Safely resume a previously preempted worker in the background."""

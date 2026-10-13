@@ -1,9 +1,46 @@
-// MessageV2 Chrome Extension Background Service Worker
+// Mavon Bridge - Chrome Extension Background Service Worker
 const WS_URL = "ws://127.0.0.1:8000/ws/extension";
 const HEALTH_URL = "http://127.0.0.1:8000/api/health";
 let ws = null;
 let reconnectTimer = null;
 let isConnecting = false;
+
+function updateBadge(connected) {
+  try {
+    if (chrome.action && chrome.action.setBadgeText) {
+      if (connected) {
+        chrome.action.setBadgeText({ text: "ON" });
+        chrome.action.setBadgeBackgroundColor({ color: "#059669" });
+        chrome.action.setTitle({ title: "Mavon Bridge — Connected & Ready" });
+      } else {
+        chrome.action.setBadgeText({ text: "OFF" });
+        chrome.action.setBadgeBackgroundColor({ color: "#6b7280" });
+        chrome.action.setTitle({ title: "Mavon Bridge — Offline / Reconnecting" });
+      }
+    }
+  } catch (e) {
+    // Ignore badge updates in worker headless mode
+  }
+}
+
+// Listen for status requests from the Mavon Bridge popup
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.type === "GET_STATUS") {
+    sendResponse({
+      connected: ws !== null && ws.readyState === WebSocket.OPEN,
+      wsUrl: WS_URL,
+      healthUrl: HEALTH_URL,
+      version: "1.2.0"
+    });
+    return true;
+  }
+  if (msg && msg.type === "RECONNECT") {
+    connect().then(() => {
+      sendResponse({ success: true, connected: ws !== null && ws.readyState === WebSocket.OPEN });
+    });
+    return true;
+  }
+});
 
 async function isBackendReachable() {
   try {
@@ -33,6 +70,7 @@ async function connect() {
     // Probe backend first so Chrome doesn't throw net::ERR_CONNECTION_REFUSED on chrome://extensions
     const reachable = await isBackendReachable();
     if (!reachable) {
+      updateBadge(false);
       clearTimeout(reconnectTimer);
       reconnectTimer = setTimeout(connect, 4000);
       return;
@@ -42,12 +80,13 @@ async function connect() {
       return;
     }
 
-    console.log("[MessageV2 Extension] Connecting to", WS_URL);
+    console.log("[Mavon Bridge] Connecting to", WS_URL);
     ws = new WebSocket(WS_URL);
 
     ws.onopen = () => {
-      console.log("[MessageV2 Extension] Connected to backend!");
-      ws.send(JSON.stringify({ type: "HELLO", payload: { client: "chrome_extension", version: "1.0" } }));
+      console.log("[Mavon Bridge] Connected to backend!");
+      updateBadge(true);
+      ws.send(JSON.stringify({ type: "HELLO", payload: { client: "chrome_extension", version: "1.2.0" } }));
     };
 
     ws.onmessage = async (event) => {
@@ -76,7 +115,8 @@ async function connect() {
     };
 
     ws.onclose = () => {
-      console.log("[MessageV2 Extension] Disconnected, scheduling reconnect probe in 3s...");
+      console.log("[Mavon Bridge] Disconnected, scheduling reconnect probe in 3s...");
+      updateBadge(false);
       ws = null;
       clearTimeout(reconnectTimer);
       reconnectTimer = setTimeout(connect, 3000);

@@ -114,8 +114,8 @@ export function App() {
       if (st && !isRecentMutation) setAutomationState(st);
       if (allSt && !isRecentMutation) setAllWorkersStatus(allSt);
 
-      const fetchC = isInitial || activeTab === 'contacts' || activeTab === 'overview';
-      const fetchT = isInitial || activeTab === 'queue' || activeTab === 'contacts' || activeTab === 'overview';
+      const fetchC = isInitial || activeTab === 'contacts' || activeTab === 'overview' || activeTab === 'sources';
+      const fetchT = isInitial || activeTab === 'queue' || activeTab === 'contacts' || activeTab === 'overview' || activeTab === 'sources';
       const fetchS = isInitial || activeTab === 'sources';
       const fetchE = isInitial || activeTab === 'events';
 
@@ -390,7 +390,15 @@ export function App() {
         {currentTab === 'contacts' && <Contacts contacts={contacts} tasks={tasks} automationState={automationState} onRefresh={loadData} />}
         {currentTab === 'queue' && <Queue tasks={tasks} automationState={automationState} onRefresh={loadData} />}
         {currentTab === 'sources' && (
-          <Sources sources={sources} onImportSuccess={loadData} onNavigate={setCurrentTab} />
+          <Sources
+            sources={sources}
+            tasks={tasks}
+            contacts={contacts}
+            automationState={automationState}
+            onImportSuccess={loadData}
+            onNavigate={setCurrentTab}
+            onRefresh={loadData}
+          />
         )}
         {currentTab === 'events' && <Events events={events} />}
       </main>

@@ -200,10 +200,46 @@ class TaskRepository:
 
     async def delete(self, task_id: str) -> bool:
         from sqlalchemy import delete
+        from backend.database.models import Message, SendAttempt, VerificationResult, Error
+        await self.session.execute(delete(SendAttempt).where(SendAttempt.task_id == task_id))
+        await self.session.execute(delete(VerificationResult).where(VerificationResult.task_id == task_id))
+        await self.session.execute(delete(Error).where(Error.task_id == task_id))
+        await self.session.execute(delete(Message).where(Message.task_id == task_id))
         stmt = delete(Task).where(Task.id == task_id)
         result = await self.session.execute(stmt)
         await self.session.commit()
         return result.rowcount > 0
+
+    async def bulk_delete(self, task_ids: List[str]) -> int:
+        from sqlalchemy import delete
+        from backend.database.models import Message, SendAttempt, VerificationResult, Error
+        if not task_ids:
+            return 0
+        await self.session.execute(delete(SendAttempt).where(SendAttempt.task_id.in_(task_ids)))
+        await self.session.execute(delete(VerificationResult).where(VerificationResult.task_id.in_(task_ids)))
+        await self.session.execute(delete(Error).where(Error.task_id.in_(task_ids)))
+        await self.session.execute(delete(Message).where(Message.task_id.in_(task_ids)))
+        stmt = delete(Task).where(Task.id.in_(task_ids))
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return result.rowcount
+
+    async def bulk_update(self, task_ids: List[str], **kwargs) -> int:
+        if not task_ids:
+            return 0
+        now = datetime.now(timezone.utc)
+        values = {"updated_at": now}
+        for k, v in kwargs.items():
+            if hasattr(Task, k):
+                values[k] = v
+        if "status" in values:
+            if values["status"] in (TaskStatus.READY.value, TaskStatus.PAUSED.value):
+                values["lease_owner"] = None
+                values["lease_expires_at"] = None
+        stmt = update(Task).where(Task.id.in_(task_ids)).values(**values)
+        res = await self.session.execute(stmt)
+        await self.session.commit()
+        return res.rowcount
 
     async def update_task(self, task_id: str, **kwargs) -> Optional[Task]:
         task = await self.get_by_id(task_id)

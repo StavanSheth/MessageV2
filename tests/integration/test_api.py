@@ -67,6 +67,79 @@ async def test_automation_start_with_batch(client: AsyncClient):
     assert data["delay_seconds"] == 15
     # Clean up by stopping
     await client.post("/api/automation/stop")
+@pytest.mark.asyncio
+async def test_tasks_bulk_update_and_bulk_delete(client: AsyncClient):
+    # Upload sample to have tasks
+    with open("data/samples/sample_contacts.xlsx", "rb") as f:
+        files = {"file": ("sample_contacts.xlsx", f, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+        await client.post("/api/sources/upload", files=files)
 
+    t_res = await client.get("/api/tasks")
+    tasks = t_res.json()
+    assert len(tasks) >= 2
+    task_ids = [t["id"] for t in tasks[:2]]
 
+    # Test bulk-update
+    update_res = await client.post("/api/tasks/bulk-update", json={
+        "task_ids": task_ids,
+        "updates": {
+            "priority": 1,
+            "status": "QUEUED"
+        }
+    })
+    assert update_res.status_code == 200
+    assert update_res.json()["updated_count"] == 2
+
+    # Verify updated tasks
+    t_res_after = await client.get("/api/tasks")
+    updated_tasks = [t for t in t_res_after.json() if t["id"] in task_ids]
+    for t in updated_tasks:
+        assert t["priority"] == 1
+
+    # Test bulk-delete
+    del_res = await client.post("/api/tasks/bulk-delete", json={
+        "task_ids": task_ids
+    })
+    assert del_res.status_code == 200
+    assert del_res.json()["deleted_count"] == 2
+
+    # Verify tasks removed
+    t_res_final = await client.get("/api/tasks")
+    remaining_ids = [t["id"] for t in t_res_final.json()]
+    for tid in task_ids:
+        assert tid not in remaining_ids
+
+@pytest.mark.asyncio
+async def test_contacts_bulk_update_and_bulk_delete(client: AsyncClient):
+    with open("data/samples/sample_contacts.xlsx", "rb") as f:
+        files = {"file": ("sample_contacts.xlsx", f, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+        await client.post("/api/sources/upload", files=files)
+
+    c_res = await client.get("/api/contacts")
+    contacts = c_res.json()
+    assert len(contacts) >= 2
+    contact_ids = [c["id"] for c in contacts[:2]]
+
+    # Bulk update contacts
+    update_res = await client.post("/api/contacts/bulk-update", json={
+        "contact_ids": contact_ids,
+        "updates": {
+            "replied_status": "YES"
+        }
+    })
+    assert update_res.status_code == 200
+    assert update_res.json()["updated_count"] == 2
+
+    # Verify updated contacts
+    c_res_after = await client.get("/api/contacts")
+    updated_contacts = [c for c in c_res_after.json() if c["id"] in contact_ids]
+    for c in updated_contacts:
+        assert c["replied_status"] == "YES"
+
+    # Bulk delete contacts
+    del_res = await client.post("/api/contacts/bulk-delete", json={
+        "contact_ids": contact_ids
+    })
+    assert del_res.status_code == 200
+    assert del_res.json()["deleted_count"] == 2
 

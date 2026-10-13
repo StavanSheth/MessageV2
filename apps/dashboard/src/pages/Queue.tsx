@@ -87,18 +87,21 @@ function parseTaskError(task: Task): ErrorCategoryInfo | null {
     };
   }
 
-  // 3. DM Restricted
+  // 3. DM Restricted / Closed
   if (
     matchedTag.includes('DM_RESTRICTED') ||
+    matchedTag.includes('DM_NOT_AVAILABLE') ||
     cleanMsg.toLowerCase().includes('does not accept') ||
     cleanMsg.toLowerCase().includes('message button not available') ||
+    cleanMsg.toLowerCase().includes('message button not found') ||
+    cleanMsg.toLowerCase().includes('cannot receive') ||
     cleanMsg.toLowerCase().includes('no message button') ||
     cleanMsg.toLowerCase().includes('restricted') ||
     task.contact?.replied_status === 'DM_RESTRICTED'
   ) {
     return {
       tag: 'DM_RESTRICTED',
-      label: 'DMs Closed / Follow-Only',
+      label: 'DMs Closed / Restricted',
       badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold',
       description: cleanMsg || 'Account restricts direct messages from non-followers or disabled message requests.'
     };
@@ -141,7 +144,8 @@ function parseTaskError(task: Task): ErrorCategoryInfo | null {
     matchedTag.includes('EXISTING_HISTORY') ||
     matchedTag.includes('ALREADY_MESSAGED') ||
     cleanMsg.toLowerCase().includes('existing') ||
-    cleanMsg.toLowerCase().includes('prior conversation')
+    cleanMsg.toLowerCase().includes('prior conversation') ||
+    cleanMsg.toLowerCase().includes('already messaged')
   ) {
     return {
       tag: 'EXISTING_HISTORY',
@@ -152,7 +156,13 @@ function parseTaskError(task: Task): ErrorCategoryInfo | null {
   }
 
   // 7. Rate limit
-  if (matchedTag.includes('RATE_LIMITED') || cleanMsg.toLowerCase().includes('rate limit') || cleanMsg.toLowerCase().includes('action blocked')) {
+  if (
+    matchedTag.includes('RATE_LIMITED') ||
+    matchedTag.includes('ACTION_BLOCKED') ||
+    cleanMsg.toLowerCase().includes('rate limit') ||
+    cleanMsg.toLowerCase().includes('action blocked') ||
+    cleanMsg.toLowerCase().includes('pacing delay')
+  ) {
     return {
       tag: 'RATE_LIMITED',
       label: 'Rate Limited (Cooling Down)',
@@ -171,13 +181,19 @@ function parseTaskError(task: Task): ErrorCategoryInfo | null {
     };
   }
 
-  // 9. Composer unavailable
-  if (matchedTag.includes('COMPOSER_UNAVAILABLE') || cleanMsg.toLowerCase().includes('composer') || cleanMsg.toLowerCase().includes('typing')) {
+  // 9. Chatbox unavailable
+  if (
+    matchedTag.includes('CHATBOX_UNAVAILABLE') ||
+    matchedTag.includes('COMPOSER_UNAVAILABLE') ||
+    cleanMsg.toLowerCase().includes('chatbox') ||
+    cleanMsg.toLowerCase().includes('composer') ||
+    cleanMsg.toLowerCase().includes('typing')
+  ) {
     return {
-      tag: 'COMPOSER_UNAVAILABLE',
-      label: 'Chat Box Unavailable',
+      tag: 'CHATBOX_UNAVAILABLE',
+      label: 'Chatbox Unavailable',
       badgeClass: 'bg-red-500/20 text-red-300 border-red-500/40 font-bold',
-      description: cleanMsg || 'Instagram message input field could not be focused or typed into.'
+      description: cleanMsg || 'Instagram message input field/chatbox could not be focused or typed into.'
     };
   }
 
@@ -192,12 +208,43 @@ function parseTaskError(task: Task): ErrorCategoryInfo | null {
   }
 
   // 11. Login / auth required
-  if (matchedTag.includes('AUTH') || cleanMsg.toLowerCase().includes('login') || cleanMsg.toLowerCase().includes('not logged in')) {
+  if (
+    matchedTag.includes('AUTH') ||
+    matchedTag.includes('LOGIN_REQUIRED') ||
+    cleanMsg.toLowerCase().includes('login') ||
+    cleanMsg.toLowerCase().includes('not logged in')
+  ) {
     return {
       tag: 'AUTHENTICATION_REQUIRED',
       label: 'Instagram Login Required',
       badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40 font-bold',
       description: cleanMsg || 'Instagram session expired or account is not logged in on active Chrome profile.'
+    };
+  }
+
+  // 12. Initial message pending
+  if (
+    matchedTag.includes('INITIAL_MESSAGE_PENDING') ||
+    cleanMsg.toLowerCase().includes('initial outreach message was not completed') ||
+    cleanMsg.toLowerCase().includes('follow-up 1 was not completed') ||
+    cleanMsg.toLowerCase().includes('follow-up 1 was cancelled') ||
+    cleanMsg.toLowerCase().includes('out of order')
+  ) {
+    return {
+      tag: 'INITIAL_MESSAGE_PENDING',
+      label: 'Initial Outreach Pending',
+      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold',
+      description: cleanMsg || 'Primary outreach message was not completed. Follow-up cannot proceed without initial send.'
+    };
+  }
+
+  // 13. Stale follow-up
+  if (matchedTag.includes('STALE_FOLLOWUP') || cleanMsg.toLowerCase().includes('stale') || cleanMsg.toLowerCase().includes('30 days overdue')) {
+    return {
+      tag: 'STALE_FOLLOWUP',
+      label: 'Stale Follow-Up (>30d)',
+      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold',
+      description: cleanMsg || 'Follow-up is >30 days overdue. Operator review recommended before dispatch.'
     };
   }
 

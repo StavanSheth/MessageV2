@@ -301,7 +301,7 @@ class InstagramAdapter:
                 await asyncio.sleep(0.5)
 
             if not composer:
-                return False, ResultCode.COMPOSER_UNAVAILABLE, "Message composer not found"
+                return False, ResultCode.CHATBOX_UNAVAILABLE, "Chatbox not found"
 
             # Focus composer and clear any existing draft
             await composer.click()

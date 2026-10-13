@@ -122,14 +122,14 @@ class RetryPolicy:
                     requires_manual_review=True
                 )
 
-        # 5. Composer unavailable / transient DOM error
-        if result_code == ResultCode.COMPOSER_UNAVAILABLE:
+        # 5. Chatbox unavailable / transient DOM error
+        if result_code in (ResultCode.CHATBOX_UNAVAILABLE, ResultCode.COMPOSER_UNAVAILABLE):
             if attempt < 2:
                 delay = 5.0
                 return RetryDecision(
                     should_retry=True,
                     category=RetryCategory.RETRYABLE_TRANSIENT,
-                    reason="Composer unavailable. One transient retry allowed.",
+                    reason="Chatbox unavailable. One transient retry allowed.",
                     attempt=attempt,
                     max_attempts=2,
                     delay_seconds=delay,
@@ -141,7 +141,7 @@ class RetryPolicy:
                 return RetryDecision(
                     should_retry=False,
                     category=RetryCategory.NON_RETRYABLE,
-                    reason="Composer unavailable after retry.",
+                    reason="Chatbox unavailable after retry.",
                     attempt=attempt,
                     max_attempts=2,
                     delay_seconds=0.0,

@@ -1,8 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "MessageV2 Automation Bridge",
-  "version": "1.0",
-  "description": "Bridges MessageV2 dashboard with your live active Chrome window",
+  "name": "Mavon Bridge — Outreach Automation",
+  "short_name": "Mavon Bridge",
+  "version": "1.2.0",
+  "description": "Official browser automation bridge for Mavon Outreach OS. Connects live Instagram sessions to your outreach pipeline with zero credential sharing.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "permissions": [
     "tabs",
     "scripting",
@@ -22,6 +29,13 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "MessageV2 Bridge"
+    "default_title": "Mavon Bridge — Outreach Automation",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   }
 }

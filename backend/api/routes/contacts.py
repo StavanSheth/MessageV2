@@ -6,6 +6,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.session import get_db
+from backend.database.models import Contact
 from backend.repositories.contact_repository import ContactRepository
 from backend.services.export_service import ExportService
 from backend.config.settings import settings
@@ -323,6 +324,7 @@ async def update_contact_details(contact_id: str, req: UpdateContactDetailsReque
     }
 
 @router.post("/bulk_delete")
+@router.post("/bulk-delete")
 async def bulk_delete_contacts(req: BulkDeleteRequest, db: AsyncSession = Depends(get_db)):
     """Delete multiple contacts and their associated tasks/messages in bulk."""
     repo = ContactRepository(db)
@@ -332,6 +334,39 @@ async def bulk_delete_contacts(req: BulkDeleteRequest, db: AsyncSession = Depend
         "deleted_count": deleted_count,
         "message": f"Successfully deleted {deleted_count} contact(s)."
     }
+
+class BulkUpdateContactsUpdates(BaseModel):
+    message: Optional[str] = None
+    followup_1_message: Optional[str] = None
+    followup_2_message: Optional[str] = None
+    followup_1_delay_days: Optional[int] = None
+    followup_2_delay_days: Optional[int] = None
+    replied_status: Optional[str] = None
+
+class BulkUpdateContactsRequest(BaseModel):
+    contact_ids: List[str]
+    updates: BulkUpdateContactsUpdates
+
+@router.post("/bulk-update")
+@router.post("/bulk_update")
+async def bulk_update_contacts(req: BulkUpdateContactsRequest, db: AsyncSession = Depends(get_db)):
+    """Bulk update contact messages and schedules."""
+    from sqlalchemy import update
+    now = datetime.now(timezone.utc)
+    values = {"updated_at": now}
+    u = req.updates
+    if u.message is not None: values["message"] = u.message
+    if u.followup_1_message is not None: values["followup_1_message"] = u.followup_1_message
+    if u.followup_2_message is not None: values["followup_2_message"] = u.followup_2_message
+    if u.followup_1_delay_days is not None: values["followup_1_delay_days"] = u.followup_1_delay_days
+    if u.followup_2_delay_days is not None: values["followup_2_delay_days"] = u.followup_2_delay_days
+    if u.replied_status is not None: values["replied_status"] = u.replied_status
+
+    stmt = update(Contact).where(Contact.id.in_(req.contact_ids)).values(**values)
+    res = await db.execute(stmt)
+    await db.commit()
+    return {"status": "success", "updated_count": res.rowcount}
+
 
 @router.post("/clear")
 async def clear_all_contacts(req: ClearContactsRequest, db: AsyncSession = Depends(get_db)):

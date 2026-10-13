@@ -346,3 +346,87 @@ async def cancel_followups(req: FollowUpReviewRequest, db: AsyncSession = Depend
     return {"status": "ok", "cancelled_count": cancelled_count}
 
 
+class BulkDeleteTasksRequest(BaseModel):
+    task_ids: List[str]
+
+
+class BulkUpdateTasksUpdates(BaseModel):
+    status: Optional[str] = None
+    priority: Optional[int] = None
+    scheduled_at: Optional[str] = None
+    message: Optional[str] = None
+    followup_1_message: Optional[str] = None
+    followup_2_message: Optional[str] = None
+    followup_1_delay_days: Optional[int] = None
+    followup_2_delay_days: Optional[int] = None
+
+
+class BulkUpdateTasksRequest(BaseModel):
+    task_ids: List[str]
+    updates: BulkUpdateTasksUpdates
+
+
+@router.post("/bulk-delete")
+async def bulk_delete_tasks(req: BulkDeleteTasksRequest, db: AsyncSession = Depends(get_db)):
+    """Permanently delete multiple tasks by IDs."""
+    repo = TaskRepository(db)
+    count = await repo.bulk_delete(req.task_ids)
+    return {"status": "ok", "deleted_count": count}
+
+
+@router.post("/bulk-update")
+async def bulk_update_tasks(req: BulkUpdateTasksRequest, db: AsyncSession = Depends(get_db)):
+    """Batch update status, priority, schedule, and messages for selected tasks."""
+    from dateutil import parser as dt_parser
+    repo = TaskRepository(db)
+    u = req.updates
+    kwargs = {}
+    if u.status:
+        st_upper = u.status.upper()
+        if st_upper in ("SCHEDULED", "READY"):
+            kwargs["status"] = TaskStatus.READY.value
+        elif st_upper in ("PAUSED", "CANCELLED", "COMPLETED", "MANUAL_REVIEW", "QUEUED"):
+            kwargs["status"] = st_upper
+        else:
+            kwargs["status"] = st_upper
+
+    if u.priority is not None:
+        kwargs["priority"] = u.priority
+
+    if u.scheduled_at:
+        try:
+            dt = dt_parser.parse(u.scheduled_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            kwargs["scheduled_at"] = dt
+        except Exception:
+            pass
+
+    updated_count = await repo.bulk_update(req.task_ids, **kwargs)
+
+    # Sync messages to associated contacts/messages if supplied
+    if any([u.message, u.followup_1_message, u.followup_2_message, u.followup_1_delay_days, u.followup_2_delay_days]):
+        from backend.database.models import Contact, Task
+        from sqlalchemy import select
+        tasks_stmt = select(Task).where(Task.id.in_(req.task_ids)).options(selectinload(Task.contact), selectinload(Task.messages))
+        loaded_tasks = (await db.execute(tasks_stmt)).scalars().all()
+        for t in loaded_tasks:
+            if u.message is not None and t.messages:
+                t.messages[0].body = u.message
+            if t.contact:
+                if u.message is not None and t.type == "MESSAGE":
+                    t.contact.message = u.message
+                if u.followup_1_message is not None:
+                    t.contact.followup_1_message = u.followup_1_message
+                if u.followup_2_message is not None:
+                    t.contact.followup_2_message = u.followup_2_message
+                if u.followup_1_delay_days is not None:
+                    t.contact.followup_1_delay_days = u.followup_1_delay_days
+                if u.followup_2_delay_days is not None:
+                    t.contact.followup_2_delay_days = u.followup_2_delay_days
+        await db.commit()
+
+    return {"status": "ok", "updated_count": updated_count}
+
+
+

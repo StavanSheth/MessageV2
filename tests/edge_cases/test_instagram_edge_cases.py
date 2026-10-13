@@ -124,7 +124,7 @@ async def test_composer_unavailable(fake_page):
 
     prepared, code, reason = await adapter.prepare_message("Hello!")
     assert prepared is False
-    assert code == ResultCode.COMPOSER_UNAVAILABLE
+    assert code == ResultCode.CHATBOX_UNAVAILABLE
 
 @pytest.mark.asyncio
 async def test_send_unknown_never_treats_empty_composer_as_success(fake_page):

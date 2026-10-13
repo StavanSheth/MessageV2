@@ -743,5 +743,68 @@ export async function fetchAllWorkersStatus(): Promise<{
   return res.json();
 }
 
+export async function bulkDeleteTasks(taskIds: string[]): Promise<{ status: string; deleted_count: number }> {
+  const res = await fetch(`${BASE_URL}/api/tasks/bulk-delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_ids: taskIds }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to bulk delete tasks');
+  }
+  return res.json();
+}
+
+export async function bulkUpdateTasks(
+  taskIds: string[],
+  updates: {
+    status?: string;
+    priority?: number;
+    scheduled_at?: string | null;
+    message?: string;
+    followup_1_message?: string;
+    followup_2_message?: string;
+    followup_1_delay_days?: number;
+    followup_2_delay_days?: number;
+  }
+): Promise<{ status: string; updated_count: number }> {
+  const res = await fetch(`${BASE_URL}/api/tasks/bulk-update`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_ids: taskIds, updates }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to bulk update tasks');
+  }
+  return res.json();
+}
+
+
+export async function bulkUpdateContacts(
+  contactIds: string[],
+  updates: {
+    message?: string;
+    followup_1_message?: string;
+    followup_2_message?: string;
+    followup_1_delay_days?: number;
+    followup_2_delay_days?: number;
+    replied_status?: string;
+  }
+): Promise<{ status: string; updated_count: number }> {
+  const res = await fetch(`${BASE_URL}/api/contacts/bulk-update`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contact_ids: contactIds, updates }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to bulk update contacts');
+  }
+  return res.json();
+}
+
+
 
 

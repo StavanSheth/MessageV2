@@ -216,11 +216,15 @@ class ExportService:
         ):
             return "Account Not Found (404)"
 
-        if 'DM_RESTRICTED' in matched_tag or replied_status == 'DM_RESTRICTED' or 'does not accept' in clean_msg or 'no message button' in clean_msg:
+        if (
+            'DM_RESTRICTED' in matched_tag
+            or 'DM_NOT_AVAILABLE' in matched_tag
+            or replied_status == 'DM_RESTRICTED'
+            or 'does not accept' in clean_msg
+            or 'no message button' in clean_msg
+            or 'cannot receive' in clean_msg
+        ):
             return "DMs Restricted / Closed"
-
-        if 'DM_NOT_AVAILABLE' in matched_tag or 'not available' in clean_msg:
-            return "DM Message Button Unavailable"
 
         if 'EXTERNAL_MESSAGE_DETECTED' in matched_tag or 'external message' in clean_msg:
             return "External Message Detected"
@@ -231,22 +235,35 @@ class ExportService:
         if 'EXISTING_HISTORY' in matched_tag or 'ALREADY_MESSAGED' in matched_tag or 'existing' in clean_msg or 'prior' in clean_msg:
             return "Prior Chat History Detected"
 
-        if 'RATE_LIMITED' in matched_tag or 'rate limit' in clean_msg or 'action blocked' in clean_msg:
+        if 'RATE_LIMITED' in matched_tag or 'ACTION_BLOCKED' in matched_tag or 'rate limit' in clean_msg or 'action blocked' in clean_msg:
             return "Rate Limited / Cooldown"
 
         if 'PROFILE_MISMATCH' in matched_tag or 'mismatch' in clean_msg:
             return "Profile Identity Mismatch"
 
-        if 'follow-up 1 was not completed' in clean_msg or 'out of order' in clean_msg:
-            return "Previous Follow-Up Not Completed"
+        if (
+            'INITIAL_MESSAGE_PENDING' in matched_tag
+            or 'initial outreach message was not completed' in clean_msg
+            or 'follow-up 1 was not completed' in clean_msg
+            or 'out of order' in clean_msg
+        ):
+            return "Initial Outreach Pending"
 
-        if 'COMPOSER_UNAVAILABLE' in matched_tag or 'composer' in clean_msg:
-            return "DM Composer Unavailable"
+        if 'STALE_FOLLOWUP' in matched_tag or 'stale' in clean_msg or '30 days overdue' in clean_msg:
+            return "Stale Follow-Up (>30d)"
+
+        if (
+            'CHATBOX_UNAVAILABLE' in matched_tag
+            or 'COMPOSER_UNAVAILABLE' in matched_tag
+            or 'chatbox' in clean_msg
+            or 'composer' in clean_msg
+        ):
+            return "Chatbox Unavailable"
 
         if 'CHALLENGE_REQUIRED' in matched_tag or 'checkpoint' in clean_msg or 'challenge' in clean_msg:
             return "Security Checkpoint"
 
-        if 'AUTH' in matched_tag or 'login' in clean_msg:
+        if 'AUTH' in matched_tag or 'LOGIN_REQUIRED' in matched_tag or 'login' in clean_msg:
             return "Authentication / Login Required"
 
         if status_str == 'CANCELLED':

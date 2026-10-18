@@ -36,8 +36,17 @@ def run_dev():
 
     # 3. Open Dashboard in Default Browser
     time.sleep(2)
-    print("[3/3] Opening dashboard in browser at http://localhost:5173 ...")
-    webbrowser.open("http://localhost:5173")
+    import socket
+    target_port = 5173
+    for p in [5174, 5173]:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            if s.connect_ex(("127.0.0.1", p)) == 0:
+                target_port = p
+                break
+    dash_url = f"http://127.0.0.1:{target_port}"
+    print(f"[3/3] Opening dashboard in browser at {dash_url} ...")
+    webbrowser.open(dash_url)
 
     print("\nSystem running! Press Ctrl+C to terminate both servers.")
     try:

@@ -77,11 +77,13 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, tasks = [], automa
   });
   const [isSavingTemplates, setIsSavingTemplates] = useState(false);
   const [templateSuccessMsg, setTemplateSuccessMsg] = useState('');
+  const [templateErrorMsg, setTemplateErrorMsg] = useState('');
 
   // Load message templates when template modal opens
   const handleOpenTemplates = async () => {
     setIsTemplateModalOpen(true);
     setTemplateSuccessMsg('');
+    setTemplateErrorMsg('');
     try {
       const t = await fetchMessageTemplates();
       setTemplateForm({
@@ -93,8 +95,9 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, tasks = [], automa
         apply_to_all: true,
         reschedule_existing: false,
       });
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to fetch templates', e);
+      setTemplateErrorMsg('Failed to load existing templates: ' + (e?.message || 'Server error'));
     }
   };
 
@@ -102,6 +105,7 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, tasks = [], automa
     e.preventDefault();
     setIsSavingTemplates(true);
     setTemplateSuccessMsg('');
+    setTemplateErrorMsg('');
     try {
       const res = await applyBulkTemplates(templateForm);
       setTemplateSuccessMsg(res.message || 'Templates and follow-up schedules updated successfully!');
@@ -111,10 +115,91 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, tasks = [], automa
         setTemplateSuccessMsg('');
       }, 1500);
     } catch (err: any) {
-      alert(`Error applying templates: ${err.message}`);
+      setTemplateErrorMsg(err.message || 'Failed to apply templates');
     } finally {
       setIsSavingTemplates(false);
     }
+  };
+
+  const renderTemplatePreview = (template: string, hasName: boolean = true) => {
+    if (!template) return '';
+    const name = hasName ? 'Sarah Connor' : '';
+    const firstName = hasName ? 'Sarah' : '';
+    const username = 'sarah_c';
+
+    return template.replace(/\{([a-zA-Z0-9_@]+)(?:\|([^}]+))?\}/g, (match, varName, fallback) => {
+      const v = varName.toLowerCase();
+      if (v === 'first_name' || v === 'firstname') {
+        if (firstName) return firstName;
+        if (fallback !== undefined) return fallback;
+        return `@${username}`;
+      }
+      if (v === 'name' || v === 'full_name') {
+        if (name) return name;
+        if (fallback !== undefined) return fallback;
+        return `@${username}`;
+      }
+      if (v === 'username' || v === 'handle' || v === 'insta_id' || v === 'instagram_id') {
+        return username;
+      }
+      if (v === '@username' || v === '@handle' || v === '@insta_id') {
+        return `@${username}`;
+      }
+      return match;
+    });
+  };
+
+  const insertTagIntoField = (field: 'default_message' | 'followup_1_message' | 'followup_2_message', tag: string) => {
+    setTemplateForm(prev => {
+      const curr = prev[field] || '';
+      const needsSpace = curr.length > 0 && !curr.endsWith(' ') && !curr.endsWith('\n');
+      return {
+        ...prev,
+        [field]: curr + (needsSpace ? ' ' : '') + tag
+      };
+    });
+  };
+
+  const renderVariableChips = (field: 'default_message' | 'followup_1_message' | 'followup_2_message') => {
+    const chips = [
+      { label: '{@username}', tag: '{@username}', title: 'Instagram handle with @ (e.g. @sarah_c)' },
+      { label: '{username}', tag: '{username}', title: 'Instagram handle without @ (e.g. sarah_c)' },
+    ];
+    return (
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[10px] text-gray-400 font-semibold flex items-center gap-1 mr-0.5">
+          <Sparkles className="w-3 h-3 text-amber-400" /> Insert handle:
+        </span>
+        {chips.map(chip => (
+          <button
+            key={chip.tag}
+            type="button"
+            onClick={() => insertTagIntoField(field, chip.tag)}
+            title={chip.title}
+            className="px-2.5 py-0.5 rounded-md bg-gray-900 hover:bg-indigo-600/30 text-indigo-300 font-mono text-[11px] font-semibold border border-indigo-500/30 hover:border-indigo-400 transition-all cursor-pointer shadow-sm"
+          >
+            + {chip.label}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
+  const renderPreviewBox = (templateText: string, borderColor: string = 'border-emerald-500/20') => {
+    if (!templateText) return null;
+    return (
+      <div className={`p-2.5 rounded-xl bg-gray-950/90 border ${borderColor} space-y-1.5 text-[11px]`}>
+        <div className="flex items-center justify-between text-gray-400 text-[10px] font-semibold">
+          <span className="flex items-center gap-1 text-gray-300">
+            <Eye className="w-3 h-3 text-indigo-400" /> Live Message Preview:
+          </span>
+          <span className="text-[9px] text-gray-500 font-mono">Recipient: @sarah_c</span>
+        </div>
+        <div className="text-gray-200 font-sans text-xs whitespace-pre-wrap bg-gray-900/70 p-2.5 rounded-lg border border-gray-800 leading-relaxed font-sans">
+          {renderTemplatePreview(templateText, true)}
+        </div>
+      </div>
+    );
   };
 
   const handleOpenEditContact = (c: Contact) => {
@@ -1408,7 +1493,7 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, tasks = [], automa
       {/* Global Templates Modal */}
       {isTemplateModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-gray-900 border border-gray-700/80 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95">
+          <div className="bg-gray-900 border border-gray-700/80 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-gray-800 pb-3.5">
               <div>
                 <h3 className="text-lg font-bold text-white flex items-center space-x-2">
@@ -1434,18 +1519,30 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, tasks = [], automa
               </div>
             )}
 
+            {templateErrorMsg && (
+              <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-400 text-xs font-bold flex items-center space-x-2">
+                <ShieldAlert className="w-4 h-4" />
+                <span>{templateErrorMsg}</span>
+              </div>
+            )}
+
             <form onSubmit={handleSaveTemplates} className="space-y-4 text-xs">
-              <div className="bg-emerald-950/15 border border-emerald-500/25 p-3.5 rounded-xl space-y-1.5">
-                <label className="block text-emerald-300 font-bold flex items-center space-x-1.5">
-                  <Send className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Default 1st Outreach Message</span>
-                </label>
+              <div className="bg-emerald-950/15 border border-emerald-500/25 p-3.5 rounded-xl space-y-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                  <label className="text-emerald-300 font-bold flex items-center space-x-1.5">
+                    <Send className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Default 1st Outreach Message</span>
+                  </label>
+                  {renderVariableChips('default_message')}
+                </div>
                 <textarea
                   rows={3}
                   value={templateForm.default_message}
                   onChange={(e) => setTemplateForm({ ...templateForm, default_message: e.target.value })}
+                  placeholder="Hey {first_name}, saw your page..."
                   className="w-full bg-gray-950 border border-gray-800 rounded-xl p-3 text-white focus:outline-none focus:border-emerald-500 resize-none font-sans"
                 />
+                {renderPreviewBox(templateForm.default_message, 'border-emerald-500/20')}
               </div>
 
               <div className="bg-indigo-950/15 border border-indigo-500/25 p-3.5 rounded-xl space-y-2">
@@ -1467,12 +1564,15 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, tasks = [], automa
                     <span className="text-gray-400 text-[11px]">days</span>
                   </div>
                 </div>
+                {renderVariableChips('followup_1_message')}
                 <textarea
                   rows={2}
                   value={templateForm.followup_1_message}
                   onChange={(e) => setTemplateForm({ ...templateForm, followup_1_message: e.target.value })}
+                  placeholder="Hey {first_name}, just following up..."
                   className="w-full bg-gray-950 border border-gray-800 rounded-xl p-3 text-white focus:outline-none focus:border-indigo-500 resize-none font-sans"
                 />
+                {renderPreviewBox(templateForm.followup_1_message, 'border-indigo-500/20')}
               </div>
 
               <div className="bg-purple-950/15 border border-purple-500/25 p-3.5 rounded-xl space-y-2">
@@ -1494,12 +1594,15 @@ export const Contacts: React.FC<ContactsProps> = ({ contacts, tasks = [], automa
                     <span className="text-gray-400 text-[11px]">days</span>
                   </div>
                 </div>
+                {renderVariableChips('followup_2_message')}
                 <textarea
                   rows={2}
                   value={templateForm.followup_2_message}
                   onChange={(e) => setTemplateForm({ ...templateForm, followup_2_message: e.target.value })}
+                  placeholder="Hi {first_name}, one final quick check-in..."
                   className="w-full bg-gray-950 border border-gray-800 rounded-xl p-3 text-white focus:outline-none focus:border-purple-500 resize-none font-sans"
                 />
+                {renderPreviewBox(templateForm.followup_2_message, 'border-purple-500/20')}
               </div>
 
               {/* Options */}

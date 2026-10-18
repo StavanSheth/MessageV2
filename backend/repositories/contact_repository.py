@@ -204,7 +204,7 @@ class ContactRepository:
                                     followup_2_message: Optional[str] = None,
                                     followup_1_delay_days: Optional[int] = None,
                                     followup_2_delay_days: Optional[int] = None,
-                                    apply_to_all: bool = False,
+                                    apply_to_all: bool = True,
                                     reschedule_existing: bool = False) -> dict:
         values = {"updated_at": datetime.now(timezone.utc)}
         if default_message is not None:
@@ -218,9 +218,11 @@ class ContactRepository:
         if followup_2_delay_days is not None:
             values["followup_2_delay_days"] = followup_2_delay_days
 
-        stmt = update(Contact).values(**values)
-        res = await self.session.execute(stmt)
-        updated_contacts = res.rowcount
+        updated_contacts = 0
+        if apply_to_all and (default_message is not None or followup_1_message is not None or followup_2_message is not None or followup_1_delay_days is not None or followup_2_delay_days is not None):
+            stmt = update(Contact).values(**values)
+            res = await self.session.execute(stmt)
+            updated_contacts = res.rowcount
 
         rescheduled_count = 0
         if reschedule_existing and (followup_1_delay_days is not None or followup_2_delay_days is not None):
@@ -406,21 +408,22 @@ class ContactRepository:
         await self.session.commit()
         return res.rowcount
 
-    async def clear_all(self) -> int:
+    async def clear_all(self, archive: bool = False) -> int:
         from sqlalchemy import delete
         from backend.database.models import Task, Message, VerificationResult, OutreachHistory, SendAttempt
-        all_contacts = (await self.session.execute(select(Contact))).scalars().all()
-        for c in all_contacts:
-            try:
-                self.session.add(OutreachHistory(
-                    username=c.username,
-                    instagram_url=c.instagram_url,
-                    contact_name=c.name,
-                    action="ARCHIVED",
-                    details="Contact cleared in DB wipe"
-                ))
-            except Exception:
-                pass
+        if archive:
+            all_contacts = (await self.session.execute(select(Contact))).scalars().all()
+            for c in all_contacts:
+                try:
+                    self.session.add(OutreachHistory(
+                        username=c.username,
+                        instagram_url=c.instagram_url,
+                        contact_name=c.name,
+                        action="ARCHIVED",
+                        details="Contact cleared in DB wipe"
+                    ))
+                except Exception:
+                    pass
         await self.session.execute(delete(VerificationResult))
         await self.session.execute(delete(SendAttempt))
         await self.session.execute(delete(Message))

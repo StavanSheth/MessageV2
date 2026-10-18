@@ -310,16 +310,33 @@ class InstagramAdapter:
             await self.page.keyboard.press("Backspace")
             await asyncio.sleep(0.2)
 
-            # Type text using keyboard typing
-            await self.page.keyboard.type(text, delay=30)
+            # Type text using keyboard typing, preserving paragraphs via Shift+Enter
+            lines = text.split("\n")
+            for i, line in enumerate(lines):
+                if line:
+                    await self.page.keyboard.type(line, delay=25)
+                if i < len(lines) - 1:
+                    # In Instagram Web DMs, Shift+Enter creates a new paragraph/newline without triggering send
+                    await self.page.keyboard.press("Shift+Enter")
+                    await asyncio.sleep(0.1)
             await asyncio.sleep(0.5)
 
             # Verify text is entered in composer using inner_text or text_content (avoid input_value on div)
             entered_val = (await composer.inner_text() or "").strip()
             text_content = (await composer.text_content() or "").strip()
-            if text.strip() not in entered_val and text.strip() not in text_content:
-                # Fallback to insert_text if synthetic keyboard type didn't register
-                await self.page.keyboard.insert_text(text)
+            norm_expected = "".join(text.split())
+            norm_entered = "".join(entered_val.split())
+            norm_content = "".join(text_content.split())
+            if norm_expected not in norm_entered and norm_expected not in norm_content:
+                # Fallback if synthetic keyboard type didn't register: re-clear and insert line by line
+                await composer.click()
+                await self.page.keyboard.press("Control+A")
+                await self.page.keyboard.press("Backspace")
+                for i, line in enumerate(lines):
+                    if line:
+                        await self.page.keyboard.insert_text(line)
+                    if i < len(lines) - 1:
+                        await self.page.keyboard.press("Shift+Enter")
                 await asyncio.sleep(0.4)
 
             return True, ResultCode.SUCCESS, "Message composer ready"

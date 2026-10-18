@@ -143,3 +143,14 @@ async def test_contacts_bulk_update_and_bulk_delete(client: AsyncClient):
     assert del_res.status_code == 200
     assert del_res.json()["deleted_count"] == 2
 
+    # Clear outreach history
+    clear_h = await client.post("/api/sources/history/clear")
+    assert clear_h.status_code == 200
+    assert clear_h.json()["deleted_count"] >= 2
+
+    # Verify tables data reflects 0 history
+    td_res = await client.get("/api/sources/tables-data")
+    assert td_res.status_code == 200
+    assert td_res.json()["tables"]["history"]["count"] == 0
+
+

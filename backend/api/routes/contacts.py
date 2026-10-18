@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database.session import get_db
 from backend.database.models import Contact
 from backend.repositories.contact_repository import ContactRepository
+from backend.repositories.setting_repository import SettingRepository
 from backend.services.export_service import ExportService
 from backend.config.settings import settings
 from backend.utils.dates import format_datetime_readable
@@ -132,19 +133,54 @@ async def list_contacts(limit: int = 1000, offset: int = 0, db: AsyncSession = D
     return result
 
 @router.get("/templates")
-async def get_message_templates():
-    """Return default message templates for outreach."""
+async def get_message_templates(db: AsyncSession = Depends(get_db)):
+    """Return default message templates for outreach, loading locally saved templates from DB."""
+    s_repo = SettingRepository(db)
+    default_msg = await s_repo.get_value("template_default_message", settings.DEFAULT_MESSAGE)
+    fu1_msg = await s_repo.get_value(
+        "template_followup_1_message",
+        "Hey! Just following up on my previous message — would love to connect!"
+    )
+    fu2_msg = await s_repo.get_value(
+        "template_followup_2_message",
+        "Hey! One final quick check-in — let me know if you'd like more details."
+    )
+    fu1_delay = await s_repo.get_value("template_followup_1_delay_days", "3")
+    fu2_delay = await s_repo.get_value("template_followup_2_delay_days", "5")
+
+    try:
+        fu1_delay_int = int(fu1_delay) if fu1_delay is not None else 3
+    except (ValueError, TypeError):
+        fu1_delay_int = 3
+
+    try:
+        fu2_delay_int = int(fu2_delay) if fu2_delay is not None else 5
+    except (ValueError, TypeError):
+        fu2_delay_int = 5
+
     return {
-        "default_message": settings.DEFAULT_MESSAGE,
-        "followup_1_message": "Hey! Just following up on my previous message — would love to connect!",
-        "followup_2_message": "Hey! One final quick check-in — let me know if you'd like more details.",
-        "followup_1_delay_days": 3,
-        "followup_2_delay_days": 5
+        "default_message": default_msg,
+        "followup_1_message": fu1_msg,
+        "followup_2_message": fu2_msg,
+        "followup_1_delay_days": fu1_delay_int,
+        "followup_2_delay_days": fu2_delay_int
     }
 
 @router.post("/templates/apply")
 async def apply_bulk_templates(req: BulkTemplateRequest, db: AsyncSession = Depends(get_db)):
-    """Apply updated outreach message templates and follow-up intervals across contacts."""
+    """Apply updated outreach message templates and follow-up intervals across contacts and save to local DB."""
+    s_repo = SettingRepository(db)
+    if req.default_message is not None:
+        await s_repo.set_value("template_default_message", req.default_message)
+    if req.followup_1_message is not None:
+        await s_repo.set_value("template_followup_1_message", req.followup_1_message)
+    if req.followup_2_message is not None:
+        await s_repo.set_value("template_followup_2_message", req.followup_2_message)
+    if req.followup_1_delay_days is not None:
+        await s_repo.set_value("template_followup_1_delay_days", str(req.followup_1_delay_days))
+    if req.followup_2_delay_days is not None:
+        await s_repo.set_value("template_followup_2_delay_days", str(req.followup_2_delay_days))
+
     repo = ContactRepository(db)
     res = await repo.update_bulk_templates(
         default_message=req.default_message,
@@ -159,7 +195,7 @@ async def apply_bulk_templates(req: BulkTemplateRequest, db: AsyncSession = Depe
         "status": "success",
         "updated_contacts_count": res["updated_contacts_count"],
         "rescheduled_tasks_count": res["rescheduled_tasks_count"],
-        "message": f"Updated {res['updated_contacts_count']} contacts and rescheduled {res['rescheduled_tasks_count']} pending follow-ups."
+        "message": f"Updated {res['updated_contacts_count']} contacts and saved templates locally."
     }
 
 @router.put("/{contact_id}/followup_schedule")

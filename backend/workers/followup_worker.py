@@ -28,6 +28,7 @@ from backend.events.event_bus import event_bus
 from backend.automation.extension_bridge import extension_bridge, ExtensionAdapter
 from backend.automation.coordinator import coordinator
 from backend.automation.message_matcher import is_system_sequence_message
+from backend.automation.template_formatter import format_message
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +85,7 @@ class FollowUpWorker:
         if self._paused or self.status == WorkerStatus.PAUSED:
             if batch_limit is not None and batch_limit > 0:
                 self.batch_limit = batch_limit
-                self.batch_sent_count = 0
-            elif self.batch_limit is not None and self.batch_sent_count >= self.batch_limit:
-                self.batch_sent_count = 0
+            self.batch_sent_count = 0
             if delay_seconds is not None and delay_seconds >= 5:
                 self.delay_between_messages = delay_seconds
             await self.resume()
@@ -420,9 +419,10 @@ class FollowUpWorker:
 
         # Follow-up message body
         if task.type == "FOLLOW_UP_1":
-            followup_body = contact.followup_1_message or settings.DEFAULT_MESSAGE
+            raw_body = contact.followup_1_message or settings.DEFAULT_MESSAGE
         else:
-            followup_body = contact.followup_2_message or settings.DEFAULT_MESSAGE
+            raw_body = contact.followup_2_message or settings.DEFAULT_MESSAGE
+        followup_body = format_message(raw_body, contact)
 
         try:
             # ── Open Profile / Direct Conversation ──
@@ -513,9 +513,9 @@ class FollowUpWorker:
                             return
 
                     if task.type == "FOLLOW_UP_1" and chk_c.followup_1_message:
-                        followup_body = chk_c.followup_1_message
+                        followup_body = format_message(chk_c.followup_1_message, chk_c)
                     elif task.type == "FOLLOW_UP_2" and chk_c.followup_2_message:
-                        followup_body = chk_c.followup_2_message
+                        followup_body = format_message(chk_c.followup_2_message, chk_c)
 
             # ── Chat History Inspection & External Message Segregation ──
             if isinstance(adapter, ExtensionAdapter):

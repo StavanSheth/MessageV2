@@ -67,7 +67,11 @@ import {
   bulkDeleteTasks,
   bulkUpdateTasks,
   bulkDeleteContacts,
-  bulkUpdateContacts
+  bulkUpdateContacts,
+  clearOutreachHistory,
+  clearSourcesOnly,
+  clearAllSourcesAndHistory,
+  clearAuditEvents
 } from '../services/api';
 import { DateFilterMode, matchesDateFilter, formatDisplayDate, toDatetimeLocalValue } from '../utils/date';
 import { getStatusBadgeClass } from '../components/common/StatusBadge';
@@ -516,6 +520,75 @@ export const Sources: React.FC<SourcesProps> = ({
       console.error('Failed to load database tables:', err);
     } finally {
       setLoadingTables(false);
+    }
+  };
+
+  const [isClearingTable, setIsClearingTable] = useState(false);
+
+  const handleClearActiveTable = async () => {
+    if (activeTableKey === 'history') {
+      if (!window.confirm('Are you sure you want to permanently clear all Outreach History records? This will remove all archived rows.')) return;
+      try {
+        setIsClearingTable(true);
+        const res = await clearOutreachHistory();
+        alert(`Cleared ${res.deleted_count} outreach history record(s).`);
+        await loadDatabaseTables();
+        await onRefresh?.();
+      } catch (e: any) {
+        alert(`Failed to clear outreach history: ${e.message}`);
+      } finally {
+        setIsClearingTable(false);
+      }
+    } else if (activeTableKey === 'sources') {
+      if (!window.confirm('Are you sure you want to permanently clear all Ingested Sources?')) return;
+      try {
+        setIsClearingTable(true);
+        await clearSourcesOnly();
+        alert('Cleared all ingested source records.');
+        await loadDatabaseTables();
+        await onRefresh?.();
+      } catch (e: any) {
+        alert(`Failed to clear sources: ${e.message}`);
+      } finally {
+        setIsClearingTable(false);
+      }
+    } else if (activeTableKey === 'events') {
+      if (!window.confirm('Are you sure you want to permanently clear all Audit Event Logs?')) return;
+      try {
+        setIsClearingTable(true);
+        const res = await clearAuditEvents();
+        alert(`Cleared ${res.deleted_count} audit event log(s).`);
+        await loadDatabaseTables();
+        await onRefresh?.();
+      } catch (e: any) {
+        alert(`Failed to clear audit events: ${e.message}`);
+      } finally {
+        setIsClearingTable(false);
+      }
+    }
+  };
+
+  const [isDeleteEntireHistoryModalOpen, setIsDeleteEntireHistoryModalOpen] = useState(false);
+  const [deleteScope, setDeleteScope] = useState<'ALL_HISTORY' | 'OUTREACH_ONLY'>('ALL_HISTORY');
+  const [isDeletingEntireHistory, setIsDeletingEntireHistory] = useState(false);
+
+  const handleConfirmDeleteEntireHistory = async () => {
+    setIsDeletingEntireHistory(true);
+    try {
+      if (deleteScope === 'ALL_HISTORY') {
+        const res = await clearAllSourcesAndHistory();
+        alert(`Successfully deleted entire history from database:\n• Outreach History: ${res.history_cleared} records\n• Ingested Sources: ${res.sources_cleared} files (${res.records_cleared} rows)\n• Audit Event Logs: ${res.events_cleared} logs`);
+      } else {
+        const res = await clearOutreachHistory();
+        alert(`Successfully cleared ${res.deleted_count} Outreach History record(s) from database.`);
+      }
+      setIsDeleteEntireHistoryModalOpen(false);
+      await loadDatabaseTables();
+      await onRefresh?.();
+    } catch (e: any) {
+      alert(`Failed to delete history: ${e.message}`);
+    } finally {
+      setIsDeletingEntireHistory(false);
     }
   };
 
@@ -1947,6 +2020,50 @@ export const Sources: React.FC<SourcesProps> = ({
           </div>
 
           <div className="flex items-center space-x-3">
+            <button
+              onClick={() => setIsDeleteEntireHistoryModalOpen(true)}
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-rose-950/70 hover:bg-rose-900 text-rose-300 border border-rose-800/80 rounded-xl text-xs font-bold transition shadow-sm hover:shadow-rose-950/50 cursor-pointer"
+              title="Delete entire database history with confirmation modal"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+              <span>Delete Entire History</span>
+            </button>
+            {activeTableKey === 'history' && (tablesData?.tables?.history?.count || 0) > 0 && (
+              <button
+                onClick={handleClearActiveTable}
+                disabled={isClearingTable}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/80 rounded-xl text-xs font-semibold transition cursor-pointer"
+                title="Permanently clear all archived Outreach History"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isClearingTable ? 'Purging History...' : 'Clear Outreach History'}</span>
+              </button>
+            )}
+
+            {activeTableKey === 'sources' && (sources.length > 0 || (tablesData?.tables?.sources?.count || 0) > 0) && (
+              <button
+                onClick={handleClearActiveTable}
+                disabled={isClearingTable}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/80 rounded-xl text-xs font-semibold transition cursor-pointer"
+                title="Permanently clear all Ingested Sources"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isClearingTable ? 'Clearing Sources...' : 'Clear Sources History'}</span>
+              </button>
+            )}
+
+            {activeTableKey === 'events' && (tablesData?.tables?.events?.count || 0) > 0 && (
+              <button
+                onClick={handleClearActiveTable}
+                disabled={isClearingTable}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/80 rounded-xl text-xs font-semibold transition cursor-pointer"
+                title="Permanently clear all Audit Event Logs"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isClearingTable ? 'Clearing Logs...' : 'Clear Audit Logs'}</span>
+              </button>
+            )}
+
             <button
               onClick={async () => {
                 await onRefresh?.();
@@ -3481,6 +3598,158 @@ export const Sources: React.FC<SourcesProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────
+          MODAL 4: DELETE ENTIRE HISTORY CONFIRMATION MODAL
+          ───────────────────────────────────────────────────────────── */}
+      {isDeleteEntireHistoryModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-rose-500/40 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between border-b border-gray-800 pb-3">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-rose-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Delete Entire History</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Permanent database purge of archived history & audit records
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsDeleteEntireHistoryModalOpen(false)}
+                className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800 transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Scope Selection Box */}
+            <div className="space-y-3">
+              <label className="text-xs font-bold text-gray-300 uppercase tracking-wider block">
+                Choose History Purge Scope:
+              </label>
+
+              <div className="space-y-2">
+                <label
+                  onClick={() => setDeleteScope('ALL_HISTORY')}
+                  className={`flex items-start space-x-3 p-3.5 rounded-xl border transition cursor-pointer ${
+                    deleteScope === 'ALL_HISTORY'
+                      ? 'bg-rose-950/40 border-rose-500/60 text-white'
+                      : 'bg-gray-950/60 border-gray-800 text-gray-400 hover:border-gray-700'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="deleteScope"
+                    checked={deleteScope === 'ALL_HISTORY'}
+                    onChange={() => setDeleteScope('ALL_HISTORY')}
+                    className="mt-0.5 text-rose-600 focus:ring-rose-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-gray-200 block">
+                      Purge All Inactive History (Recommended)
+                    </span>
+                    <span className="text-gray-400 text-[11px] block mt-0.5">
+                      Clears Outreach History, Ingested Sources history, and Audit Event Logs. Keeps active contacts and dispatch queue intact.
+                    </span>
+                  </div>
+                </label>
+
+                <label
+                  onClick={() => setDeleteScope('OUTREACH_ONLY')}
+                  className={`flex items-start space-x-3 p-3.5 rounded-xl border transition cursor-pointer ${
+                    deleteScope === 'OUTREACH_ONLY'
+                      ? 'bg-rose-950/40 border-rose-500/60 text-white'
+                      : 'bg-gray-950/60 border-gray-800 text-gray-400 hover:border-gray-700'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="deleteScope"
+                    checked={deleteScope === 'OUTREACH_ONLY'}
+                    onChange={() => setDeleteScope('OUTREACH_ONLY')}
+                    className="mt-0.5 text-rose-600 focus:ring-rose-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-gray-200 block">
+                      Outreach History Only
+                    </span>
+                    <span className="text-gray-400 text-[11px] block mt-0.5">
+                      Clears only the Outreach History table (all archived contacts) to allow clean re-importing without duplicate conflicts.
+                    </span>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {/* Current Table Record Counts Summary */}
+            <div className="bg-gray-950/80 p-3.5 rounded-xl border border-gray-800 space-y-1.5 text-xs">
+              <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider block">
+                Current Records to be Purged:
+              </span>
+              <div className="flex items-center justify-between text-gray-300 py-0.5">
+                <span>• Outreach History table:</span>
+                <span className="font-mono font-bold text-amber-400">
+                  {tablesData?.tables?.history?.count || 0} records
+                </span>
+              </div>
+              {deleteScope === 'ALL_HISTORY' && (
+                <>
+                  <div className="flex items-center justify-between text-gray-300 py-0.5">
+                    <span>• Ingested Sources table:</span>
+                    <span className="font-mono font-bold text-indigo-400">
+                      {sources.length || tablesData?.tables?.sources?.count || 0} sources
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-gray-300 py-0.5">
+                    <span>• Audit Event Logs:</span>
+                    <span className="font-mono font-bold text-rose-400">
+                      {tablesData?.tables?.events?.count || 0} logs
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Warning Text */}
+            <div className="p-3 bg-amber-950/30 border border-amber-600/30 rounded-xl text-amber-300 text-[11px] flex items-center space-x-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+              <span>
+                This executes a direct database <code>DELETE</code>. Once purged, these records cannot be recovered.
+              </span>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="pt-2 border-t border-gray-800 flex items-center justify-end space-x-3">
+              <button
+                type="button"
+                onClick={() => setIsDeleteEntireHistoryModalOpen(false)}
+                disabled={isDeletingEntireHistory}
+                className="px-4 py-2 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-semibold transition cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmDeleteEntireHistory}
+                disabled={isDeletingEntireHistory}
+                className="px-5 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition flex items-center space-x-2 cursor-pointer disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>
+                  {isDeletingEntireHistory
+                    ? 'Purging History Records...'
+                    : 'Confirm & Delete Entire History'}
+                </span>
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -6,6 +6,7 @@ and external human messages sent directly on Instagram.
 from typing import Optional, List
 from backend.database.models import Contact
 from backend.config.settings import settings
+from backend.automation.template_formatter import format_message
 
 DEFAULT_SYSTEM_COPIES = [
     "hey! just following up on my previous message",
@@ -29,12 +30,24 @@ def is_system_sequence_message(message_text: str, contact: Optional[Contact] = N
     if contact:
         if contact.message:
             expected_copies.append(contact.message.strip().lower())
+            fmt_m = format_message(contact.message, contact)
+            if fmt_m:
+                expected_copies.append(fmt_m.strip().lower())
         if getattr(contact, "custom_message", None):
             expected_copies.append(str(contact.custom_message).strip().lower())
+            fmt_cm = format_message(str(contact.custom_message), contact)
+            if fmt_cm:
+                expected_copies.append(fmt_cm.strip().lower())
         if contact.followup_1_message:
             expected_copies.append(contact.followup_1_message.strip().lower())
+            fmt_fu1 = format_message(contact.followup_1_message, contact)
+            if fmt_fu1:
+                expected_copies.append(fmt_fu1.strip().lower())
         if contact.followup_2_message:
             expected_copies.append(contact.followup_2_message.strip().lower())
+            fmt_fu2 = format_message(contact.followup_2_message, contact)
+            if fmt_fu2:
+                expected_copies.append(fmt_fu2.strip().lower())
 
     for exp in expected_copies:
         if not exp:

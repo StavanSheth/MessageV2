@@ -103,14 +103,29 @@ export async function applyBulkTemplates(data: {
   apply_to_all?: boolean;
   reschedule_existing?: boolean;
 }): Promise<any> {
+  const payload = {
+    ...data,
+    followup_1_delay_days: data.followup_1_delay_days !== undefined ? Number(data.followup_1_delay_days) || 3 : 3,
+    followup_2_delay_days: data.followup_2_delay_days !== undefined ? Number(data.followup_2_delay_days) || 5 : 5,
+  };
   const res = await fetch(`${BASE_URL}/api/contacts/templates/apply`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || 'Failed to apply templates');
+    let msg = 'Failed to apply templates';
+    if (typeof err.detail === 'string') {
+      msg = err.detail;
+    } else if (Array.isArray(err.detail) && err.detail.length > 0) {
+      msg = err.detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ');
+    } else if (res.status === 404) {
+      msg = `API endpoint not found (HTTP 404). Backend service may not be responding or proxy is misrouted.`;
+    } else if (res.status >= 500) {
+      msg = `Server error (${res.status}). Please check backend service logs.`;
+    }
+    throw new Error(msg);
   }
   return res.json();
 }
@@ -801,6 +816,50 @@ export async function bulkUpdateContacts(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || 'Failed to bulk update contacts');
+  }
+  return res.json();
+}
+
+export async function clearOutreachHistory(): Promise<{ status: string; deleted_count: number }> {
+  const res = await fetch(`${BASE_URL}/api/sources/history/clear`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to clear outreach history');
+  }
+  return res.json();
+}
+
+export async function clearSourcesOnly(): Promise<{ status: string; [key: string]: any }> {
+  const res = await fetch(`${BASE_URL}/api/sources/sources/clear`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to clear sources');
+  }
+  return res.json();
+}
+
+export async function clearAllSourcesAndHistory(): Promise<{ status: string; [key: string]: any }> {
+  const res = await fetch(`${BASE_URL}/api/sources/clear-all`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to clear sources and history');
+  }
+  return res.json();
+}
+
+export async function clearAuditEvents(): Promise<{ status: string; deleted_count: number }> {
+  const res = await fetch(`${BASE_URL}/api/events/clear`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to clear audit events');
   }
   return res.json();
 }

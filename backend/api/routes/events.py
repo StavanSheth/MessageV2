@@ -24,6 +24,17 @@ async def list_events(limit: int = 100, offset: int = 0, db: AsyncSession = Depe
         "correlation_id": e.correlation_id
     } for e in events]
 
+@router.delete("/api/events/clear")
+@router.post("/api/events/clear")
+async def clear_events(db: AsyncSession = Depends(get_db)):
+    """Clear all audit event logs."""
+    from backend.database.models import Event
+    from sqlalchemy import delete
+    res = await db.execute(delete(Event))
+    await db.commit()
+    return {"status": "ok", "deleted_count": res.rowcount}
+
+
 @router.websocket("/ws/events")
 async def websocket_events(ws: WebSocket):
     await event_bus.connect(ws)

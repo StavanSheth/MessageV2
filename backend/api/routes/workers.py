@@ -218,6 +218,20 @@ async def reload_extension_endpoint():
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@router.get("/api/browser/tabs")
+async def get_browser_tabs():
+    from backend.automation.extension_bridge import extension_bridge
+    if not extension_bridge.is_connected:
+        return {"success": False, "error": "Extension bridge not connected"}
+    return await extension_bridge.send_command("GET_TABS_DEBUG", timeout=5.0)
+
+@router.get("/api/browser/dom_debug")
+async def get_browser_dom_debug():
+    from backend.automation.extension_bridge import extension_bridge
+    if not extension_bridge.is_connected:
+        return {"success": False, "error": "Extension bridge not connected"}
+    return await extension_bridge.send_command("DOM_DEBUG", timeout=8.0)
+
 @router.post("/api/browser/open")
 async def open_visible_browser():
     """Forces open or foregrounds the native Chrome browser window on the user desktop."""

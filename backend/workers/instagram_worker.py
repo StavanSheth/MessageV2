@@ -26,6 +26,7 @@ from backend.config.settings import settings, SCREENSHOTS_DIR
 from backend.events.event_bus import event_bus
 from backend.automation.extension_bridge import extension_bridge, ExtensionAdapter
 from backend.automation.coordinator import coordinator
+from backend.automation.template_formatter import format_message
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +86,7 @@ class InstagramWorker:
         if self._paused or self.status == WorkerStatus.PAUSED:
             if batch_limit is not None and batch_limit > 0:
                 self.batch_limit = batch_limit
-                self.batch_sent_count = 0
-            elif self.batch_limit is not None and self.batch_sent_count >= self.batch_limit:
-                self.batch_sent_count = 0
+            self.batch_sent_count = 0
             if delay_seconds is not None and delay_seconds >= 5:
                 self.delay_between_messages = delay_seconds
             await self.resume()
@@ -555,7 +554,7 @@ class InstagramWorker:
             contact = db_task.contact
 
         correlation_id = task_id
-        message_body = contact.message or settings.DEFAULT_MESSAGE
+        message_body = format_message(contact.message or settings.DEFAULT_MESSAGE, contact)
 
         async def take_shot(label: str) -> Optional[str]:
             if hasattr(adapter, "screenshot"):
@@ -740,7 +739,7 @@ class InstagramWorker:
                     self.current_task_id = None
                     return
                 if chk_c and chk_c.message:
-                    message_body = chk_c.message
+                    message_body = format_message(chk_c.message, chk_c)
 
             # ── Send Message ──────────────────────────────────
             await self._set_stage(AutomationStage.SENDING_MESSAGE, contact.name, task_id=task_id)

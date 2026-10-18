@@ -385,6 +385,51 @@ async function handleCommand(msg) {
     return { success: true, pong: true };
   }
 
+  if (action === "GET_TABS_DEBUG") {
+    const allTabs = await chrome.tabs.query({});
+    return {
+      success: true,
+      outreachTabId,
+      scannerTabId,
+      tabs: allTabs.map(t => ({ id: t.id, url: t.url, active: t.active, status: t.status, title: t.title }))
+    };
+  }
+
+  if (action === "DOM_DEBUG") {
+    const sTab = await getScannerTab();
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId: sTab.id },
+      func: () => {
+        const anchors = Array.from(document.querySelectorAll('a[href*="/direct/t/"]')).map(a => ({
+          href: a.getAttribute('href'),
+          text: a.innerText
+        }));
+        const searchInput = document.querySelector('input[placeholder*="Search"], input[aria-label*="Search"]');
+        const middleDots = Array.from(document.querySelectorAll('*')).filter(el => {
+          return el.children.length === 0 && (el.innerText || '').includes('·');
+        }).map(el => {
+          const row = el.closest('div[role="button"], a, div[role="listitem"], div[role="row"]') || el.parentElement?.parentElement?.parentElement;
+          return {
+            dot_text: el.innerText,
+            row_tag: row?.tagName,
+            row_text: row?.innerText?.substring(0, 100),
+            row_href: row?.getAttribute?.('href') || row?.querySelector?.('a')?.getAttribute?.('href')
+          };
+        });
+        return {
+          url: window.location.href,
+          title: document.title,
+          anchors_count: anchors.length,
+          anchors: anchors.slice(0, 5),
+          searchInputFound: Boolean(searchInput),
+          middleDotsCount: middleDots.length,
+          middleDotsSample: middleDots.slice(0, 5)
+        };
+      }
+    });
+    return { success: true, tab_id: sTab.id, result: res?.result };
+  }
+
   if (action === "ABORT_CURRENT_ACTION") {
     console.log("[MessageV2 Extension] ABORT_CURRENT_ACTION received! Aborting in-flight operations...");
     try {
@@ -911,25 +956,43 @@ async function handleCommand(msg) {
           document.execCommand('delete', false, null);
         } catch (e) {}
 
-        // 5. Cleanly insert text ONCE for Meta Lexical contenteditable
-        // Using native execCommand('insertText') which Lexical handles directly.
-        // DO NOT dispatch beforeinput or input with data payload as Lexical duplicates them!
+        // 5. Cleanly insert text for Meta Lexical contenteditable preserving paragraph line-breaks
         let inserted = false;
         try {
-          inserted = document.execCommand('insertText', false, textToSend);
-        } catch (e) {
-          inserted = false;
+          // Attempt 1: Native Lexical Paste Event with DataTransfer
+          const dt = new DataTransfer();
+          dt.setData('text/plain', String(textToSend));
+          const pasteEvent = new ClipboardEvent('paste', {
+            clipboardData: dt,
+            bubbles: true,
+            cancelable: true
+          });
+          composer.dispatchEvent(pasteEvent);
+          await new Promise(r => setTimeout(r, 150));
+          const pastedText = (composer.innerText || composer.textContent || '').trim();
+          if (pastedText.length > 0) {
+            inserted = true;
+          }
+        } catch (e) {}
+
+        if (!inserted) {
+          // Attempt 2: Direct document.execCommand('insertText') with full multiline string
+          try {
+            document.execCommand('insertText', false, String(textToSend));
+            const execText = (composer.innerText || composer.textContent || '').trim();
+            if (execText.length > 0) {
+              inserted = true;
+            }
+          } catch (e) {}
         }
 
-        let currentText = (composer.innerText || composer.textContent || '').trim();
-        if (!inserted || currentText === '') {
-          // Fallback only if execCommand did not insert any text
-          const p = composer.querySelector('p') || composer;
-          p.textContent = textToSend;
+        if (!inserted) {
+          // Attempt 3: DOM paragraph fallback
+          const lines = String(textToSend).split(/\r?\n/);
+          composer.innerHTML = lines.map(l => `<p>${l ? l : '<br>'}</p>`).join('');
           composer.dispatchEvent(new Event('input', { bubbles: true }));
           composer.dispatchEvent(new Event('change', { bubbles: true }));
         } else {
-          // Lightweight input notification for React/Lexical button enabling
           composer.dispatchEvent(new Event('input', { bubbles: true }));
         }
 
@@ -987,79 +1050,200 @@ async function handleCommand(msg) {
     const scannerTab = await getScannerTab();
     if (!scannerTab || !scannerTab.id) return { success: false, error: "No Scanner tab found" };
 
-    if (!scannerTab.url || !scannerTab.url.includes("/direct/inbox/")) {
+    if (!scannerTab.url || !scannerTab.url.includes("/direct/")) {
       await chrome.tabs.update(scannerTab.id, { url: "https://www.instagram.com/direct/inbox/" });
       await waitForTabLoaded(scannerTab.id, 12000);
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 2500));
     }
 
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: scannerTab.id },
       func: async () => {
-        // Wait up to 5 seconds for threads to appear in DOM after React hydration
-        let rows = [];
+        // Wait up to 6 seconds for the conversation list to render in DOM
+        function getCandidateElements() {
+          const dotElements = Array.from(document.querySelectorAll('*')).filter(el => {
+            return el.children.length === 0 && (el.innerText || '').includes('·');
+          });
+          const rows = [];
+          const seen = new Set();
+          for (const dot of dotElements) {
+            const row = dot.closest('div[role="button"], a, div[role="listitem"], div[role="row"]') || dot.parentElement?.parentElement?.parentElement;
+            if (row && !seen.has(row) && row.clientHeight >= 35 && row.clientHeight <= 200 && !row.querySelector('input')) {
+              seen.add(row);
+              rows.push(row);
+            }
+          }
+          if (rows.length > 0) return rows;
+          return Array.from(document.querySelectorAll('a[href*="/direct/t/"], div[role="listitem"], div[role="row"], div[role="button"]')).filter(el => {
+            return !el.querySelector('input') && el.clientHeight >= 35 && el.clientHeight <= 200;
+          });
+        }
+
+        let candidates = [];
         for (let attempt = 0; attempt < 10; attempt++) {
-          rows = Array.from(document.querySelectorAll('a[href*="/direct/t/"], div[role="listitem"] a[href*="/direct/t/"], div[role="row"] a[href*="/direct/t/"], div[role="button"][tabindex="0"]'));
-          if (rows.length > 0) break;
-          await new Promise(r => setTimeout(r, 500));
+          const list = getCandidateElements();
+          const valid = list.filter(el => {
+            if (el.querySelector('input')) return false;
+            if (el.clientHeight > 200 || el.clientHeight < 35) return false;
+            const t = el.innerText || '';
+            return t.includes('·') || /\b\d+[smhdw]\b/.test(t) || Boolean(el.querySelector('a[href*="/direct/t/"]'));
+          });
+          if (valid.length > 0) {
+            candidates = valid;
+            break;
+          }
+          await new Promise(r => setTimeout(r, 400));
         }
 
-        const threads = [];
-        for (const row of rows.slice(0, 40)) {
-          try {
-            const anchor = row.tagName === 'A' ? row : (row.querySelector('a[href*="/direct/t/"]') || row);
-            const href = anchor.getAttribute('href') || row.getAttribute('href') || '';
-            const fullText = row.innerText || '';
-            const lines = fullText.split('\n').map(l => l.trim()).filter(Boolean);
-            
-            const contactName = lines[0] || '';
-            const snippet = lines[1] || '';
-            const hasReply = snippet.length > 0 && !snippet.startsWith("You:") && !snippet.startsWith("You sent");
-            const unread = Boolean(row.querySelector('[aria-label*="unread"], [class*="unread"], div[style*="background-color: rgb(0, 149, 246)"]'));
+        const threadMap = new Map();
+        function extractVisibleThreads() {
+          const rows = getCandidateElements();
+          for (const el of rows) {
+            try {
+              if (el.querySelector('input')) continue;
+              if (el.clientHeight > 200 || el.clientHeight < 35) continue;
 
-            threads.push({
-              name: contactName,
-              snippet: snippet,
-              has_reply: hasReply,
-              unread: unread,
-              href: href
-            });
-          } catch (e) {}
+              const fullText = (el.innerText || '').trim();
+              if (!fullText) continue;
+              const lines = fullText.split('\n').map(l => l.trim()).filter(Boolean);
+              if (lines.length < 2) continue;
+
+              const contactName = lines[0] || '';
+              const cLower = contactName.toLowerCase();
+              if (["primary", "general", "requests", "request", "search", "notes", "your note", "messages"].some(k => cLower === k || cLower.startsWith(k + " (") || cLower.startsWith(k + "("))) continue;
+
+              const hasTimestamp = lines.some(l => l.includes('·') || /\b\d+[smhdw]\b/.test(l));
+              const anchor = el.tagName === 'A' ? el : el.querySelector('a[href*="/direct/t/"]');
+              if (!hasTimestamp && !anchor) continue;
+
+              const snippet = lines[1] || '';
+              const sLower = snippet.toLowerCase();
+              const isOutbound = sLower.startsWith("you:") ||
+                                 sLower.startsWith("you sent") ||
+                                 sLower.startsWith("sent ") ||
+                                 sLower.startsWith("sent ·") ||
+                                 sLower.startsWith("seen ") ||
+                                 sLower.startsWith("seen ·") ||
+                                 sLower.startsWith("delivered");
+
+              const unread = Boolean(
+                el.querySelector('[aria-label*="unread"], [class*="unread"]') ||
+                el.querySelector('div[style*="background-color: rgb(0, 149, 246)"]') ||
+                el.querySelector('span[style*="background-color: rgb(0, 149, 246)"]') ||
+                el.querySelector('span[style*="border-radius: 50%"]') ||
+                el.querySelector('div[style*="border-radius: 50%"]')
+              );
+
+              const hasReply = (snippet.length > 0 && !isOutbound) || unread;
+
+              let href = anchor ? anchor.getAttribute('href') : '';
+              if (!href) {
+                href = `/direct/name/${encodeURIComponent(contactName)}`;
+              }
+
+              const key = contactName.toLowerCase();
+              if (!threadMap.has(key)) {
+                threadMap.set(key, {
+                  name: contactName,
+                  snippet: snippet,
+                  has_reply: hasReply,
+                  unread: unread,
+                  href: href
+                });
+              }
+            } catch (e) {}
+          }
         }
 
-        return { threads };
+        extractVisibleThreads();
+
+        // Virtual scroll down up to 4 times to harvest older conversations
+        const searchInput = document.querySelector('input[placeholder*="Search"], input[aria-label*="Search"]');
+        const scrollableContainer = searchInput?.closest('div[style*="overflow"]') ||
+                                    document.querySelector('div[aria-label*="Chats"] div[style*="overflow"]') ||
+                                    document.querySelector('div[role="navigation"] div[style*="overflow"]');
+        if (scrollableContainer) {
+          for (let s = 0; s < 4; s++) {
+            scrollableContainer.scrollTop += 600;
+            await new Promise(r => setTimeout(r, 600));
+            extractVisibleThreads();
+          }
+          scrollableContainer.scrollTop = 0;
+        }
+
+        return { threads: Array.from(threadMap.values()) };
       }
     });
 
-    return { success: true, threads: result?.result?.threads || [] };
+    const threads = result?.result?.threads || [];
+    console.log(`[MessageV2 Extension] SCAN_INBOX_REPLIES found ${threads.length} threads`);
+    return { success: true, threads: threads };
   }
 
   if (action === "INSPECT_THREAD_REPLY") {
     const threadUrl = payload.thread_url;
+    const contactName = payload.contact_name;
     const scannerTab = await getScannerTab();
     if (!scannerTab || !scannerTab.id) return { success: false, error: "No Scanner tab found" };
 
-    if (threadUrl && !(scannerTab.url || '').includes(threadUrl)) {
-      const fullUrl = threadUrl.startsWith("http") ? threadUrl : `https://www.instagram.com${threadUrl}`;
-      await chrome.tabs.update(scannerTab.id, { url: fullUrl });
-      await waitForTabLoaded(scannerTab.id, 12000);
-      await new Promise(r => setTimeout(r, 2000));
-    }
-
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: scannerTab.id },
-      func: async () => {
+      args: [threadUrl, contactName],
+      func: async (targetUrl, targetName) => {
+        // Step 1: Open the thread by clicking it in the left sidebar (smooth, no page reload)
+        let clicked = false;
+        const dotElements = Array.from(document.querySelectorAll('*')).filter(el => {
+          return el.children.length === 0 && (el.innerText || '').includes('·');
+        });
+        const rows = [];
+        const seen = new Set();
+        for (const dot of dotElements) {
+          const row = dot.closest('div[role="button"], a, div[role="listitem"], div[role="row"]') || dot.parentElement?.parentElement?.parentElement;
+          if (row && !seen.has(row) && row.clientHeight >= 35 && row.clientHeight <= 200 && !row.querySelector('input')) {
+            seen.add(row);
+            rows.push(row);
+          }
+        }
+
+        for (const r of rows) {
+          const tText = (r.innerText || '').toLowerCase();
+          const rHref = (r.getAttribute('href') || r.querySelector('a')?.getAttribute('href') || '').toLowerCase();
+          const targetUrlClean = (targetUrl || '').toLowerCase();
+          const targetNameClean = (targetName || '').toLowerCase();
+
+          const urlMatch = targetUrlClean && rHref && (rHref.includes(targetUrlClean) || targetUrlClean.includes(rHref));
+          const nameMatch = targetNameClean && tText.includes(targetNameClean);
+
+          if (urlMatch || nameMatch) {
+            r.click();
+            clicked = true;
+            break;
+          }
+        }
+
+        // Fallback: If not clickable in sidebar and valid URL, navigate
+        if (!clicked && targetUrl && targetUrl.includes("/direct/t/")) {
+          const fullUrl = targetUrl.startsWith("http") ? targetUrl : `https://www.instagram.com${targetUrl}`;
+          window.location.href = fullUrl;
+          await new Promise(r => setTimeout(r, 3000));
+        } else {
+          // Give React 1.5s to render the active conversation in the right pane
+          await new Promise(r => setTimeout(r, 1500));
+        }
+
+        // Step 2: Extract chat messages from the right conversation pane
         const composer = document.querySelector('div[contenteditable="true"][role="textbox"], textarea[placeholder*="Message"]');
         const chatPane = composer ? (composer.closest('div[role="main"]') || document.body) : document.body;
-        
+
         let bubbles = [];
-        for (let i = 0; i < 6; i++) {
+        for (let i = 0; i < 8; i++) {
           bubbles = Array.from(chatPane.querySelectorAll('div[dir="auto"], span[dir="auto"]')).filter(el => {
             if (composer && composer.contains(el)) return false;
             if (el.closest('header') || el.closest('nav') || el.closest('[role="navigation"]')) return false;
             const txt = el.innerText?.trim();
-            if (!txt || txt === "Message..." || txt === "View Profile" || txt === "Search" || txt === "Primary" || txt === "General" || txt === "Requests") return false;
+            if (!txt || txt === "Message..." || txt === "View Profile" || txt === "View profile" || txt === "Search" || txt === "Primary" || txt === "General" || txt === "Requests") return false;
             if (txt.includes("followers") || txt.includes("posts") || txt.includes("You follow each other") || txt.includes("You don't follow each other") || txt.includes("Instagram") || txt.includes("Followed by")) return false;
+            if (/^seen(\s+\d+.*)?$/i.test(txt) || /^sent(\s+\d+.*)?$/i.test(txt) || /^delivered/i.test(txt)) return false;
             return txt.length > 1;
           });
           if (bubbles.length > 0) break;

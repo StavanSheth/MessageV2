@@ -8,9 +8,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
+import re
 from sqlalchemy import select, and_
 from backend.database.session import AsyncSessionLocal
 from backend.database.models import Contact, Task
+from backend.repositories.contact_repository import ContactRepository
+from backend.repositories.task_repository import TaskRepository
 from backend.automation.extension_bridge import extension_bridge
 from backend.services.entity_extractor import entity_extractor
 from backend.automation.message_matcher import is_system_sequence_message
@@ -29,7 +32,8 @@ class ReplyScannerWorker:
             "total_scanned": 0,
             "automated_found": 0,
             "human_replies_found": 0,
-            "no_reply_count": 0
+            "no_reply_count": 0,
+            "new_leads_harvested": 0
         }
         self._lock = asyncio.Lock()
         self._paused = False
@@ -67,40 +71,31 @@ class ReplyScannerWorker:
             "is_connected": extension_bridge.is_connected
         }
 
-    async def start(self, interval_seconds: int = 45) -> Dict[str, Any]:
-        """Start continuous or immediate inbox scanning."""
+    async def start(self, interval_seconds: Optional[int] = None) -> Dict[str, Any]:
+        """Start a complete single sweep of the Instagram Direct Inbox."""
         if self._paused:
             await self.resume()
             return {"status": "resumed", "worker_id": "WORKER-02"}
 
-        if self._periodic_task and not self._periodic_task.done():
+        if self.status in ("RUNNING", "SCANNING"):
             return {"status": "already_running", "worker_id": "WORKER-02"}
 
         self._paused = False
         self._stop_requested = False
         self.status = "RUNNING"
-        self._periodic_task = asyncio.create_task(self._run_loop(interval_seconds))
+        self._periodic_task = asyncio.create_task(self._run_single_sweep())
         return {"status": "started", "worker_id": "WORKER-02"}
 
-    async def _run_loop(self, interval: int):
-        logger.info("[ReplyScanner] Continuous inbox review agent loop started.")
+    async def _run_single_sweep(self):
+        logger.info("[ReplyScanner] Single inbox review sweep started.")
         try:
-            while not self._stop_requested:
-                if not self._paused:
-                    try:
-                        await self.scan_inbox()
-                    except Exception as e:
-                        logger.error(f"[ReplyScanner] Scan error in loop: {e}")
-
-                for _ in range(interval):
-                    if self._stop_requested:
-                        break
-                    while self._paused and not self._stop_requested:
-                        await asyncio.sleep(0.5)
-                    await asyncio.sleep(1)
+            await self.scan_inbox()
+        except Exception as e:
+            logger.error(f"[ReplyScanner] Scan error in sweep: {e}")
         finally:
             self.status = "IDLE"
             self.current_stage = "IDLE"
+            self._periodic_task = None
 
     async def pause(self):
         self._paused = True
@@ -165,6 +160,7 @@ class ReplyScannerWorker:
             auto_count = 0
             human_count = 0
             no_reply = 0
+            harvest_count = 0
 
             try:
                 logger.info("[ReplyScanner] Starting Instagram inbox reply audit...")
@@ -190,9 +186,15 @@ class ReplyScannerWorker:
                         c_u = (c.username or "").strip().lower().lstrip("@")
                         if c_u:
                             username_map[c_u] = c
+                            c_u_clean = re.sub(r"[^a-zA-Z0-9]", "", c_u)
+                            if c_u_clean:
+                                username_map[c_u_clean] = c
                         c_n = (c.name or "").strip().lower()
                         if c_n:
                             name_map[c_n] = c
+                            c_n_clean = re.sub(r"[^a-zA-Z0-9]", "", c_n)
+                            if c_n_clean:
+                                name_map[c_n_clean] = c
 
                     for thread in threads:
                         if self._paused or self._stop_requested:
@@ -208,10 +210,11 @@ class ReplyScannerWorker:
 
                         # Match contact by fast indexed lookups
                         clean_tname = thread_name.strip().lower().lstrip("@")
-                        matched_contact = username_map.get(clean_tname)
+                        clean_alpha = re.sub(r"[^a-zA-Z0-9]", "", clean_tname)
+                        matched_contact = username_map.get(clean_tname) or (username_map.get(clean_alpha) if clean_alpha else None)
 
-                        if not matched_contact and thread_name.strip().lower() in name_map:
-                            matched_contact = name_map[thread_name.strip().lower()]
+                        if not matched_contact:
+                            matched_contact = name_map.get(clean_tname) or (name_map.get(clean_alpha) if clean_alpha else None)
 
                         if not matched_contact:
                             thread_tokens = set(re.findall(r"[a-zA-Z0-9_\.]+", clean_tname)) if clean_tname else set()
@@ -234,6 +237,7 @@ class ReplyScannerWorker:
                                     break
 
                         if not matched_contact:
+                            # Only process threads for contacts in our outreach list
                             continue
 
                         scanned_count += 1
@@ -250,7 +254,7 @@ class ReplyScannerWorker:
 
                         if has_reply:
                             # Contact sent an inbound message! Inspect thread for full message text
-                            inspect_res = await extension_bridge.inspect_thread_reply(thread_href)
+                            inspect_res = await extension_bridge.inspect_thread_reply(thread_href, contact_name=matched_contact.name)
                             inbound_text = snippet
                             if inspect_res.get("success") and inspect_res.get("data", {}).get("text"):
                                 inbound_text = inspect_res["data"]["text"]
@@ -332,47 +336,7 @@ class ReplyScannerWorker:
                                         pt.manual_review_reason = f"[EXTERNAL_MESSAGE_DETECTED] External message sent from our end not in system sequence: '{ext_snip[:70]}...'. Verify in Queue."
                                         pt.updated_at = now
                         else:
-                            # Thread snippet indicates no inbound reply, but check if there are pending follow-ups today
-                            # Inspect conversation to ensure no external manual message or unread inbound message was missed
-                            fu_check_stmt = select(Task).where(
-                                and_(
-                                    Task.contact_id == matched_contact.id,
-                                    Task.status.in_([TaskStatus.READY.value, TaskStatus.QUEUED.value]),
-                                    Task.type.in_(["FOLLOW_UP_1", "FOLLOW_UP_2"])
-                                )
-                            )
-                            pending_fus = (await session.execute(fu_check_stmt)).scalars().all()
-                            if pending_fus and thread_href:
-                                try:
-                                    inspect_res = await extension_bridge.inspect_thread_reply(thread_href)
-                                    if inspect_res.get("success") and inspect_res.get("data"):
-                                        idata = inspect_res["data"]
-                                        inbound_list = idata.get("inbound_messages", [])
-                                        outbound_list = idata.get("outbound_messages", [])
-                                        if inbound_list:
-                                            # Actually has inbound message
-                                            inbound_msg = inbound_list[-1]
-                                            matched_contact.replied_status = "YES"
-                                            matched_contact.auto_reply_message = inbound_msg
-                                            matched_contact.reply_detected_at = now
-                                            for pt in pending_fus:
-                                                pt.status = TaskStatus.MANUAL_REVIEW.value
-                                                pt.manual_review_reason = f"[REPLY_RECEIVED] Inbound message detected: '{inbound_msg[:70]}...'. Review required."
-                                                pt.updated_at = now
-                                            human_count += 1
-                                        elif outbound_list:
-                                            ext_out = [m for m in outbound_list if not is_system_sequence_message(m, matched_contact)]
-                                            if ext_out:
-                                                ext_snip = ext_out[-1]
-                                                matched_contact.notes = ((matched_contact.notes or "") + f" [External message: {ext_snip[:50]}]").strip()
-                                                for pt in pending_fus:
-                                                    pt.status = TaskStatus.MANUAL_REVIEW.value
-                                                    pt.manual_review_reason = f"[EXTERNAL_MESSAGE_DETECTED] External message sent from our end not in system sequence: '{ext_snip[:70]}...'. Verify in Queue."
-                                                    pt.updated_at = now
-                                except Exception as err:
-                                    logger.warning(f"[ReplyScanner] Secondary thread check failed for {matched_contact.name}: {err}")
-
-                            # No reply confirmed
+                            # Contact has not replied (last message was outbound/sent by us)
                             no_reply += 1
                             if matched_contact.replied_status == "UNKNOWN":
                                 matched_contact.replied_status = "NO_REPLY"
@@ -390,6 +354,7 @@ class ReplyScannerWorker:
                 self.stats["automated_found"] += auto_count
                 self.stats["human_replies_found"] += human_count
                 self.stats["no_reply_count"] += no_reply
+                self.stats["new_leads_harvested"] += harvest_count
 
                 result_summary = {
                     "success": True,
@@ -397,6 +362,7 @@ class ReplyScannerWorker:
                     "automated_found": auto_count,
                     "human_replies_found": human_count,
                     "no_reply_count": no_reply,
+                    "new_leads_harvested": harvest_count,
                     "scanned_at": now.isoformat()
                 }
 

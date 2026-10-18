@@ -9,13 +9,14 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, and_, desc
+from sqlalchemy import select, func, or_, and_, desc, delete
 
 from backend.database.session import get_db
 from backend.repositories.source_repository import SourceRepository
 from backend.repositories.contact_repository import ContactRepository
 from backend.repositories.task_repository import TaskRepository
 from backend.repositories.event_repository import EventRepository
+from backend.repositories.setting_repository import SettingRepository
 from backend.services.export_service import ExportService
 from backend.sources.xlsx.adapter import LocalXlsxSource
 from backend.sources.browser_sheet.adapter import BrowserSpreadsheetSource
@@ -296,6 +297,19 @@ async def confirm_staged_import(payload: ConfirmImportRequest, db: AsyncSession 
     selected_dup_set = set(payload.selected_duplicate_indices)
 
     try:
+        s_repo = SettingRepository(db)
+        tpl_default_msg = await s_repo.get_value("template_default_message", "Hey")
+        tpl_fu1_msg = await s_repo.get_value("template_followup_1_message", None)
+        tpl_fu2_msg = await s_repo.get_value("template_followup_2_message", None)
+        try:
+            tpl_fu1_delay = int(await s_repo.get_value("template_followup_1_delay_days", "3") or 3)
+        except (ValueError, TypeError):
+            tpl_fu1_delay = 3
+        try:
+            tpl_fu2_delay = int(await s_repo.get_value("template_followup_2_delay_days", "5") or 5)
+        except (ValueError, TypeError):
+            tpl_fu2_delay = 5
+
         # 1. Process Unique Records
         created_lead_keys: set = set()
         for item in staged["unique_records"]:
@@ -317,18 +331,20 @@ async def confirm_staged_import(payload: ConfirmImportRequest, db: AsyncSession 
                 normalized_data=norm,
                 status="VALID"
             )
+            raw_msg = norm.get("message")
+            contact_msg = raw_msg if (raw_msg and raw_msg.strip() and raw_msg != "Hey") else tpl_default_msg
             contact = await contact_repo.create(
                 name=norm.get("name", ""),
                 instagram_url=norm.get("instagram_url", ""),
                 username=norm.get("username"),
-                message=norm.get("message", "Hey"),
+                message=contact_msg,
                 expected_followers=norm.get("expected_followers"),
                 source_record_id=raw_rec.id,
                 notes=norm.get("notes"),
-                followup_1_message=norm.get("followup_1_message"),
-                followup_1_delay_days=norm.get("followup_1_delay_days", 3),
-                followup_2_message=norm.get("followup_2_message"),
-                followup_2_delay_days=norm.get("followup_2_delay_days", 5),
+                followup_1_message=norm.get("followup_1_message") or tpl_fu1_msg,
+                followup_1_delay_days=norm.get("followup_1_delay_days", tpl_fu1_delay),
+                followup_2_message=norm.get("followup_2_message") or tpl_fu2_msg,
+                followup_2_delay_days=norm.get("followup_2_delay_days", tpl_fu2_delay),
                 replied_status="UNKNOWN"
             )
             await task_repo.create(contact_id=contact.id, task_type="MESSAGE")
@@ -357,18 +373,20 @@ async def confirm_staged_import(payload: ConfirmImportRequest, db: AsyncSession 
                 )
                 note_text = norm.get("notes") or ""
                 note_text = f"{note_text} [Duplicate Imported Separately]".strip()
+                raw_dup_msg = norm.get("message")
+                dup_msg = raw_dup_msg if (raw_dup_msg and raw_dup_msg.strip() and raw_dup_msg != "Hey") else tpl_default_msg
                 contact = await contact_repo.create(
                     name=norm.get("name", "") or item.get("name", ""),
                     instagram_url=norm.get("instagram_url", "") or item.get("instagram_url", ""),
                     username=norm.get("username") or item.get("username"),
-                    message=norm.get("message", "Hey"),
+                    message=dup_msg,
                     expected_followers=norm.get("expected_followers"),
                     source_record_id=raw_rec.id,
                     notes=note_text,
-                    followup_1_message=norm.get("followup_1_message"),
-                    followup_1_delay_days=norm.get("followup_1_delay_days", 3),
-                    followup_2_message=norm.get("followup_2_message"),
-                    followup_2_delay_days=norm.get("followup_2_delay_days", 5),
+                    followup_1_message=norm.get("followup_1_message") or tpl_fu1_msg,
+                    followup_1_delay_days=norm.get("followup_1_delay_days", tpl_fu1_delay),
+                    followup_2_message=norm.get("followup_2_message") or tpl_fu2_msg,
+                    followup_2_delay_days=norm.get("followup_2_delay_days", tpl_fu2_delay),
                     replied_status="UNKNOWN"
                 )
                 await task_repo.create(contact_id=contact.id, task_type="MESSAGE")
@@ -579,6 +597,47 @@ async def get_tables_data(db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.delete("/history")
+@router.post("/history/clear")
+async def clear_outreach_history(db: AsyncSession = Depends(get_db)):
+    """Clear all records from outreach_history."""
+    res = await db.execute(delete(OutreachHistory))
+    await db.commit()
+    return {"status": "ok", "deleted_count": res.rowcount}
+
+
+@router.delete("/sources")
+@router.post("/sources/clear")
+async def clear_sources_only(db: AsyncSession = Depends(get_db)):
+    """Clear all ingested sources and source records."""
+    r_srec = await db.execute(delete(SourceRecord))
+    r_src = await db.execute(delete(Source))
+    await db.commit()
+    return {
+        "status": "ok",
+        "records_cleared": r_srec.rowcount,
+        "sources_cleared": r_src.rowcount
+    }
+
+
+@router.delete("/all")
+@router.post("/clear-all")
+async def clear_all_sources_and_history(db: AsyncSession = Depends(get_db)):
+    """Clear sources, source_records, outreach_history, and audit events."""
+    r_hist = await db.execute(delete(OutreachHistory))
+    r_srec = await db.execute(delete(SourceRecord))
+    r_src = await db.execute(delete(Source))
+    r_ev = await db.execute(delete(Event))
+    await db.commit()
+    return {
+        "status": "ok",
+        "history_cleared": r_hist.rowcount,
+        "records_cleared": r_srec.rowcount,
+        "sources_cleared": r_src.rowcount,
+        "events_cleared": r_ev.rowcount
+    }
+
+
 # ─────────────────────────────────────────────────────────────
 # 4. Standard Direct Ingestion (Preserved for compatibility)
 # ─────────────────────────────────────────────────────────────
@@ -618,6 +677,19 @@ async def upload_xlsx(file: UploadFile = File(...), db: AsyncSession = Depends(g
         existing_contacts_updated = 0
         previously_messaged_count = 0
 
+        s_repo = SettingRepository(db)
+        tpl_default_msg = await s_repo.get_value("template_default_message", "Hey")
+        tpl_fu1_msg = await s_repo.get_value("template_followup_1_message", None)
+        tpl_fu2_msg = await s_repo.get_value("template_followup_2_message", None)
+        try:
+            tpl_fu1_delay = int(await s_repo.get_value("template_followup_1_delay_days", "3") or 3)
+        except (ValueError, TypeError):
+            tpl_fu1_delay = 3
+        try:
+            tpl_fu2_delay = int(await s_repo.get_value("template_followup_2_delay_days", "5") or 5)
+        except (ValueError, TypeError):
+            tpl_fu2_delay = 5
+
         for rec in records:
             norm = rec.get("normalized", {})
             raw_rec = await source_repo.create_record(
@@ -645,18 +717,20 @@ async def upload_xlsx(file: UploadFile = File(...), db: AsyncSession = Depends(g
             # Canonical duplicate check
             existing = await contact_repo.get_by_instagram(norm["instagram_url"], norm.get("username"))
             if not existing:
+                raw_msg = norm.get("message")
+                contact_msg = raw_msg if (raw_msg and raw_msg.strip() and raw_msg != "Hey") else tpl_default_msg
                 contact = await contact_repo.create(
                     name=norm.get("name", ""),
                     instagram_url=norm.get("instagram_url", ""),
                     username=norm.get("username"),
-                    message=norm.get("message", "Hey"),
+                    message=contact_msg,
                     expected_followers=norm.get("expected_followers"),
                     source_record_id=raw_rec.id,
                     notes=norm.get("notes"),
-                    followup_1_message=norm.get("followup_1_message"),
-                    followup_1_delay_days=norm.get("followup_1_delay_days", 3),
-                    followup_2_message=norm.get("followup_2_message"),
-                    followup_2_delay_days=norm.get("followup_2_delay_days", 5),
+                    followup_1_message=norm.get("followup_1_message") or tpl_fu1_msg,
+                    followup_1_delay_days=norm.get("followup_1_delay_days", tpl_fu1_delay),
+                    followup_2_message=norm.get("followup_2_message") or tpl_fu2_msg,
+                    followup_2_delay_days=norm.get("followup_2_delay_days", tpl_fu2_delay),
                     replied_status=norm.get("replied_status", "UNKNOWN")
                 )
                 await task_repo.create(contact_id=contact.id, task_type="MESSAGE")

@@ -73,3 +73,39 @@ async def test_update_contact_followup_schedule(async_db):
     )).scalar_one_or_none()
     assert task is not None
     assert task.status == "PAUSED"
+
+@pytest.mark.asyncio
+async def test_persisted_templates_in_db(async_db):
+    from backend.api.routes.contacts import get_message_templates, apply_bulk_templates, BulkTemplateRequest
+    from backend.repositories.setting_repository import SettingRepository
+
+    # 1. Initially loads defaults
+    initial_tpl = await get_message_templates(db=async_db)
+    assert initial_tpl["default_message"] is not None
+    assert initial_tpl["followup_1_delay_days"] == 3
+
+    # 2. Apply customized multiline templates
+    multiline_msg = "Hello!\n\nThis is a new paragraph.\nLooking forward to speaking."
+    req = BulkTemplateRequest(
+        default_message=multiline_msg,
+        followup_1_message="Follow up paragraph 1\nFollow up paragraph 2",
+        followup_2_message="Final touchpoint",
+        followup_1_delay_days=4,
+        followup_2_delay_days=7,
+        apply_to_all=True
+    )
+    res = await apply_bulk_templates(req=req, db=async_db)
+    assert res["status"] == "success"
+
+    # 3. Reload templates from DB and verify multiline preservation and saved days
+    saved_tpl = await get_message_templates(db=async_db)
+    assert saved_tpl["default_message"] == multiline_msg
+    assert "\n\n" in saved_tpl["default_message"]
+    assert saved_tpl["followup_1_message"] == "Follow up paragraph 1\nFollow up paragraph 2"
+    assert saved_tpl["followup_1_delay_days"] == 4
+    assert saved_tpl["followup_2_delay_days"] == 7
+
+    # 4. Confirm direct SettingRepository records
+    s_repo = SettingRepository(async_db)
+    val = await s_repo.get_value("template_default_message")
+    assert val == multiline_msg

@@ -255,10 +255,13 @@ class ExtensionBridgeManager:
             return {"success": False, "error": "Extension not connected"}
         return await self.send_command("SCAN_INBOX_REPLIES", timeout=25.0)
 
-    async def inspect_thread_reply(self, thread_url: str) -> Dict[str, Any]:
+    async def inspect_thread_reply(self, thread_url: str, contact_name: Optional[str] = None) -> Dict[str, Any]:
         if not self.is_connected:
             return {"success": False, "error": "Extension not connected"}
-        return await self.send_command("INSPECT_THREAD_REPLY", {"thread_url": thread_url}, timeout=25.0)
+        return await self.send_command("INSPECT_THREAD_REPLY", {
+            "thread_url": thread_url,
+            "contact_name": contact_name
+        }, timeout=25.0)
 
     async def inspect_current_conversation(self, worker: str = "outreach") -> Dict[str, Any]:
         if not self.is_connected:
